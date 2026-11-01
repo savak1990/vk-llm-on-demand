@@ -80,3 +80,21 @@ updated.
 | `-np 2` concurrency | after the measurement in Q9 |
 | 64K context default | after the measurement in Q9 |
 | Second provider (Runpod, Civo) | after the first user beyond the author |
+
+## 4. Known spec inconsistencies (review pass deferred, 2026-11-01)
+
+The update for explicit provisioning was committed without a full
+cross-spec review. These items are known and must be fixed before the
+named spec moves to READY:
+
+| Spec | Fix |
+|---|---|
+| 050 | `vkllm_gpu_state{state}` must use the eight public states of spec 090, not the internal stage names |
+| 050 / 100 | budget reasons must use ADR 0012's vocabulary (`budget_exhausted`, `balance_low`, `balance_unknown`); spec 100 still says `monthly_budget_exceeded`, `balance_floor` |
+| 050 | close the tunnel at `drainTimeout` and stay DRAINING until then (spec 060 relies on it) |
+| 055 | add the `result` field and `nextCreateAt` per ADR 0012 §1; return 202 during a create backoff |
+| 060 | describe when `vkllm_gateway_cancelled_streams_total` increments (spec 090 catalog) |
+| 070 | readiness citations point at FR-3.1; readiness is now FR-2.7 |
+| 080 / 110 | require at least one management token at install (spec 060 fails readiness without one) |
+| 150 / 160 | name the shared fake management server test package |
+| all | one full cross-spec review pass, as in `.superpowers` ledgers, before implementation of the affected spec |
