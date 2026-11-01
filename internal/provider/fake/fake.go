@@ -76,6 +76,8 @@ func (f *Fake) wait(ctx context.Context, op string) error {
 }
 
 func (f *Fake) takeFailure(op string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	fn, ok := f.failNext[op]
 	if !ok || fn.n <= 0 {
 		return nil
@@ -93,6 +95,9 @@ func (f *Fake) SearchOffers(ctx context.Context, filter provider.OfferFilter) ([
 	if err := f.wait(ctx, "search"); err != nil {
 		return nil, err
 	}
+	if err := f.takeFailure("search"); err != nil {
+		return nil, err
+	}
 	return provider.Select(offers, filter), nil
 }
 
@@ -103,6 +108,9 @@ func (f *Fake) CreateInstance(ctx context.Context, r provider.CreateRequest) (pr
 		if inst.Label == r.Label {
 			id := inst.ID
 			f.mu.Unlock()
+			if err := f.takeFailure("create"); err != nil {
+				return 0, err
+			}
 			return id, nil
 		}
 	}
@@ -111,6 +119,9 @@ func (f *Fake) CreateInstance(ctx context.Context, r provider.CreateRequest) (pr
 	f.instances[id] = provider.Instance{ID: id, Label: r.Label, Status: provider.StatusOther, RawStatus: ""}
 	f.mu.Unlock()
 	if err := f.wait(ctx, "create"); err != nil {
+		return 0, err
+	}
+	if err := f.takeFailure("create"); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -153,7 +164,13 @@ func (f *Fake) ListInstances(ctx context.Context, labelPrefix string) ([]provide
 		}
 	}
 	f.mu.Unlock()
-	return out, f.wait(ctx, "list")
+	if err := f.wait(ctx, "list"); err != nil {
+		return nil, err
+	}
+	if err := f.takeFailure("list"); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (f *Fake) DestroyInstance(ctx context.Context, id provider.InstanceID) error {
@@ -166,7 +183,10 @@ func (f *Fake) DestroyInstance(ctx context.Context, id provider.InstanceID) erro
 	}
 	delete(f.instances, id)
 	f.mu.Unlock()
-	return f.wait(ctx, "destroy")
+	if err := f.wait(ctx, "destroy"); err != nil {
+		return err
+	}
+	return f.takeFailure("destroy")
 }
 
 func (f *Fake) Balance(ctx context.Context) (provider.Money, error) {
@@ -174,7 +194,13 @@ func (f *Fake) Balance(ctx context.Context) (provider.Money, error) {
 	f.calls["balance"]++
 	b := f.balance
 	f.mu.Unlock()
-	return b, f.wait(ctx, "balance")
+	if err := f.wait(ctx, "balance"); err != nil {
+		return 0, err
+	}
+	if err := f.takeFailure("balance"); err != nil {
+		return 0, err
+	}
+	return b, nil
 }
 
 var _ provider.Provider = (*Fake)(nil)

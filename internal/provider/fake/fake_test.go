@@ -71,6 +71,21 @@ func TestFakeScript(t *testing.T) {
 	}
 }
 
+func TestFailNextCreate(t *testing.T) {
+	f := New(clock.Real{})
+	wantErr := errors.New("fake create error")
+	f.FailNext("create", 1, wantErr)
+
+	ctx := context.Background()
+
+	if _, err := f.CreateInstance(ctx, provider.CreateRequest{Label: "a"}); !errors.Is(err, wantErr) {
+		t.Fatalf("CreateInstance (1st) error = %v, want %v", err, wantErr)
+	}
+	if _, err := f.CreateInstance(ctx, provider.CreateRequest{Label: "a"}); err != nil {
+		t.Fatalf("CreateInstance (2nd) failed: %v", err)
+	}
+}
+
 func TestFakeSharesSelect(t *testing.T) {
 	offers := []provider.Offer{
 		{ID: 1, MachineID: 1, GPUName: "L40S", Hourly: 500000},
