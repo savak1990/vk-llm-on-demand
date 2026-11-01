@@ -201,6 +201,13 @@ jobs:
 
       - run: make specs-check
 
+      - name: vastprobe is read-only
+        run: |
+          if grep -rE '(http\.MethodPut|http\.MethodDelete|"PUT"|"DELETE")' hack/vastprobe/; then
+            echo "hack/vastprobe must never PUT or DELETE" >&2
+            exit 1
+          fi
+
   # Reserved for a future gitleaks/govulncheck/trivy scan. No step runs yet,
   # so this always succeeds; ci-ok still waits on it so a scan added later
   # blocks merges without widening this job's scope.
