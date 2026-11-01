@@ -264,22 +264,25 @@ func (c *Client) GetInstance(ctx context.Context, id provider.InstanceID) (provi
 		c.metrics.requestsTotal.WithLabelValues("get", outcomeLabel(fe)).Inc()
 		return provider.Instance{}, fe
 	}
-	var dto instanceDTO
-	if err := decodeJSON(body, &dto); err != nil {
+	var decoded struct {
+		Instances instanceDTO `json:"instances"`
+	}
+	if err := decodeJSON(body, &decoded); err != nil {
 		c.metrics.requestsTotal.WithLabelValues("get", "terminal").Inc()
 		return provider.Instance{}, &provider.Error{Op: "get", Class: provider.Terminal, Err: fmt.Errorf("decode instance: %w", err)}
 	}
 	c.metrics.requestsTotal.WithLabelValues("get", "ok").Inc()
-	return dto.toInstance(), nil
+	return decoded.Instances.toInstance(), nil
 }
 
 // listPage fetches one page of /api/v1/instances; cursor is the opaque
 // pagination token from the previous page's response, empty for page 1.
+// The request parameter is after_token, per the real API's OpenAPI schema.
 func (c *Client) listPage(ctx context.Context, cursor string) ([]instanceDTO, string, error) {
 	status, body, err := c.do(ctx, "list", 15*time.Second, 5, func() (*http.Request, error) {
 		reqURL := c.baseURL + "/api/v1/instances?limit=25"
 		if cursor != "" {
-			reqURL += "&cursor=" + url.QueryEscape(cursor)
+			reqURL += "&after_token=" + url.QueryEscape(cursor)
 		}
 		return http.NewRequest(http.MethodGet, reqURL, nil)
 	})
@@ -305,10 +308,12 @@ func (c *Client) listPage(ctx context.Context, cursor string) ([]instanceDTO, st
 // ListInstances pages through /api/v1/instances and filters by label
 // prefix; any page failure returns an error and a nil slice, never a
 // partial list.
+const maxListPages = 1000
+
 func (c *Client) ListInstances(ctx context.Context, labelPrefix string) ([]provider.Instance, error) {
 	var out []provider.Instance
 	cursor := ""
-	for {
+	for pages := 0; ; pages++ {
 		page, next, err := c.listPage(ctx, cursor)
 		if err != nil {
 			return nil, err
@@ -320,6 +325,14 @@ func (c *Client) ListInstances(ctx context.Context, labelPrefix string) ([]provi
 		}
 		if next == "" {
 			break
+		}
+		if next == cursor {
+			c.metrics.requestsTotal.WithLabelValues("list", "terminal").Inc()
+			return nil, &provider.Error{Op: "list", Class: provider.Terminal, Err: fmt.Errorf("list: pagination did not advance, got repeated token")}
+		}
+		if pages+1 >= maxListPages {
+			c.metrics.requestsTotal.WithLabelValues("list", "terminal").Inc()
+			return nil, &provider.Error{Op: "list", Class: provider.Terminal, Err: fmt.Errorf("list: exceeded %d pages", maxListPages)}
 		}
 		cursor = next
 	}

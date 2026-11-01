@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -106,7 +107,7 @@ func TestListPagination(t *testing.T) { // AC10, no failure: 12 instances match 
 		"page3": "testdata/instances_page3.json",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cursor := r.URL.Query().Get("cursor")
+		cursor := r.URL.Query().Get("after_token")
 		body, err := os.ReadFile(pages[cursor])
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -137,7 +138,7 @@ func TestListPageFailure(t *testing.T) { // AC10, with failure: error, nil slice
 	page2Attempts := 0
 	reqs := make(chan struct{}, 20)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cursor := r.URL.Query().Get("cursor")
+		cursor := r.URL.Query().Get("after_token")
 		if cursor == "" {
 			reqs <- struct{}{}
 			w.Header().Set("Content-Type", "application/json")
@@ -178,6 +179,28 @@ func TestListPageFailure(t *testing.T) { // AC10, with failure: error, nil slice
 	}
 	if page2Attempts != 6 {
 		t.Fatalf("page2Attempts = %d, want 6", page2Attempts)
+	}
+}
+
+func TestListPaginationRepeatedTokenGuard(t *testing.T) { // regression: a non-advancing token must not loop forever
+	var requests int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"instances":[],"next_token":"same"}`))
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, srv, c)
+
+	_, err := cl.ListInstances(context.Background(), "")
+	var pe *provider.Error
+	if !errors.As(err, &pe) || pe.Class != provider.Terminal {
+		t.Fatalf("err = %v, want *provider.Error{Class: Terminal}", err)
+	}
+	if got := atomic.LoadInt32(&requests); got != 2 {
+		t.Fatalf("requests = %d, want 2 (page 1, then the non-advancing page 2 that trips the guard)", got)
 	}
 }
 
