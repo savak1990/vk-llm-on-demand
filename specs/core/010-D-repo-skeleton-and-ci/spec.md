@@ -375,8 +375,10 @@ Pinned by sha256, not an action: kubeconform `0.8.0` (`9bc2bffbf71f261128533edaf
 
 | Image | Digest |
 |---|---|
-| `golang:1.27` (build stage, both Dockerfiles) | `sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244` |
+| `golang:1.27` (build stage, both Dockerfiles) | `sha256:2920bb124f1a2e12a1d39f0cab756ae0068441ee1da7655dec7f5e374944095b` |
 | `gcr.io/distroless/static-debian12:nonroot` (runtime stage, both Dockerfiles) | `sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab` |
+
+Dependabot keeps these current; this table reflects the digest as of its first bump (PR #1), not a value to hand-maintain against future bumps.
 
 ### Branch protection state after `make repo-settings` (read back via `gh api repos/savak1990/vk-llm-on-demand/branches/main/protection`)
 
