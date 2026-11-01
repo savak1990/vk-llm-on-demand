@@ -76,7 +76,7 @@ func (s *createTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		s.mu.Unlock()
 
-		resp := map[string]any{"instances": out, "next_cursor": ""}
+		resp := map[string]any{"instances": out, "next_token": ""}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	default:
@@ -234,13 +234,13 @@ func TestCreateDuplicateLabelAfterAmbiguous(t *testing.T) {
 			n := atomic.AddInt32(&listCount, 1)
 			w.Header().Set("Content-Type", "application/json")
 			if n == 1 {
-				_, _ = w.Write([]byte(`{"instances":[],"next_cursor":""}`))
+				_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"instances":[` +
 				`{"id":1,"label":"vkllm:test:dup-ambiguous","actual_status":"running"},` +
 				`{"id":2,"label":"vkllm:test:dup-ambiguous","actual_status":"running"}` +
-				`],"next_cursor":""}`))
+				`],"next_token":""}`))
 		case http.MethodPut:
 			atomic.AddInt32(&putCount, 1)
 			w.WriteHeader(http.StatusGatewayTimeout)
@@ -284,7 +284,7 @@ func TestCreateTerminalFailure(t *testing.T) { // AC8
 		case http.MethodGet:
 			atomic.AddInt32(&listCount, 1)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"instances":[],"next_cursor":""}`))
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
 		case http.MethodPut:
 			atomic.AddInt32(&putCount, 1)
 			w.WriteHeader(http.StatusBadRequest)
@@ -323,7 +323,7 @@ func TestCreateSuccessZeroContractIsTerminal(t *testing.T) { // malformed 2xx: s
 		case http.MethodGet:
 			atomic.AddInt32(&listCount, 1)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"instances":[],"next_cursor":""}`))
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
 		case http.MethodPut:
 			atomic.AddInt32(&putCount, 1)
 			w.Header().Set("Content-Type", "application/json")
@@ -378,7 +378,7 @@ func TestMetricsCreateOk(t *testing.T) {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"instances":[],"next_cursor":""}`))
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
 		case http.MethodPut:
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"success":true,"new_contract":4242}`))

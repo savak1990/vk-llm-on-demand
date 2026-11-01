@@ -85,5 +85,5 @@
       "start_date": 1700000000.0
     }
   ],
-  "next_cursor": ""
+  "next_token": ""
 }

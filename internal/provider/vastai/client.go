@@ -292,14 +292,14 @@ func (c *Client) listPage(ctx context.Context, cursor string) ([]instanceDTO, st
 		return nil, "", fe
 	}
 	var decoded struct {
-		Instances  []instanceDTO `json:"instances"`
-		NextCursor string        `json:"next_cursor"`
+		Instances []instanceDTO `json:"instances"`
+		NextToken string        `json:"next_token"`
 	}
 	if err := decodeJSON(body, &decoded); err != nil {
 		c.metrics.requestsTotal.WithLabelValues("list", "terminal").Inc()
 		return nil, "", &provider.Error{Op: "list", Class: provider.Terminal, Err: fmt.Errorf("decode page: %w", err)}
 	}
-	return decoded.Instances, decoded.NextCursor, nil
+	return decoded.Instances, decoded.NextToken, nil
 }
 
 // ListInstances pages through /api/v1/instances and filters by label

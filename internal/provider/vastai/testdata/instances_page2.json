@@ -301,5 +301,5 @@
       "start_date": 1700000000.0
     }
   ],
-  "next_cursor": "page3"
+  "next_token": "page3"
 }
