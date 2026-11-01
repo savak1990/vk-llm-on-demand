@@ -38,10 +38,10 @@ type OfferFilter struct {
 }
 
 type Offer struct {
-	ID, MachineID                       int64
-	GPUName, Geolocation                string
-	NumGPUs                             int
-	Hourly                              Money
+	ID, MachineID                                      int64
+	GPUName, Geolocation                               string
+	NumGPUs                                            int
+	Hourly                                             Money
 	Reliability, InetDownMBps, DiskBwMBps, CUDAMaxGood float64
 }
 
@@ -92,13 +92,13 @@ func MapStatus(raw string) InstanceStatus {
 }
 
 type Instance struct {
-	ID               InstanceID
-	Label, StatusMsg string
-	Status           InstanceStatus
-	RawStatus        string
-	MachineID        int64
+	ID                InstanceID
+	Label, StatusMsg  string
+	Status            InstanceStatus
+	RawStatus         string
+	MachineID         int64
 	PublicIP, SSHHost string
-	SSHPort          int
-	Hourly           Money
-	StartedAt        time.Time
+	SSHPort           int
+	Hourly            Money
+	StartedAt         time.Time
 }

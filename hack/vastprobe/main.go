@@ -15,7 +15,7 @@ func readKey() (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("VAST_API_KEY_FILE not set")
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // local dev tool reads a path the operator sets in their own env, not attacker input
 	if err != nil {
 		return "", err
 	}
@@ -29,7 +29,7 @@ func get(client *http.Client, key, url string) (int, []byte, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	return resp.StatusCode, body, nil
 }
@@ -56,7 +56,7 @@ func main() {
 		os.Exit(1)
 	}
 	offerBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	fmt.Println("=== bundles (first offer, sanitised) ===")
 	fmt.Println(sanitise(string(offerBody), key))
 

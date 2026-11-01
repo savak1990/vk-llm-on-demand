@@ -5,11 +5,11 @@ import "testing"
 
 func TestSelectTable(t *testing.T) { // AC1
 	offers := []Offer{
-		{ID: 1, MachineID: 10, Hourly: 810000},     // above cap, excluded
-		{ID: 2, MachineID: 11, Hourly: 800000},     // at cap, included
-		{ID: 3, MachineID: 12, Hourly: 600000},     // cheapest tier, lower id
-		{ID: 7, MachineID: 13, Hourly: 600000},     // cheapest tier, tied with id 3
-		{ID: 4, MachineID: 99, Hourly: 550000},     // denylisted, excluded (would otherwise be cheapest)
+		{ID: 1, MachineID: 10, Hourly: 810000}, // above cap, excluded
+		{ID: 2, MachineID: 11, Hourly: 800000}, // at cap, included
+		{ID: 3, MachineID: 12, Hourly: 600000}, // cheapest tier, lower id
+		{ID: 7, MachineID: 13, Hourly: 600000}, // cheapest tier, tied with id 3
+		{ID: 4, MachineID: 99, Hourly: 550000}, // denylisted, excluded (would otherwise be cheapest)
 		{ID: 5, MachineID: 14, Hourly: 700000},
 		{ID: 6, MachineID: 15, Hourly: 650000},
 		{ID: 8, MachineID: 16, Hourly: 750000},

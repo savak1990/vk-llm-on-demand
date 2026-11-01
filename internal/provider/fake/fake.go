@@ -20,16 +20,22 @@ type Fake struct {
 	nextID    int64
 	balance   provider.Money
 	latency   map[string]time.Duration
-	failNext  map[string]struct{ n int; err error }
+	failNext  map[string]struct {
+		n   int
+		err error
+	}
 	failDestroyN int
-	calls     map[string]int
+	calls        map[string]int
 }
 
 func New(c clock.Clock) *Fake {
 	return &Fake{
 		clock: c, instances: map[provider.InstanceID]provider.Instance{},
 		statusSeq: map[provider.InstanceID][]provider.InstanceStatus{},
-		latency:   map[string]time.Duration{}, failNext: map[string]struct{ n int; err error }{},
+		latency:   map[string]time.Duration{}, failNext: map[string]struct {
+			n   int
+			err error
+		}{},
 		calls: map[string]int{}, nextID: 1,
 	}
 }
@@ -41,20 +47,31 @@ func NewSeeded(c clock.Clock) *Fake {
 	return f
 }
 
-func (f *Fake) SetOffers(o ...provider.Offer)    { f.mu.Lock(); defer f.mu.Unlock(); f.offers = o }
-func (f *Fake) SetBalance(m provider.Money)       { f.mu.Lock(); defer f.mu.Unlock(); f.balance = m }
+func (f *Fake) SetOffers(o ...provider.Offer) { f.mu.Lock(); defer f.mu.Unlock(); f.offers = o }
+func (f *Fake) SetBalance(m provider.Money)   { f.mu.Lock(); defer f.mu.Unlock(); f.balance = m }
 func (f *Fake) SetLatency(op string, d time.Duration) {
-	f.mu.Lock(); defer f.mu.Unlock(); f.latency[op] = d
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.latency[op] = d
 }
 func (f *Fake) FailNext(op string, n int, err error) {
-	f.mu.Lock(); defer f.mu.Unlock(); f.failNext[op] = struct{ n int; err error }{n, err}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failNext[op] = struct {
+		n   int
+		err error
+	}{n, err}
 }
 func (f *Fake) FailDestroy(n int) { f.mu.Lock(); defer f.mu.Unlock(); f.failDestroyN = n }
 func (f *Fake) SetStatusSequence(id provider.InstanceID, s ...provider.InstanceStatus) {
-	f.mu.Lock(); defer f.mu.Unlock(); f.statusSeq[id] = s
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statusSeq[id] = s
 }
 func (f *Fake) AddInstance(i provider.Instance) {
-	f.mu.Lock(); defer f.mu.Unlock(); f.instances[i.ID] = i
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.instances[i.ID] = i
 }
 func (f *Fake) Calls(op string) int { f.mu.Lock(); defer f.mu.Unlock(); return f.calls[op] }
 
