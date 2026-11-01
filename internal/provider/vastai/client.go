@@ -456,7 +456,8 @@ func (c *Client) CreateInstance(ctx context.Context, r provider.CreateRequest) (
 		c.metrics.requestsTotal.WithLabelValues("create", "adopted").Inc()
 		return id, nil
 	}
-	c.metrics.requestsTotal.WithLabelValues("create", "retryable").Inc()
+	// do() already counted this attempt's "retryable" outcome for the 5xx/429/
+	// transport error that got us here; CreateInstance must not count it again.
 	return 0, &provider.Error{Op: "create", Class: provider.Retryable, Err: provider.ErrOutcomeUnknown}
 }
 

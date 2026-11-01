@@ -160,8 +160,10 @@ func TestCreateOnePerLabel(t *testing.T) { // AC7
 	if id1 != 0 {
 		t.Fatalf("call 1 id = %d, want 0", id1)
 	}
-	if got := counterValue(t, reg, "create", "retryable"); got != 2 {
-		t.Fatalf("create/retryable after call 1 = %v, want 2 (one from do()'s 504, one from the still-ambiguous outcome)", got)
+	// Only do()'s own 504 handling increments retryable; CreateInstance's
+	// still-ambiguous give-up path must not double-count the same attempt.
+	if got := counterValue(t, reg, "create", "retryable"); got != 1 {
+		t.Fatalf("create/retryable after call 1 = %v, want 1 (from do()'s 504 handling only)", got)
 	}
 
 	var adoptedID provider.InstanceID
@@ -216,6 +218,62 @@ func TestCreateDuplicateLabel(t *testing.T) {
 	}
 	if got := counterValue(t, reg, "create", "terminal"); got != 1 {
 		t.Fatalf("create/terminal = %v, want 1", got)
+	}
+}
+
+// TestCreateDuplicateLabelAfterAmbiguous exercises adoptByLabel's second
+// call, the one inside the post-504 ambiguous branch: a pre-PUT list finds
+// nothing, the PUT itself is ambiguous (504), and the follow-up list finds
+// two instances already sharing the label — the race this task guards
+// against, not just the pre-PUT duplicate TestCreateDuplicateLabel covers.
+func TestCreateDuplicateLabelAfterAmbiguous(t *testing.T) {
+	var putCount, listCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			n := atomic.AddInt32(&listCount, 1)
+			w.Header().Set("Content-Type", "application/json")
+			if n == 1 {
+				_, _ = w.Write([]byte(`{"instances":[],"next_cursor":""}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"instances":[` +
+				`{"id":1,"label":"vkllm:test:dup-ambiguous","actual_status":"running"},` +
+				`{"id":2,"label":"vkllm:test:dup-ambiguous","actual_status":"running"}` +
+				`],"next_cursor":""}`))
+		case http.MethodPut:
+			atomic.AddInt32(&putCount, 1)
+			w.WriteHeader(http.StatusGatewayTimeout)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, reg := newTestClient(t, srv, c)
+
+	_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+		OfferID: 1, Image: "img", Label: "vkllm:test:dup-ambiguous",
+	})
+	var pe *provider.Error
+	if !errors.As(err, &pe) || pe.Class != provider.Terminal {
+		t.Fatalf("err = %v, want *provider.Error{Class: Terminal}", err)
+	}
+	if !errors.Is(err, provider.ErrDuplicateLabel) {
+		t.Fatalf("err = %v, want it to wrap ErrDuplicateLabel", err)
+	}
+	if got := atomic.LoadInt32(&putCount); got != 1 {
+		t.Fatalf("putCount = %d, want 1 (only one PUT ever sent)", got)
+	}
+	if got := counterValue(t, reg, "create", "terminal"); got != 1 {
+		t.Fatalf("create/terminal = %v, want 1", got)
+	}
+	if got := counterValue(t, reg, "create", "adopted"); got != 0 {
+		t.Fatalf("create/adopted = %v, want 0", got)
+	}
+	if got := counterValue(t, reg, "create", "retryable"); got != 1 {
+		t.Fatalf("create/retryable = %v, want 1 (from do()'s 504 handling, not from the duplicate outcome)", got)
 	}
 }
 
