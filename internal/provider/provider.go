@@ -75,7 +75,7 @@ func (s InstanceStatus) Terminal() bool {
 }
 
 // MapStatus turns Vast's actual_status string into InstanceStatus; any
-// string not in this table is non-terminal StatusOther (research §1.4).
+// string not in this table is non-terminal, with the raw value preserved.
 func MapStatus(raw string) InstanceStatus {
 	switch raw {
 	case "running":
