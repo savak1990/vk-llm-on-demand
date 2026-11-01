@@ -82,10 +82,16 @@ func TestWaitAndShutdownReturnsListenError(t *testing.T) {
 // TestWaitAndShutdownWaitsForInFlightWork proves waitAndShutdown does not
 // return while a shutdown func (standing in for http.Server.Shutdown draining
 // an in-flight request) is still blocked, and returns promptly once it is released.
+// It also verifies the shutdown context passed to the func has a live deadline
+// and is not already Done, catching regressions where the parent ctx (which may
+// be cancelled) is used to derive the timeout instead of a fresh context.
 func TestWaitAndShutdownWaitsForInFlightWork(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	shutdownA := func(context.Context) error {
+	shutdownA := func(ctx context.Context) error {
+		if err := ctx.Err(); err != nil {
+			t.Errorf("shutdown context already done at call time: %v", err)
+		}
 		close(started)
 		<-release
 		return nil

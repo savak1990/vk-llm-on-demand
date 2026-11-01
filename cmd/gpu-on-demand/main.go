@@ -57,15 +57,17 @@ func waitAndShutdown(ctx context.Context, errs <-chan error, shutdownA, shutdown
 
 	var wg sync.WaitGroup
 	wg.Add(2)
+	//nolint:gosec // ctx is already cancelled; a fresh context is needed for the 30s drain deadline
 	go func() {
 		defer wg.Done()
-		c, cancel := context.WithTimeout(ctx, 30*time.Second)
+		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = shutdownA(c)
 	}()
+	//nolint:gosec // ctx is already cancelled; a fresh context is needed for the 30s drain deadline
 	go func() {
 		defer wg.Done()
-		c, cancel := context.WithTimeout(ctx, 30*time.Second)
+		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = shutdownB(c)
 	}()
