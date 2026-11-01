@@ -30,7 +30,7 @@ type logCapture struct {
 func captureLogs(t *testing.T) *logCapture {
 	t.Helper()
 	buf := &bytes.Buffer{}
-	return &logCapture{buf: buf, logger: slog.New(slog.NewTextHandler(buf, nil))}
+	return &logCapture{buf: buf, logger: slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))}
 }
 
 func (l *logCapture) String() string { return l.buf.String() }
@@ -140,27 +140,42 @@ func TestKeyNotLogged(t *testing.T) { // AC12
 	buf := captureLogs(t)
 	cl, _ := newTestClient(t, srv, c)
 	cl.logger = buf.logger
+	ctx := context.Background()
 
-	status, _, err := cl.do(context.Background(), "GetInstance", 5*time.Second, 5, getInstanceReq(srv))
-	if err != nil {
-		t.Fatalf("do returned error for a 401 (classification belongs to the caller): %v", err)
+	calls := []struct {
+		name string
+		err  error
+	}{
+		{"search", firstErr(cl.SearchOffers(ctx, provider.OfferFilter{}))},
+		{"create", firstErr(cl.CreateInstance(ctx, provider.CreateRequest{Image: "img", Label: "l"}))},
+		{"get", firstErr(cl.GetInstance(ctx, 1))},
+		{"list", firstErr(cl.ListInstances(ctx, ""))},
+		{"destroy", cl.DestroyInstance(ctx, 1)},
+		{"balance", firstErr(cl.Balance(ctx))},
 	}
-	if status != 401 {
-		t.Fatalf("status = %d, want 401", status)
-	}
-	classified := fatalOrTerminal("GetInstance", status)
-	if classified.Class != provider.Fatal {
-		t.Fatalf("expected Fatal class for 401, got %v", classified.Class)
+	for _, call := range calls {
+		var pe *provider.Error
+		if !errors.As(call.err, &pe) || pe.Class != provider.Fatal {
+			t.Fatalf("%s: err = %v, want *provider.Error{Class: Fatal}", call.name, call.err)
+		}
+		if contains(call.err.Error(), "test-key-ABCDEF") {
+			t.Fatalf("%s: error leaked the key: %v", call.name, call.err)
+		}
 	}
 
 	out := buf.String()
 	if contains(out, "test-key-ABCDEF") || contains(out, "Bearer") {
 		t.Fatalf("logs leaked the key or bearer header: %s", out)
 	}
-	if contains(classified.Error(), "test-key-ABCDEF") {
-		t.Fatalf("error leaked the key: %v", classified)
+	if !contains(out, "level=DEBUG") {
+		t.Fatalf("expected at least one debug-level attempt log, got: %s", out)
+	}
+	if !contains(out, "level=WARN") {
+		t.Fatalf("expected at least one warn-level failure log, got: %s", out)
 	}
 }
+
+func firstErr[T any](_ T, err error) error { return err }
 
 func TestKeyReadPerRequest(t *testing.T) { // AC13
 	var seen []string
