@@ -118,9 +118,23 @@ func TestCreateAdoptAfterAmbiguous(t *testing.T) { // AC6
 	c := fakeclock.New(time.Unix(0, 0))
 	cl, reg := newTestClient(t, s.srv, c)
 
-	id, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
-		OfferID: 1, Image: "img", Label: "vkllm:test:ambiguous",
-	})
+	done := make(chan struct {
+		id  provider.InstanceID
+		err error
+	}, 1)
+	go func() {
+		id, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+			OfferID: 1, Image: "img", Label: "vkllm:test:ambiguous",
+		})
+		done <- struct {
+			id  provider.InstanceID
+			err error
+		}{id, err}
+	}()
+	c.BlockUntil(1)
+	c.Advance(2 * time.Second)
+	res := <-done
+	id, err := res.id, res.err
 	if err != nil {
 		t.Fatalf("CreateInstance: %v", err)
 	}
@@ -153,7 +167,21 @@ func TestCreateOnePerLabel(t *testing.T) { // AC7
 
 	req := provider.CreateRequest{OfferID: 1, Image: "img", Label: "vkllm:test:once"}
 
-	id1, err1 := cl.CreateInstance(context.Background(), req)
+	done := make(chan struct {
+		id  provider.InstanceID
+		err error
+	}, 1)
+	go func() {
+		id, err := cl.CreateInstance(context.Background(), req)
+		done <- struct {
+			id  provider.InstanceID
+			err error
+		}{id, err}
+	}()
+	c.BlockUntil(1)
+	c.Advance(2 * time.Second)
+	res := <-done
+	id1, err1 := res.id, res.err
 	if !errors.Is(err1, provider.ErrOutcomeUnknown) {
 		t.Fatalf("call 1 err = %v, want ErrOutcomeUnknown", err1)
 	}
@@ -253,9 +281,16 @@ func TestCreateDuplicateLabelAfterAmbiguous(t *testing.T) {
 	c := fakeclock.New(time.Unix(0, 0))
 	cl, reg := newTestClient(t, srv, c)
 
-	_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
-		OfferID: 1, Image: "img", Label: "vkllm:test:dup-ambiguous",
-	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+			OfferID: 1, Image: "img", Label: "vkllm:test:dup-ambiguous",
+		})
+		done <- err
+	}()
+	c.BlockUntil(1)
+	c.Advance(2 * time.Second)
+	err := <-done
 	var pe *provider.Error
 	if !errors.As(err, &pe) || pe.Class != provider.Terminal {
 		t.Fatalf("err = %v, want *provider.Error{Class: Terminal}", err)
@@ -274,6 +309,60 @@ func TestCreateDuplicateLabelAfterAmbiguous(t *testing.T) {
 	}
 	if got := counterValue(t, reg, "create", "retryable"); got != 1 {
 		t.Fatalf("create/retryable = %v, want 1 (from do()'s 504 handling, not from the duplicate outcome)", got)
+	}
+}
+
+// TestCreateListFailureAfterAmbiguousIsOutcomeUnknown covers R7a: when the
+// follow-up list after an ambiguous PUT itself fails (as opposed to finding
+// 0 or 2+ instances), the caller must see ErrOutcomeUnknown to know retrying
+// with the same label is the right move.
+func TestCreateListFailureAfterAmbiguousIsOutcomeUnknown(t *testing.T) {
+	var putCount, listCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			n := atomic.AddInt32(&listCount, 1)
+			if n == 1 {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
+				return
+			}
+			w.WriteHeader(http.StatusBadRequest)
+		case http.MethodPut:
+			atomic.AddInt32(&putCount, 1)
+			w.WriteHeader(http.StatusGatewayTimeout)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, srv, c)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+			OfferID: 1, Image: "img", Label: "vkllm:test:list-fails-after-ambiguous",
+		})
+		done <- err
+	}()
+	c.BlockUntil(1)
+	c.Advance(2 * time.Second)
+	err := <-done
+
+	if !errors.Is(err, provider.ErrOutcomeUnknown) {
+		t.Fatalf("err = %v, want it to wrap ErrOutcomeUnknown", err)
+	}
+	var pe *provider.Error
+	if !errors.As(err, &pe) || pe.Class != provider.Retryable {
+		t.Fatalf("err = %v, want *provider.Error{Class: Retryable}", err)
+	}
+	if got := atomic.LoadInt32(&putCount); got != 1 {
+		t.Fatalf("putCount = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&listCount); got != 2 {
+		t.Fatalf("listCount = %d, want 2 (pre-PUT list, then the failed follow-up list)", got)
 	}
 }
 

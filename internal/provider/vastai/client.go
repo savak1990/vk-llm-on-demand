@@ -455,15 +455,19 @@ func (c *Client) CreateInstance(ctx context.Context, r provider.CreateRequest) (
 		return 0, fe
 	}
 
-	// Ambiguous: transport error, 5xx, or 429 — the PUT may have landed on
-	// the provider's side despite the failed response, so list again and
+	// Ambiguous: transport error, 5xx, or 429 — back off, then list again and
 	// adopt rather than retrying the PUT and risking a duplicate.
+	if sleepErr := c.sleep(ctx, c.backoff(0)); sleepErr != nil {
+		return 0, sleepErr
+	}
 	id, listErr := c.adoptByLabel(ctx, r.Label)
 	if listErr != nil {
 		if errors.Is(listErr, provider.ErrDuplicateLabel) {
 			c.metrics.requestsTotal.WithLabelValues("create", "terminal").Inc()
+			return 0, listErr
 		}
-		return 0, listErr
+		return 0, &provider.Error{Op: "create", Class: provider.Retryable,
+			Err: fmt.Errorf("list after ambiguous create: %w: %w", listErr, provider.ErrOutcomeUnknown)}
 	}
 	if id != 0 {
 		c.metrics.requestsTotal.WithLabelValues("create", "adopted").Inc()
