@@ -19,6 +19,7 @@ func TestHealthBecomesReadyAfterDelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("got %d before READY_AFTER, want 503", resp.StatusCode)
 	}
@@ -28,6 +29,7 @@ func TestHealthBecomesReadyAfterDelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = resp2.Body.Close() }()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("got %d after READY_AFTER, want 200", resp2.StatusCode)
 	}
@@ -42,7 +44,7 @@ func TestModelsListsConfiguredAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	buf := make([]byte, 4096)
 	n, _ := resp.Body.Read(buf)
 	if !strings.Contains(string(buf[:n]), "qwen3.6-35b-a3b") {
@@ -60,7 +62,7 @@ func TestChatCompletionsStreamsAndEnds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	scanner := bufio.NewScanner(resp.Body)
 	var lastLine string

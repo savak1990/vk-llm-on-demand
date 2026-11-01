@@ -1,3 +1,4 @@
+// Package main implements the GPU on-demand control plane.
 package main
 
 import (
@@ -58,13 +59,13 @@ func waitAndShutdown(ctx context.Context, errs <-chan error, shutdownA, shutdown
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		c, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		_ = shutdownA(c)
 	}()
 	go func() {
 		defer wg.Done()
-		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		c, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		_ = shutdownB(c)
 	}()
@@ -82,12 +83,12 @@ func main() {
 
 	apiMux := http.NewServeMux()
 	// apiMux.Handle("/v1/", gw); apiMux.Handle("/api/v1/gpu/", mg)
-	api := &http.Server{Addr: ":8080", Handler: apiMux}
+	api := &http.Server{Addr: ":8080", Handler: apiMux, ReadHeaderTimeout: 10 * time.Second}
 
 	healthMux := http.NewServeMux()
 	healthMux.HandleFunc("/healthz", healthz)
 	healthMux.HandleFunc("/readyz", readyz)
-	health := &http.Server{Addr: ":9090", Handler: healthMux}
+	health := &http.Server{Addr: ":9090", Handler: healthMux, ReadHeaderTimeout: 10 * time.Second}
 
 	if err := run(ctx, api, health); err != nil {
 		slog.Error("server error", "err", err)

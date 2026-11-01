@@ -1,3 +1,4 @@
+// Package main is the entrypoint for the vk-llm CLI.
 package main
 
 import (
@@ -6,5 +7,5 @@ import (
 )
 
 func main() {
-	fmt.Fprintln(os.Stdout, "vk-llm: no subcommands yet")
+	_, _ = fmt.Fprintln(os.Stdout, "vk-llm: no subcommands yet")
 }

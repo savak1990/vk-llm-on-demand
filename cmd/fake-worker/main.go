@@ -1,3 +1,4 @@
+// Package main implements a fake llama-server test double for development and testing.
 package main
 
 import (
@@ -45,12 +46,12 @@ func newHandler(readyAfter time.Duration, modelAlias string, now func() time.Tim
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, _ := w.(http.Flusher)
 		for _, chunk := range []string{"fake ", "streamed ", "response"} {
-			fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\n", chunk)
+			_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q}}]}\n\n", chunk)
 			if flusher != nil {
 				flusher.Flush()
 			}
 		}
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -58,7 +59,7 @@ func newHandler(readyAfter time.Duration, modelAlias string, now func() time.Tim
 
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprint(w, "llamacpp:prompt_tokens_total 0\nllamacpp:generated_tokens_total 0\n")
+		_, _ = fmt.Fprint(w, "llamacpp:prompt_tokens_total 0\nllamacpp:generated_tokens_total 0\n")
 	})
 
 	return mux
@@ -84,7 +85,8 @@ func main() {
 	}
 
 	handler := newHandler(readyAfter, alias, time.Now)
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	srv := &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

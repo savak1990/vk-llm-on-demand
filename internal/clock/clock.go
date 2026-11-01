@@ -1,3 +1,4 @@
+// Package clock provides an injectable Clock interface for timer operations, enabling deterministic testing.
 package clock
 
 import "time"
@@ -8,6 +9,7 @@ type Ticker struct {
 	stop func()
 }
 
+// Stop cancels the Ticker.
 func (t Ticker) Stop() { t.stop() }
 
 // NewTickerFrom builds a Ticker for implementations outside this package, such as a fake clock.
@@ -25,10 +27,13 @@ type Clock interface {
 // Real wraps the real time package.
 type Real struct{}
 
+// Now returns the current time.
 func (Real) Now() time.Time { return time.Now() }
 
+// After returns a channel that sends the current time after d has elapsed.
 func (Real) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
+// NewTicker creates a new Ticker.
 func (Real) NewTicker(d time.Duration) Ticker {
 	t := time.NewTicker(d)
 	return Ticker{C: t.C, stop: t.Stop}

@@ -1,3 +1,4 @@
+// Package fake provides a manually-controlled Clock implementation for deterministic testing.
 package fake
 
 import (
@@ -21,6 +22,7 @@ type Clock struct {
 	pending chan struct{} // closed and replaced each time len(waiters) changes
 }
 
+// New creates a Clock starting at the given time.
 func New(start time.Time) *Clock {
 	c := &Clock{now: start}
 	c.pending = make(chan struct{})
@@ -29,12 +31,14 @@ func New(start time.Time) *Clock {
 
 var _ clock.Clock = (*Clock)(nil)
 
+// Now returns the current time.
 func (c *Clock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.now
 }
 
+// After returns a channel that sends the current time after d has elapsed on the clock.
 func (c *Clock) After(d time.Duration) <-chan time.Time {
 	ch := make(chan time.Time, 1)
 	c.mu.Lock()
@@ -47,6 +51,7 @@ func (c *Clock) After(d time.Duration) <-chan time.Time {
 	return ch
 }
 
+// NewTicker creates a Ticker that fires on the clock.
 func (c *Clock) NewTicker(d time.Duration) clock.Ticker {
 	ch := make(chan time.Time, 1)
 	w := &waiter{period: d}
