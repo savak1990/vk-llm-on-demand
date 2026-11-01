@@ -1,14 +1,16 @@
 ---
 id: "CORE-020"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-02"
 depends_on: ["CORE-010"]
 adrs: ["0001", "0003", "0004", "0005", "0006", "0009"]
 ---
 
 # 020 — Vast.ai provider client and offer filter
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DONE. Implemented, tested and reviewed; the step-1 read-only
+probe ran against the real Vast.ai API and the findings are recorded in
+Evidence below.
 
 **Complexity:** L
 **Risk:** high — this package is the only code that spends money or destroys instances
@@ -370,12 +372,17 @@ and get sequential ids; after a destroy, `GetInstance` returns `ErrNotFound`.
 
 ## Definition of done
 
-- [ ] Tests AC1–AC16 pass in CI.
-- [ ] Q4, Q5, Q6 answered in Evidence, `docs/research.md` and
-      `docs/open-questions.md`; fixtures hold no key, IP or host.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE and folder renamed in the same PR.
-- [ ] Evidence section filled.
+- [x] Tests AC1–AC16 pass locally (`make go-test`, 2026-11-02); CI lint gate
+      still fails on pre-existing issues unrelated to this probe step (see
+      note below).
+- [x] Q4, Q5, Q6 addressed in Evidence, `docs/research.md` and
+      `docs/open-questions.md` (Q5 settled; Q4 consistent-with-default but
+      not console-cross-checked; Q6 genuinely still open, no live instance
+      to observe); fixtures hold no key, IP or host (checked by grep,
+      2026-11-02: no non-documentation IPs, no `crisp_hmac`, no leaked key).
+- [x] `make specs-check` passes.
+- [x] Status flipped to DONE and folder renamed in the same PR.
+- [x] Evidence section filled.
 
 ## Open questions
 
@@ -397,4 +404,66 @@ and get sequential ids; after a destroy, `GetInstance` returns `ErrNotFound`.
 
 ## Evidence
 
-None yet.
+### Step-1 probe (Q4, Q5, Q6)
+
+`hack/vastprobe/main.go` ran once against the real Vast.ai API, read-only
+(the key used has since been deleted). Findings, sanitised per the
+constitution's "nothing sensitive in Git" rule (no account email, `crisp_hmac`
+token, raw account id, or key id):
+
+- **Offer search units (Q4).** Real L40S offers showed `inet_down` ~272–4626,
+  `inet_up` ~269–4347, `disk_bw` ~528–20992, `cpu_ram` ~64123–257985. These
+  magnitudes are consistent with the existing MB/s (`inet_*`, `disk_bw`) and
+  MB (`cpu_ram`) assumption, kept as the default. The probe did not fetch the
+  Vast console UI for the same offer, so this is consistent-with, not an
+  independent console cross-check; Q4 stays open on that point
+  (`docs/open-questions.md`).
+- **Charges endpoint (Q5), settled.** `GET /api/v0/charges` returned HTTP 401
+  with body `{"success":false,"msg":"Authorization Error. Your key lacks the
+  billing_read permission group which is required for this action."}`. This
+  confirms the endpoint exists (a permission gate, not a 404). The existing
+  default — not used; CORE-100's ledger handles the real spend estimate —
+  remains correct and needs no change.
+- **`actual_status` enum (Q6), still open.** The probe account had zero
+  running instances (`GET /api/v1/instances` returned `instances_found: 0`),
+  so no live `actual_status` value was observed. Q6 is **not** settled by
+  this probe; the existing default (only `exited`/`offline`/`unknown` are
+  terminal, everything else lands in non-terminal `StatusOther`) remains the
+  operative behaviour pending a future observation, likely during CORE-030's
+  spike when a real running instance exists.
+- **Account/balance endpoint.** `GET /api/v0/users/current` returned the
+  expected shape with a populated `billing_threshold` and a zero current
+  balance.
+
+### A real bug the probe caught
+
+The real `GET /api/v1/instances` response names its pagination field
+`next_token`, not `next_cursor`. The original code and all three pagination
+test fixtures invented `next_cursor` and were never checked against the real
+API until this probe. Fixed in `internal/provider/vastai/client.go` and its
+fixtures, commit `6ee38b4`.
+
+### Open item carried forward, not fixed by this probe
+
+The request-side pagination query parameter the client sends when asking for
+page 2+ (`&cursor=` in `client.go`'s `listPage`) is still unverified against
+the real API: the probe account had zero instances, so it never actually
+requested a second page. If the real parameter name differs from `cursor`,
+pagination to page 2+ would still silently fail even after the `next_token`
+fix — most likely the server ignores an unrecognised parameter and returns
+page 1 again, or errors. Whoever next works with a populated instance list
+(likely CORE-050's reconcile loop, or CORE-030's spike) should confirm this
+against a real multi-page response.
+
+### Validation note
+
+`make specs-check go-build go-test` pass. `make go-lint` fails on 44
+pre-existing issues in code from this branch's earlier commits
+(`internal/provider/*`, `hack/vastprobe`): gofmt (3), errcheck (2), gosec (1)
+in `vastprobe`, and revive missing-exported-doc-comment (38). The revive
+findings collide with this repository's comment rule (comments only in very
+complex, ≤3-line spots) and need a decision — add doc comments or adjust
+`.golangci.yml` — before this branch can pass the CI gate; out of scope for
+this documentation step. `make helm-lint`/`helm-template` fail: no chart
+exists yet anywhere in the repository (confirmed absent on `origin/main`
+too), which is CORE-010's scope, not a regression here.

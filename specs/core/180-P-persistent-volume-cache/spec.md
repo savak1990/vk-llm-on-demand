@@ -14,7 +14,7 @@ adrs: ["0014", "0005", "0001", "0003"]
 **Risk:** medium — a wrong attach serves stale weights; a forgotten volume bills every month with nothing using it
 **Estimated effort:** one session (4–6 h) once ADR 0014 is Accepted
 **Recommended model:** standard — a bounded extension of interfaces CORE-020, CORE-050, CORE-055 and CORE-100 already define
-**Depends on:** [CORE-020](../020-P-vastai-provider-client/spec.md), [CORE-050](../050-P-gpu-lifecycle-controller/spec.md), [CORE-150](../150-P-vk-llm-cli/spec.md)
+**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md), [CORE-050](../050-P-gpu-lifecycle-controller/spec.md), [CORE-150](../150-P-vk-llm-cli/spec.md)
 
 ## Outcome
 
