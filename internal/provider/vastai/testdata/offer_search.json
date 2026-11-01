@@ -1,0 +1,40 @@
+{
+  "offers": [
+    {
+      "id": 1,
+      "machine_id": 100,
+      "gpu_name": "RTX_4090",
+      "geolocation": "US",
+      "num_gpus": 1,
+      "dph_total": 0.75,
+      "reliability2": 0.99,
+      "inet_down": 900.0,
+      "disk_bw": 1500.0,
+      "cuda_max_good": 12.8
+    },
+    {
+      "id": 2,
+      "machine_id": 200,
+      "gpu_name": "RTX_4090",
+      "geolocation": "US",
+      "num_gpus": 1,
+      "dph_total": 0.90,
+      "reliability2": 0.98,
+      "inet_down": 800.0,
+      "disk_bw": 1400.0,
+      "cuda_max_good": 12.8
+    },
+    {
+      "id": 3,
+      "machine_id": 300,
+      "gpu_name": "RTX_4090",
+      "geolocation": "US",
+      "num_gpus": 1,
+      "dph_total": 0.60,
+      "reliability2": 0.97,
+      "inet_down": 700.0,
+      "disk_bw": 1300.0,
+      "cuda_max_good": 12.8
+    }
+  ]
+}

@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,4 +165,176 @@ func fatalOrTerminal(op string, status int) *provider.Error {
 func decodeJSON(body []byte, v any) error {
 	d := json.NewDecoder(bytes.NewReader(body))
 	return d.Decode(v)
+}
+
+// SearchOffers queries /bundles with the given filter and applies the
+// local price cap and denylist (the server filter is not the guarantee).
+func (c *Client) SearchOffers(ctx context.Context, f provider.OfferFilter) ([]provider.Offer, error) {
+	body, err := json.Marshal(buildFilterBody(f))
+	if err != nil {
+		return nil, &provider.Error{Op: "search", Class: provider.Terminal, Err: err}
+	}
+	status, respBody, err := c.do(ctx, "search", 30*time.Second, 5, func() (*http.Request, error) {
+		return http.NewRequest(http.MethodPost, c.baseURL+"/api/v0/bundles", bytes.NewReader(body))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, fatalOrTerminal("search", status)
+	}
+	var decoded struct {
+		Offers []struct {
+			ID          int64   `json:"id"`
+			MachineID   int64   `json:"machine_id"`
+			GPUName     string  `json:"gpu_name"`
+			Geolocation string  `json:"geolocation"`
+			NumGPUs     int     `json:"num_gpus"`
+			DphTotal    float64 `json:"dph_total"`
+			Reliability float64 `json:"reliability2"`
+			InetDown    float64 `json:"inet_down"`
+			DiskBw      float64 `json:"disk_bw"`
+			CudaMaxGood float64 `json:"cuda_max_good"`
+		} `json:"offers"`
+	}
+	if err := decodeJSON(respBody, &decoded); err != nil {
+		return nil, &provider.Error{Op: "search", Class: provider.Terminal, Err: fmt.Errorf("decode offers: %w", err)}
+	}
+	out := make([]provider.Offer, 0, len(decoded.Offers))
+	for _, o := range decoded.Offers {
+		out = append(out, provider.Offer{
+			ID: o.ID, MachineID: o.MachineID, GPUName: o.GPUName, Geolocation: o.Geolocation,
+			NumGPUs: o.NumGPUs, Hourly: provider.Money(o.DphTotal*1e6 + 0.5),
+			Reliability: o.Reliability, InetDownMBps: o.InetDown, DiskBwMBps: o.DiskBw, CUDAMaxGood: o.CudaMaxGood,
+		})
+	}
+	return provider.Select(out, f), nil
+}
+
+type instanceDTO struct {
+	ID           provider.InstanceID `json:"id"`
+	Label        string              `json:"label"`
+	ActualStatus string              `json:"actual_status"`
+	StatusMsg    string              `json:"status_msg"`
+	MachineID    int64               `json:"machine_id"`
+	PublicIP     string              `json:"public_ipaddr"`
+	SSHHost      string              `json:"ssh_host"`
+	SSHPort      int                 `json:"ssh_port"`
+	DphTotal     float64             `json:"dph_total"`
+	StartDate    float64             `json:"start_date"`
+}
+
+func (d instanceDTO) toInstance() provider.Instance {
+	return provider.Instance{
+		ID: d.ID, Label: d.Label, StatusMsg: d.StatusMsg,
+		Status: provider.MapStatus(d.ActualStatus), RawStatus: d.ActualStatus,
+		MachineID: d.MachineID, PublicIP: d.PublicIP, SSHHost: d.SSHHost, SSHPort: d.SSHPort,
+		Hourly:    provider.Money(d.DphTotal*1e6 + 0.5),
+		StartedAt: time.Unix(int64(d.StartDate), 0),
+	}
+}
+
+// GetInstance fetches one instance by id.
+func (c *Client) GetInstance(ctx context.Context, id provider.InstanceID) (provider.Instance, error) {
+	status, body, err := c.do(ctx, "get", 15*time.Second, 5, func() (*http.Request, error) {
+		return http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v0/instances/%d", c.baseURL, id), nil)
+	})
+	if err != nil {
+		return provider.Instance{}, err
+	}
+	if status == http.StatusNotFound {
+		return provider.Instance{}, &provider.Error{Op: "get", Class: provider.Terminal, Status: 404, Err: fmt.Errorf("instance %d: %w", id, provider.ErrNotFound)}
+	}
+	if status < 200 || status >= 300 {
+		return provider.Instance{}, fatalOrTerminal("get", status)
+	}
+	var dto instanceDTO
+	if err := decodeJSON(body, &dto); err != nil {
+		return provider.Instance{}, &provider.Error{Op: "get", Class: provider.Terminal, Err: fmt.Errorf("decode instance: %w", err)}
+	}
+	return dto.toInstance(), nil
+}
+
+// listPage fetches one page of /api/v1/instances; cursor is the opaque
+// pagination token from the previous page's response, empty for page 1.
+func (c *Client) listPage(ctx context.Context, cursor string) ([]instanceDTO, string, error) {
+	status, body, err := c.do(ctx, "list", 15*time.Second, 5, func() (*http.Request, error) {
+		reqURL := c.baseURL + "/api/v1/instances?limit=25"
+		if cursor != "" {
+			reqURL += "&cursor=" + url.QueryEscape(cursor)
+		}
+		return http.NewRequest(http.MethodGet, reqURL, nil)
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if status < 200 || status >= 300 {
+		return nil, "", fatalOrTerminal("list", status)
+	}
+	var decoded struct {
+		Instances  []instanceDTO `json:"instances"`
+		NextCursor string        `json:"next_cursor"`
+	}
+	if err := decodeJSON(body, &decoded); err != nil {
+		return nil, "", &provider.Error{Op: "list", Class: provider.Terminal, Err: fmt.Errorf("decode page: %w", err)}
+	}
+	return decoded.Instances, decoded.NextCursor, nil
+}
+
+// ListInstances pages through /api/v1/instances and filters by label
+// prefix; any page failure returns an error and a nil slice, never a
+// partial list.
+func (c *Client) ListInstances(ctx context.Context, labelPrefix string) ([]provider.Instance, error) {
+	var out []provider.Instance
+	cursor := ""
+	for {
+		page, next, err := c.listPage(ctx, cursor)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range page {
+			if labelPrefix == "" || strings.HasPrefix(d.Label, labelPrefix) {
+				out = append(out, d.toInstance())
+			}
+		}
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	return out, nil
+}
+
+// DestroyInstance deletes an instance by id.
+func (c *Client) DestroyInstance(ctx context.Context, id provider.InstanceID) error {
+	status, _, err := c.do(ctx, "destroy", 30*time.Second, 5, func() (*http.Request, error) {
+		return http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/v0/instances/%d", c.baseURL, id), nil)
+	})
+	if err != nil {
+		return err
+	}
+	if status < 200 || status >= 300 {
+		return fatalOrTerminal("destroy", status)
+	}
+	return nil
+}
+
+// Balance reports the account's current balance.
+func (c *Client) Balance(ctx context.Context) (provider.Money, error) {
+	status, body, err := c.do(ctx, "balance", 15*time.Second, 5, func() (*http.Request, error) {
+		return http.NewRequest(http.MethodGet, c.baseURL+"/api/v0/users/current", nil)
+	})
+	if err != nil {
+		return 0, err
+	}
+	if status < 200 || status >= 300 {
+		return 0, fatalOrTerminal("balance", status)
+	}
+	var decoded struct {
+		Balance float64 `json:"balance"`
+	}
+	if err := decodeJSON(body, &decoded); err != nil {
+		return 0, &provider.Error{Op: "balance", Class: provider.Terminal, Err: fmt.Errorf("decode balance: %w", err)}
+	}
+	return provider.Money(decoded.Balance*1e6 + 0.5), nil
 }

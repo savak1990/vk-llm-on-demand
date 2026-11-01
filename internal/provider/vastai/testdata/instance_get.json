@@ -1,0 +1,12 @@
+{
+  "id": 555,
+  "label": "vkllm:test:1",
+  "actual_status": "running",
+  "status_msg": "",
+  "machine_id": 1,
+  "public_ipaddr": "192.0.2.10",
+  "ssh_host": "192.0.2.10",
+  "ssh_port": 41022,
+  "dph_total": 0.54,
+  "start_date": 1700000000.0
+}
