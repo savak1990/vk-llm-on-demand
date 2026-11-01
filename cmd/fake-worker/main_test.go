@@ -12,59 +12,39 @@ import (
 func TestHealthBecomesReadyAfterDelay(t *testing.T) {
 	now := time.Now()
 	h := newHandler(100*time.Millisecond, "qwen3.6-35b-a3b", func() time.Time { return now })
-	srv := httptest.NewServer(h)
-	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/health")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Fatalf("got %d before READY_AFTER, want 503", resp.StatusCode)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("got %d before READY_AFTER, want 503", rec.Code)
 	}
 
 	now = now.Add(150 * time.Millisecond)
-	resp2, err := http.Get(srv.URL + "/health")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resp2.Body.Close() }()
-	if resp2.StatusCode != http.StatusOK {
-		t.Fatalf("got %d after READY_AFTER, want 200", resp2.StatusCode)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("got %d after READY_AFTER, want 200", rec2.Code)
 	}
 }
 
 func TestModelsListsConfiguredAlias(t *testing.T) {
 	h := newHandler(0, "qwen3.6-35b-a3b", time.Now)
-	srv := httptest.NewServer(h)
-	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/v1/models")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	buf := make([]byte, 4096)
-	n, _ := resp.Body.Read(buf)
-	if !strings.Contains(string(buf[:n]), "qwen3.6-35b-a3b") {
-		t.Fatalf("response %q does not contain configured alias", buf[:n])
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	if !strings.Contains(rec.Body.String(), "qwen3.6-35b-a3b") {
+		t.Fatalf("response %q does not contain configured alias", rec.Body.String())
 	}
 }
 
 func TestChatCompletionsStreamsAndEnds(t *testing.T) {
 	h := newHandler(0, "qwen3.6-35b-a3b", time.Now)
-	srv := httptest.NewServer(h)
-	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json",
-		strings.NewReader(`{"stream":true}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"stream":true}`))
+	h.ServeHTTP(rec, req)
 
-	scanner := bufio.NewScanner(resp.Body)
+	scanner := bufio.NewScanner(rec.Body)
 	var lastLine string
 	for scanner.Scan() {
 		if line := scanner.Text(); line != "" {

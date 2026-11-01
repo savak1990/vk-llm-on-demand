@@ -14,7 +14,7 @@ adrs: ["0004", "0003", "0011", "0014"]
 **Risk:** medium — every other component trusts this package for its only durable state and for write serialisation
 **Estimated effort:** two sessions (6–8 h), including the kind integration job
 **Recommended model:** strong — optimistic concurrency, RBAC and schema rules must be exact
-**Depends on:** [CORE-010](../010-P-repo-skeleton-and-ci/spec.md)
+**Depends on:** [CORE-010](../010-D-repo-skeleton-and-ci/spec.md)
 
 ## Outcome
 

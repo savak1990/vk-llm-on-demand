@@ -20,7 +20,7 @@ the same pull request that adds it.
 **Estimated effort:** one session (3–5 h)
 **Recommended model:** standard — mechanical adaptation of an existing
 pattern to three new tools, no algorithmic design.
-**Depends on:** [CORE-010](../010-P-repo-skeleton-and-ci/spec.md)
+**Depends on:** [CORE-010](../010-D-repo-skeleton-and-ci/spec.md)
 (`ci.yml` skeleton, `Makefile`, the `go`/`image` jobs this spec's
 `security` job sits beside), [CORE-120](../120-P-release-pipeline/spec.md)
 (`release.yml`, gated by convention, not automation, on this spec's

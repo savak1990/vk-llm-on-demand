@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Applies the repository settings this project depends on: branch protection,
-# merge strategy, and squash-only enforcement. A setting clicked in the web UI
-# is not reproducible; this is.
-#
-# Idempotent. Run it as often as you like.
+# Applies the repository settings this project depends on (branch protection,
+# merge strategy, squash-only enforcement) so they are reproducible instead of
+# clicked in the web UI. Idempotent; run it as often as you like.
 set -euo pipefail
 
 REPO="${REPO:-savak1990/vk-llm-on-demand}"
@@ -13,10 +11,8 @@ command -v gh >/dev/null || { echo "REPO-SETTINGS: gh is not installed." >&2; ex
 
 echo "REPO-SETTINGS: applying to $REPO"
 
-# Bootstrap: create a base protection object if none exists yet. New repos have
-# no protection, so sub-resource PATCH endpoints (required_status_checks,
-# enforce_admins) return 404. Create the full object once; subsequent runs use
-# PATCH to update parts idempotently.
+# New repos have no protection, so the sub-resource PATCH endpoints below
+# 404. Create the full object once; later runs PATCH parts idempotently.
 if ! gh api "repos/$REPO/branches/$BRANCH/protection" >/dev/null 2>&1; then
   echo "REPO-SETTINGS: creating initial branch protection"
   cat <<'PROTECTION' |
@@ -37,17 +33,9 @@ PROTECTION
   echo "REPO-SETTINGS: initial protection created"
 fi
 
-# One required check, not a list of job names. A renamed job used to leave
-# branch protection waiting on a context that never reported again.
-#
-# The sub-resource, never PUT .../protection: the parent endpoint replaces the
-# whole object, so a partial body silently drops enforce_admins, linear
-# history and the force-push ban.
-#
-# strict stays false: with one developer, forcing every branch up to date
-# before merge only re-runs CI for no new information.
-# PATCH, not PUT: PUT exists only on the parent .../protection and answers 404
-# here, which reads like a missing branch rather than a wrong method.
+# PATCH this sub-resource: PUT here 404s (reads like a missing branch), and PUT
+# on the parent .../protection replaces the whole object, dropping enforce_admins.
+# strict=false: one developer gains nothing from forcing branches up to date.
 echo '{"strict":false,"checks":[{"context":"ci-ok"}]}' |
   gh api -X PATCH "repos/$REPO/branches/$BRANCH/protection/required_status_checks" \
     --input - --silent

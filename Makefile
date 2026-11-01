@@ -11,7 +11,8 @@ specs-check: ## Check the specs/ layout, front matter and relative links
 SVC ?=
 CHART ?= gpu-on-demand
 VERSION ?= $(shell ./scripts/version.sh base)
-IMAGE ?= ghcr.io/savak1990/vk-llm-on-demand/$(SVC):$(VERSION)
+IMAGE_TAG ?= $(shell git rev-parse HEAD)
+IMAGE ?= ghcr.io/savak1990/vk-llm-on-demand/$(SVC):$(IMAGE_TAG)
 
 .PHONY: go-build go-test go-lint require-svc image-build image-push helm-lint helm-template helm-package helm-push version release buildx-init keygen repo-settings
 
@@ -32,7 +33,7 @@ image-build: require-svc ## Build a single-arch local image for SVC (docker buil
 	docker buildx build --load -f deploy/docker/$(SVC).Dockerfile -t $(IMAGE) .
 
 image-push: require-svc buildx-init ## Build and push a multi-arch image for SVC
-	docker buildx build --push --platform linux/amd64,linux/arm64 -f deploy/docker/$(SVC).Dockerfile -t $(IMAGE) .
+	docker buildx build --builder vk --push --platform linux/amd64,linux/arm64 --provenance=false -f deploy/docker/$(SVC).Dockerfile -t $(IMAGE) .
 
 helm-lint: ## Lint the deploy/helm/<CHART> chart
 	helm lint deploy/helm/$(CHART)

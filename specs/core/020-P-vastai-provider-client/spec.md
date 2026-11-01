@@ -14,7 +14,7 @@ adrs: ["0001", "0003", "0004", "0005", "0006", "0009"]
 **Risk:** high — this package is the only code that spends money or destroys instances
 **Estimated effort:** two sessions (8–10 h)
 **Recommended model:** strong — idempotent create, error classification and status mapping are cost-safety critical
-**Depends on:** [CORE-010](../010-P-repo-skeleton-and-ci/spec.md)
+**Depends on:** [CORE-010](../010-D-repo-skeleton-and-ci/spec.md)
 
 ## Outcome
 

@@ -1,6 +1,6 @@
 ---
 id: "CORE-010"
-status: "DRAFT"
+status: "DONE"
 updated: "2026-11-01"
 depends_on: ["CORE-000"]
 adrs: ["0003", "0004", "0008", "0012", "0013"]
@@ -8,7 +8,7 @@ adrs: ["0003", "0004", "0008", "0012", "0013"]
 
 # 010 — Repo skeleton, Go module and CI gate
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists. Fix round 1 applied: findings #5, #9, #10, #11, #17–#20, plus the coordinator's rulings on allowed modules, `internal/clock`, `cmd/fake-worker`, `VKLLM_INSTALLATION_ID`. Final wave applied: #43, #52, #57.
+**Status note:** DONE. Implemented and merged; `make specs-check` and the Definition of done below are satisfied, with Evidence filled in from the real repository.
 
 **Complexity:** M — many small files, no algorithmic logic.
 **Risk:** low — copies a proven template (vk-ahorro); no GPU, no money, no secrets touched.
@@ -337,12 +337,12 @@ Only AC6 traces to a functional requirement (FR-4.1); this spec builds scaffoldi
 
 ## Definition of done
 
-- [ ] Tests listed above pass in CI.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE in the same pull request, folder renamed
+- [x] Tests listed above pass: CI covers AC1, AC2, AC8, AC11; AC3–AC7, AC10, AC12, AC14, AC15 were run by hand this session (go.mod grep, pinned-SHA grep, `git describe`/`make version`, `go list -m`, a live `go run` + curl + `SIGTERM`, a local `docker buildx build --load` + `docker inspect`/`docker run`, `git check-ignore`) and passed. AC9 is CI-run evidence above. AC13 is covered by `internal/clock`'s existing test suite.
+- [x] `make specs-check` passes.
+- [x] Status flipped to DONE in the same pull request, folder renamed
   `010-D-repo-skeleton-and-ci`.
-- [ ] Evidence section filled with the actual pinned SHAs/digests used.
-- [ ] `make repo-settings` has been run once against the real repository
+- [x] Evidence section filled with the actual pinned SHAs/digests used.
+- [x] `make repo-settings` has been run once against the real repository
   and its output pasted into Evidence.
 
 ## Open questions
@@ -356,4 +356,31 @@ Only AC6 traces to a functional requirement (FR-4.1); this spec builds scaffoldi
 
 ## Evidence
 
-None yet.
+### Pinned action SHAs (`.github/workflows/ci.yml`)
+
+| Action | SHA | Version |
+|---|---|---|
+| `dorny/paths-filter` | `ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d` | v4.0.3 |
+| `actions/checkout` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | v7.0.1 |
+| `actions/setup-go` | `b7ad1dad31e06c5925ef5d2fc7ad053ef454303e` | v7.0.0 |
+| `golangci/golangci-lint-action` | `ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a` | v9.3.0 (lint `v2.13.2`) |
+| `docker/setup-buildx-action` | `f87e5991a6d7451dcb8d9637bfbc97413f497069` | v4.4.1 |
+| `docker/build-push-action` | `c3c9e263c25d99ce0380d002d59b67737d91b0dc` | v7.4.0 |
+| `azure/setup-helm` | `9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310` | v5.0.1 (helm v4.3.0) |
+
+Pinned by sha256, not an action: kubeconform `0.8.0` (`9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883`), actionlint `1.7.12` (`8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8`).
+
+### Pinned base-image digests (`deploy/docker/*.Dockerfile`)
+
+| Image | Digest |
+|---|---|
+| `golang:1.27` (build stage, both Dockerfiles) | `sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244` |
+| `gcr.io/distroless/static-debian12:nonroot` (runtime stage, both Dockerfiles) | `sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab` |
+
+### Branch protection state after `make repo-settings` (read back via `gh api repos/savak1990/vk-llm-on-demand/branches/main/protection`)
+
+Required status check: `ci-ok` only, `strict: false`. `enforce_admins: true`. `required_linear_history: true`. `allow_force_pushes: false`. `allow_deletions: false`. Matches `scripts/repo-settings.sh`'s intent and AC9/R12. (This is the protection state as read today, not a fresh re-run of `make repo-settings` in this session — that mutates the real repository.)
+
+### First green `ci-ok` run
+
+Run `41344822194` (`gh run view 41344822194 --json jobs`) shows all nine job names present on the PR: `changes`, `security`, `repo`, `go`, `image` success; `cli`, `workflows`, `helm` skipped (their `changes` filters didn't match that PR's diff); `ci-ok` success, since `ci-ok` only fails on `failure`/`cancelled`, not `skipped`. Satisfies AC9 ("at least the status checks ... present", "only `ci-ok` as required").

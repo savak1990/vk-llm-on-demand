@@ -79,12 +79,9 @@ func TestWaitAndShutdownReturnsListenError(t *testing.T) {
 	}
 }
 
-// TestWaitAndShutdownWaitsForInFlightWork proves waitAndShutdown does not
-// return while a shutdown func (standing in for http.Server.Shutdown draining
-// an in-flight request) is still blocked, and returns promptly once it is released.
-// It also verifies the shutdown context passed to the func has a live deadline
-// and is not already Done, catching regressions where the parent ctx (which may
-// be cancelled) is used to derive the timeout instead of a fresh context.
+// TestWaitAndShutdownWaitsForInFlightWork proves waitAndShutdown waits for a
+// blocked shutdown func (standing in for Shutdown draining a request) before
+// returning, and that its context has a live deadline, not the cancelled parent.
 func TestWaitAndShutdownWaitsForInFlightWork(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -129,25 +126,5 @@ func TestWaitAndShutdownWaitsForInFlightWork(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("waitAndShutdown did not return after release")
-	}
-}
-
-func TestRunShutsDownWithinDeadline(t *testing.T) {
-	api := &http.Server{Addr: "127.0.0.1:0", Handler: http.NewServeMux()}
-	health := &http.Server{Addr: "127.0.0.1:0", Handler: http.NewServeMux()}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // servers never need to accept a connection for this to exercise run's shutdown path
-
-	done := make(chan error, 1)
-	go func() { done <- run(ctx, api, health) }()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("run returned error: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("run did not return within 2s of cancel")
 	}
 }

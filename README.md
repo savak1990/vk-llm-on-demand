@@ -22,7 +22,7 @@ vk-llm stop       # release the GPU now (otherwise: 30 min after the last infere
 
 Design phase. No code yet. The repository holds the architecture, fourteen
 ADRs and twenty implementation specs. Implementation starts with
-[`specs/core/010-P-repo-skeleton-and-ci`](specs/core/010-P-repo-skeleton-and-ci/spec.md)
+[`specs/core/010-D-repo-skeleton-and-ci`](specs/core/010-D-repo-skeleton-and-ci/spec.md)
 once the specifications are reviewed.
 
 ## MVP in one paragraph
