@@ -1,0 +1,23 @@
+# OS / editor
+.DS_Store
+*.swp
+*.log
+.idea/
+.vscode/
+
+# Go
+bin/
+coverage.out
+
+# Helm
+dist/
+*.tgz
+
+# Local kubeconfigs never land in the tree.
+.kube/
+*.kubeconfig
+
+# Claude Code. Only the permission policy is tracked.
+.claude/*
+!.claude/settings.json
+.superpowers/
