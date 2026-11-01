@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Applies the repository settings this project depends on: branch protection,
-# the Environments the workflows name, and no ci labels. A setting
-# clicked in the web UI is not reproducible; this is.
+# merge strategy, and squash-only enforcement. A setting clicked in the web UI
+# is not reproducible; this is.
 #
 # Idempotent. Run it as often as you like.
 set -euo pipefail
@@ -12,6 +12,24 @@ BRANCH="${BRANCH:-main}"
 command -v gh >/dev/null || { echo "REPO-SETTINGS: gh is not installed." >&2; exit 1; }
 
 echo "REPO-SETTINGS: applying to $REPO"
+
+# Bootstrap: create a base protection object if none exists yet. New repos have
+# no protection, so sub-resource PATCH endpoints (required_status_checks,
+# enforce_admins) return 404. Create the full object once; subsequent runs use
+# PATCH to update parts idempotently.
+if ! gh api "repos/$REPO/branches/$BRANCH/protection" >/dev/null 2>&1; then
+  echo "REPO-SETTINGS: creating initial branch protection"
+  gh api -X PUT "repos/$REPO/branches/$BRANCH/protection" \
+    -f required_status_checks='{"strict":false,"checks":[{"context":"ci-ok"}]}' \
+    -F enforce_admins=true \
+    -F required_linear_history=true \
+    -F allow_force_pushes=false \
+    -F allow_deletions=false \
+    -F required_pull_request_reviews=null \
+    -F restrictions=null \
+    --silent
+  echo "REPO-SETTINGS: initial protection created"
+fi
 
 # One required check, not a list of job names. A renamed job used to leave
 # branch protection waiting on a context that never reported again.
