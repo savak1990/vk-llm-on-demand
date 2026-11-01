@@ -372,9 +372,8 @@ and get sequential ids; after a destroy, `GetInstance` returns `ErrNotFound`.
 
 ## Definition of done
 
-- [x] Tests AC1–AC16 pass locally (`make go-test`, 2026-11-02); CI lint gate
-      still fails on pre-existing issues unrelated to this probe step (see
-      note below).
+- [x] Tests AC1–AC16 pass locally (`make go-test`, 2026-11-02); `make
+      go-lint` is clean (0 issues) as of the final-review fix wave below.
 - [x] Q4, Q5, Q6 addressed in Evidence, `docs/research.md` and
       `docs/open-questions.md` (Q5 settled; Q4 consistent-with-default but
       not console-cross-checked; Q6 genuinely still open, no live instance
@@ -395,7 +394,7 @@ and get sequential ids; after a destroy, `GetInstance` returns `ErrNotFound`.
 | Does a new contract appear in `/api/v1/instances` immediately after create, or can the list lag? | adopt-after-ambiguous may miss it | CORE-030 create | assume lag; same-label retry covers it |
 | Does Vast limit `label` length? | label must fit `vkllm:<installationId>:<generation>` | settled by CORE-030 creating with a 32-character installation id label | assume ≥ 64 chars |
 | `Instance.Ports` (research §1.4) | only ADR 0006 bundle B dials a mapped port | CORE-030 | omitted; added only if B is chosen |
-| Name of the keyset cursor parameter for `/api/v1/instances` | pagination code | step 1 probe, OpenAPI document | follow the OpenAPI document |
+| Name of the keyset cursor parameter for `/api/v1/instances` | pagination code | final-review fix wave, raw OpenAPI schema read | `after_token` (schema-verified, not yet exercised against a real second page) |
 | Does `select_filters` support a label prefix operator | one request instead of all pages | step 1 | client-side prefix filter |
 | Body shape of `type` and `order` in `/bundles` | ordering and on-demand filter | step 1 against OpenAPI | `type` top-level string; client sorts regardless |
 | Format of `geolocation` values (country code or name) | region filter | step 1 offer response | pass config values unchanged |
@@ -443,27 +442,48 @@ test fixtures invented `next_cursor` and were never checked against the real
 API until this probe. Fixed in `internal/provider/vastai/client.go` and its
 fixtures, commit `6ee38b4`.
 
-### Open item carried forward, not fixed by this probe
+### Two bugs caught by the final-review fix wave, schema-verified not live-verified
 
-The request-side pagination query parameter the client sends when asking for
-page 2+ (`&cursor=` in `client.go`'s `listPage`) is still unverified against
-the real API: the probe account had zero instances, so it never actually
-requested a second page. If the real parameter name differs from `cursor`,
-pagination to page 2+ would still silently fail even after the `next_token`
-fix — most likely the server ignores an unrecognised parameter and returns
-page 1 again, or errors. Whoever next works with a populated instance list
-(likely CORE-050's reconcile loop, or CORE-030's spike) should confirm this
-against a real multi-page response.
+Reading the real Vast.ai OpenAPI spec directly (downloaded raw, not via an
+unreliable summarized web fetch) caught two bugs the probe above missed,
+because the probe account had zero instances and never exercised either
+code path:
+
+- `GetInstance` decoded the instance fields from the response top level, but
+  the real `showInstance` schema wraps them under an `instances` key; every
+  field would have come back zero/empty against real traffic. Fixed by
+  decoding into `struct{ Instances instanceDTO }` and updating
+  `testdata/instance_get.json` to the wrapped shape.
+- `listPage` sent `&cursor=` for page 2+; the schema's documented parameter
+  is `after_token`. Beyond being wrong, an unrecognised parameter the server
+  silently ignores (returning page 1 again) would have made
+  `ListInstances`' loop spin forever. Fixed the parameter name and added a
+  repeated-token guard plus a page-count cap as defense in depth.
+
+Both fixes are schema-verified, not live-traffic-verified: the account used
+for the probe above had zero instances and exercised neither `GetInstance`
+nor a second list page. A future task with a populated account should
+re-verify both against real responses.
 
 ### Validation note
 
-`make specs-check go-build go-test` pass. `make go-lint` fails on 44
-pre-existing issues in code from this branch's earlier commits
-(`internal/provider/*`, `hack/vastprobe`): gofmt (3), errcheck (2), gosec (1)
-in `vastprobe`, and revive missing-exported-doc-comment (38). The revive
-findings collide with this repository's comment rule (comments only in very
-complex, ≤3-line spots) and need a decision — add doc comments or adjust
-`.golangci.yml` — before this branch can pass the CI gate; out of scope for
-this documentation step. `make helm-lint`/`helm-template` fail: no chart
-exists yet anywhere in the repository (confirmed absent on `origin/main`
-too), which is CORE-010's scope, not a regression here.
+`make specs-check go-build go-test go-lint` pass (`go-lint`: 0 issues, fixed
+in commits `f57f137`/`9449f88` before this fix wave). `make
+helm-lint`/`helm-template` fail: no chart exists yet anywhere in the
+repository (confirmed absent on `origin/main` too), which is CORE-010's
+scope, not a regression here.
+
+### Final-review fix wave: AC3/AC4/AC12 coverage
+
+- AC12 was vacuous before this wave: `client.go` held a logger but never
+  called it, so there was nothing for the leak check to catch. Fix 5 added
+  the spec's debug/warn logging and `TestKeyNotLogged` now drives all six
+  ops against a 401 server, asserting both a debug and a warn line appear
+  and neither leaks the key or `Bearer`.
+- AC4 was already fully covered: `TestClassificationExhaustsRetries` already
+  asserted exactly 6 attempts and a Retryable error; no change needed.
+- AC3 was under-covered: `TestBackoff429` asserted only the attempt count.
+  Strengthened it to call `GetInstance` (not `do()` directly) and assert
+  `rate_limited_total = 2`, `requests_total{op="get",outcome="ok"} = 1`, and
+  that `backoff(0)`/`backoff(1)` fall in their documented `[1s,2s)`/`[2s,4s)`
+  ranges.
