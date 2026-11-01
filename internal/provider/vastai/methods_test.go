@@ -78,7 +78,8 @@ func TestListPagination(t *testing.T) { // AC10, no failure: 12 instances match 
 		cursor := r.URL.Query().Get("cursor")
 		body, err := os.ReadFile(pages[cursor])
 		if err != nil {
-			t.Fatal(err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(body)
@@ -157,7 +158,7 @@ func TestDestroyNotFound(t *testing.T) { // AC11
 		case http.MethodGet:
 			w.WriteHeader(http.StatusNotFound)
 		default:
-			t.Fatalf("unexpected method %s", r.Method)
+			http.Error(w, "unexpected method "+r.Method, http.StatusMethodNotAllowed)
 		}
 	}))
 	defer srv.Close()
