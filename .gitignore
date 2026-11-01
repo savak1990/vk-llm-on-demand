@@ -21,3 +21,8 @@ dist/
 .claude/*
 !.claude/settings.json
 .superpowers/
+
+# CLI-local config files
+*.local.yaml
+.env
+vk-llm.yaml
