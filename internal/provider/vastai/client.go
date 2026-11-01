@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -345,6 +346,118 @@ func (c *Client) DestroyInstance(ctx context.Context, id provider.InstanceID) er
 	}
 	c.metrics.requestsTotal.WithLabelValues("destroy", "ok").Inc()
 	return nil
+}
+
+// listByExactLabel lists every instance and filters to exact label matches;
+// ListInstances with an empty prefix returns everything.
+func (c *Client) listByExactLabel(ctx context.Context, label string) ([]provider.Instance, error) {
+	all, err := c.ListInstances(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	var out []provider.Instance
+	for _, inst := range all {
+		if inst.Label == label {
+			out = append(out, inst)
+		}
+	}
+	return out, nil
+}
+
+// adoptByLabel returns the existing instance for a label (0 if none). More
+// than one instance under the same label means a previous create's result
+// was never reconciled; that is a Terminal error, not a pick-one.
+func (c *Client) adoptByLabel(ctx context.Context, label string) (provider.InstanceID, error) {
+	found, err := c.listByExactLabel(ctx, label)
+	if err != nil {
+		return 0, err
+	}
+	switch len(found) {
+	case 0:
+		return 0, nil
+	case 1:
+		return found[0].ID, nil
+	default:
+		ids := make([]provider.InstanceID, len(found))
+		for i, f := range found {
+			ids[i] = f.ID
+		}
+		return 0, &provider.Error{Op: "create", Class: provider.Terminal,
+			Err: fmt.Errorf("label %q has %v: %w", label, ids, provider.ErrDuplicateLabel)}
+	}
+}
+
+// CreateInstance is idempotent on r.Label: it adopts an existing instance
+// under that label instead of creating a second one, both before the PUT
+// and after an ambiguous (transport/429/5xx) PUT outcome, since the PUT may
+// have succeeded on the provider's side even though the response did not
+// reach us.
+func (c *Client) CreateInstance(ctx context.Context, r provider.CreateRequest) (provider.InstanceID, error) {
+	if len(r.Onstart) > 4048 {
+		return 0, &provider.Error{Op: "create", Class: provider.Terminal, Err: fmt.Errorf("onstart too long: %d chars", len(r.Onstart))}
+	}
+	if r.Image == "" || r.Label == "" {
+		return 0, &provider.Error{Op: "create", Class: provider.Terminal, Err: fmt.Errorf("image and label are required")}
+	}
+
+	if id, err := c.adoptByLabel(ctx, r.Label); err != nil {
+		if errors.Is(err, provider.ErrDuplicateLabel) {
+			c.metrics.requestsTotal.WithLabelValues("create", "terminal").Inc()
+		}
+		return 0, err
+	} else if id != 0 {
+		c.metrics.requestsTotal.WithLabelValues("create", "adopted").Inc()
+		return id, nil
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"image": r.Image, "disk": r.DiskGB, "runtype": r.RunType,
+		"env": r.Env, "onstart": r.Onstart, "label": r.Label,
+	})
+	status, respBody, err := c.do(ctx, "create", 60*time.Second, 0, func() (*http.Request, error) {
+		return http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/v0/asks/%d", c.baseURL, r.OfferID), bytes.NewReader(body))
+	})
+
+	if err == nil && status >= 200 && status < 300 {
+		var decoded struct {
+			Success     bool  `json:"success"`
+			NewContract int64 `json:"new_contract"`
+		}
+		// new_contract == 0 is adoptByLabel's "none found" sentinel; a
+		// success response carrying it is malformed, not a real id, so it
+		// must not be returned as one.
+		if decErr := decodeJSON(respBody, &decoded); decErr == nil && decoded.Success && decoded.NewContract != 0 {
+			c.metrics.requestsTotal.WithLabelValues("create", "ok").Inc()
+			return provider.InstanceID(decoded.NewContract), nil
+		}
+		// 2xx but success:false, undecodable, or missing an id: terminal,
+		// not ambiguous — the provider told us definitively.
+		c.metrics.requestsTotal.WithLabelValues("create", "terminal").Inc()
+		return 0, &provider.Error{Op: "create", Class: provider.Terminal, Status: status, Err: fmt.Errorf("create rejected")}
+	}
+	if err == nil && status < 500 && status != 429 {
+		// 4xx other than 429: terminal or fatal, not ambiguous.
+		fe := fatalOrTerminal("create", status)
+		c.metrics.requestsTotal.WithLabelValues("create", outcomeLabel(fe)).Inc()
+		return 0, fe
+	}
+
+	// Ambiguous: transport error, 5xx, or 429 — the PUT may have landed on
+	// the provider's side despite the failed response, so list again and
+	// adopt rather than retrying the PUT and risking a duplicate.
+	id, listErr := c.adoptByLabel(ctx, r.Label)
+	if listErr != nil {
+		if errors.Is(listErr, provider.ErrDuplicateLabel) {
+			c.metrics.requestsTotal.WithLabelValues("create", "terminal").Inc()
+		}
+		return 0, listErr
+	}
+	if id != 0 {
+		c.metrics.requestsTotal.WithLabelValues("create", "adopted").Inc()
+		return id, nil
+	}
+	c.metrics.requestsTotal.WithLabelValues("create", "retryable").Inc()
+	return 0, &provider.Error{Op: "create", Class: provider.Retryable, Err: provider.ErrOutcomeUnknown}
 }
 
 // Balance reports the account's current balance.
