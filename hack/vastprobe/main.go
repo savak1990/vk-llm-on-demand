@@ -58,7 +58,7 @@ func main() {
 	offerBody, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	resp.Body.Close()
 	fmt.Println("=== bundles (first offer, sanitised) ===")
-	fmt.Println(sanitise(string(offerBody)))
+	fmt.Println(sanitise(string(offerBody), key))
 
 	for _, u := range []string{
 		base + "/users/current",
@@ -70,13 +70,12 @@ func main() {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", u, err)
 			continue
 		}
-		fmt.Printf("=== %s (status %d, sanitised) ===\n%s\n", u, status, sanitise(string(body)))
+		fmt.Printf("=== %s (status %d, sanitised) ===\n%s\n", u, status, sanitise(string(body), key))
 	}
 }
 
-// sanitise strips the key and real-looking IPs before anything is printed
-// or saved — nothing here is committed without a human re-check first.
-func sanitise(s string) string {
-	s = strings.ReplaceAll(s, os.Getenv("VAST_API_KEY_FILE"), "<redacted>")
-	return s
+// sanitise strips the key value before anything is printed or saved —
+// nothing here is committed without a human re-check first.
+func sanitise(s, apiKey string) string {
+	return strings.ReplaceAll(s, apiKey, "<redacted>")
 }
