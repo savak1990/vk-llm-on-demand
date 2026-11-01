@@ -59,7 +59,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | Spec | Delivers | Depends on |
 |---|---|---|
 | [000](core/000-P-constitution/spec.md) | Constitution: engineering invariants | — |
-| [010](core/010-P-repo-skeleton-and-ci/spec.md) | Go module, Makefile, CI gate, Dockerfile, lint | 000 |
+| [010](core/010-D-repo-skeleton-and-ci/spec.md) | Go module, Makefile, CI gate, Dockerfile, lint | 000 |
 | [020](core/020-P-vastai-provider-client/spec.md) | Vast.ai provider client and offer filter | 010 |
 | [030](core/030-P-worker-launch-spike/spec.md) | Spike: launch mode, tunnel, cold-start timings | 020 |
 | [040](core/040-P-state-store/spec.md) | ConfigMap state store with optimistic concurrency | 010 |

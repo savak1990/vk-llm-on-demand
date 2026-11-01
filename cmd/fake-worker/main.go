@@ -59,7 +59,7 @@ func newHandler(readyAfter time.Duration, modelAlias string, now func() time.Tim
 
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = fmt.Fprint(w, "llamacpp:prompt_tokens_total 0\nllamacpp:generated_tokens_total 0\n")
+		_, _ = fmt.Fprint(w, "llamacpp:prompt_tokens_total 0\nllamacpp:tokens_predicted_total 0\n")
 	})
 
 	return mux
