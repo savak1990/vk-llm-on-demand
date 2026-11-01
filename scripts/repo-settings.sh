@@ -26,6 +26,9 @@ if ! gh api "repos/$REPO/branches/$BRANCH/protection" >/dev/null 2>&1; then
     "checks": [{"context": "ci-ok"}]
   },
   "enforce_admins": true,
+  "required_linear_history": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false,
   "required_pull_request_reviews": null,
   "restrictions": null
 }
