@@ -337,13 +337,14 @@ Only AC6 traces to a functional requirement (FR-4.1); this spec builds scaffoldi
 
 ## Definition of done
 
-- [x] Tests listed above pass: CI covers AC1, AC2, AC8, AC11; AC3–AC7, AC10, AC12, AC14, AC15 were run by hand this session (go.mod grep, pinned-SHA grep, `git describe`/`make version`, `go list -m`, a live `go run` + curl + `SIGTERM`, a local `docker buildx build --load` + `docker inspect`/`docker run`, `git check-ignore`) and passed. AC9 is CI-run evidence above. AC13 is covered by `internal/clock`'s existing test suite.
+- [x] Tests listed above pass: CI covers AC1, AC2, AC11; AC8 was run by hand this session (`actionlint`, rc 0) since the `workflows` job has not fired yet (no `.github/**` diff in either CI run to date) — the pinned-SHA format it checks is also confirmed by grep. AC3–AC7, AC10, AC12, AC14, AC15 were run by hand this session (go.mod grep, pinned-SHA grep, `git describe`/`make version`, `go list -m`, a live `go run` + curl + `SIGTERM`, a local `docker buildx build --load` + `docker inspect`/`docker run`, `git check-ignore`) and passed. AC9 is CI-run evidence above. AC13 is covered by `internal/clock`'s existing test suite.
 - [x] `make specs-check` passes.
 - [x] Status flipped to DONE in the same pull request, folder renamed
   `010-D-repo-skeleton-and-ci`.
 - [x] Evidence section filled with the actual pinned SHAs/digests used.
 - [x] `make repo-settings` has been run once against the real repository
-  and its output pasted into Evidence.
+  (Task 11); resulting protection state read back via `gh api` in Evidence,
+  in place of raw command output.
 
 ## Open questions
 
