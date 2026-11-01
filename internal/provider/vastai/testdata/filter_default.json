@@ -1,0 +1,18 @@
+{
+  "cpu_ram": {
+    "gte": 32000
+  },
+  "cuda_max_good": {
+    "gte": 12.8
+  },
+  "dph_total": {
+    "lte": 0.8
+  },
+  "rentable": {
+    "eq": true
+  },
+  "type": "ondemand",
+  "verified": {
+    "eq": true
+  }
+}
