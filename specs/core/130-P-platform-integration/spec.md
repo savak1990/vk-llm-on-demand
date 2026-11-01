@@ -3,7 +3,7 @@ id: "CORE-130"
 status: "DRAFT"
 updated: "2026-11-01"
 depends_on: ["CORE-080", "CORE-110", "CORE-120"]
-adrs: ["0007", "0008", "0009"]
+adrs: ["0008", "0009", "0010", "0012", "0013"]
 ---
 
 # 130 — Platform integration
@@ -11,22 +11,14 @@ adrs: ["0007", "0008", "0009"]
 **Status note:** DRAFT, written 2026-11-01 before any code exists. Three of this spec's seven deliverables are pull requests against a different repository (`vk-lab-platform`) and cannot be merged by this repository's own CI; they are designed here and executed by hand against that repository.
 
 **Complexity:** L — two chart layers, three cross-repository pull requests touching Terraform, Argo CD and IAM, plus an operator-only prerequisite (Vast.ai account setup) that no test can automate.
-**Risk:** high — a misplaced GitOps object (wrong `AppProject`, wrong namespace) wedges the platform's root Argo sync the way vk-lab-platform ADR 0045 §Context describes happening once already; a wrong IAM scope either denies ESO or widens it past the four values this spec names.
+**Risk:** high — a misplaced GitOps object (wrong `AppProject`, wrong namespace) wedges the platform's root Argo sync the way vk-lab-platform ADR 0045 §Context describes happening once already; a wrong IAM scope either denies ESO or widens it past the five values this spec names.
 **Estimated effort:** one long session (5–7 h) across two repositories, plus operator time outside CI for the Vast.ai account and key generation.
 **Recommended model:** strong — cross-repository IAM and Argo CD reasoning with no CI in this repository that can catch a platform-side mistake before merge.
 **Depends on:** CORE-080 (the `gpu-on-demand` chart this spec's Application installs), CORE-110 (the three Secrets and their keys this spec delivers by reference), CORE-120 (the OCI chart publish this spec's Application reads an exact version of).
 
 ## Outcome
 
-A commit to `main` in `vk-lab-platform` that merges this spec's three pull
-requests, followed by a chart-version bump in this repository's
-`gitops/values.yaml` and a sync, makes `https://llm.<fqdn>/v1/models` answer
-with the platform's own certificate and the configured model alias, with no
-further manual step on the cluster. The three runtime Secrets arrive from
-committed KMS ciphertext through SSM and ESO, never typed by hand except in
-the local/kind path ADR 0009 §3 keeps open. Scaling the GPU to zero and then
-deleting the platform's pointer `Application` removes the installation (see
-Rollback).
+A commit to `main` in `vk-lab-platform` that merges this spec's three pull requests, followed by a chart-version bump in this repository's `gitops/values.yaml` and a sync, makes the one `HTTPRoute` answer both `https://llm.<fqdn>/v1/models` and `https://llm.<fqdn>/api/v1/gpu/status` with the platform's own certificate (NFR-9.4; ADR 0012 §6), with no further manual step on the cluster. The three runtime Secrets arrive from committed KMS ciphertext through SSM and ESO, never typed by hand except in the local/kind path ADR 0009 §3 keeps open. Stopping the GPU and then deleting the platform's pointer `Application` removes the installation (Rollback).
 
 ## Scope
 
@@ -44,11 +36,11 @@ Against `vk-lab-platform` (designed here, not committed here — C-24):
 
 - **PR-A**: the pointer `AppProject` and `Application` that make
   `vk-llm-on-demand` a platform application, copying `vk-ahorro`'s shape.
-- **PR-B**: the four committed secret ciphertext files, the SSM parameters
+- **PR-B**: the five committed secret ciphertext files, the SSM parameters
   they populate, and the ESO IAM policy that reads them.
-- **PR-C**: the Envoy traffic policy that disables (or raises to 1080 s) the
-  `llm` `HTTPRoute`'s request timeout and sets a 120 s stream idle timeout
-  (ADR 0007 §4 as amended).
+- **PR-C**: the Envoy traffic policy that disables (or raises to 660 s,
+  explicit mode's bound) the `llm` `HTTPRoute`'s request timeout and sets a
+  120 s stream idle timeout (ADR 0010 Consequences).
 
 Plus: ordering and verification for the three pull requests, a Vast.ai
 account checklist for the operator, and rollback.
@@ -205,14 +197,15 @@ pair); run `./scripts/gitops-render-check.sh update` to refresh the golden.
 
 ### PR-B: secrets
 
-Hand-created Secrets (`kubectl create secret generic`, the three keys ADR 0009 §1 names) are the supported path for the first deployment — ADR 0009 Risks allows verifying the MVP end to end before this PR lands. PR-B exists so those same four values survive a cluster rebuild, not for first-deployment correctness: every other Persistent-lifecycle secret here is rebuilt from committed ciphertext on each `make up` (`vk-lab-platform/terraform/live/persistent/README.md`), and the Vast.ai API key and SSH host key are not values an operator wants to regenerate and re-register by hand after every teardown.
+Hand-created Secrets (`kubectl create secret generic`, the three `existingSecrets.{provider,apiKeys,ssh}` objects ADR 0009 §1 names) remain the first-deployment path — ADR 0009 Risks allows verifying the MVP end to end before this PR lands. PR-B exists so the five values behind those three objects survive a cluster rebuild, not for first-deployment correctness: every other Persistent-lifecycle secret here is rebuilt from committed ciphertext on each `make up`, and the Vast.ai API key and SSH host key are not values an operator wants to regenerate and re-register by hand after every teardown.
 
-Four committed ciphertext files, one per ADR 0009 §1 value, following the exact naming the platform already uses for a per-app secret under a shared project (`vk-lab-platform/secrets/vk-hetzner-lab/ahorro-test-user-password.enc`):
+Five committed ciphertext files, one per ADR 0009 §1 value (`client-keys`, `management-tokens`, `worker-seed` are three keys of the one `apiKeys` Secret, each delivered from its own parameter), following the exact naming the platform already uses for a per-app secret under a shared project (`vk-lab-platform/secrets/vk-hetzner-lab/ahorro-test-user-password.enc`):
 
 ```
 secrets/<project>/vk-llm-on-demand-vast-api-key.enc
 secrets/<project>/vk-llm-on-demand-client-keys.enc
-secrets/<project>/vk-llm-on-demand-admin-key.enc
+secrets/<project>/vk-llm-on-demand-management-tokens.enc
+secrets/<project>/vk-llm-on-demand-worker-seed.enc
 secrets/<project>/vk-llm-on-demand-ssh-private-key.enc
 ```
 
@@ -225,26 +218,26 @@ platform project, e.g. `vk-hetzner-lab`).
 To reach SSM, PR-B adds a **new** Terraform module and live unit rather than
 extending `terraform/modules/persistent-secrets` (which holds the
 platform's own `postgres`/`grafana`/`argocd` secrets): extending it would
-add four new *required* variables tied to four new *required* files,
+add five new *required* variables tied to five new *required* files,
 breaking `make persistent-up` for every other project in the account
 (`vk-civo-lab`, `vk-hetzner-ci`, `vk-hetzner-lab`) the moment this app's
 files didn't exist there too. Instead:
 
 - `terraform/modules/vk-llm-on-demand-secrets/{main,variables}.tf` — same
   shape as `persistent-secrets/{main,variables}.tf`: one `data
-  "aws_kms_secrets"` block with four `secret {}` entries (`filebase64` over
-  the four `.enc` paths), four `aws_ssm_parameter` resources, `type =
+  "aws_kms_secrets"` block with five `secret {}` entries (`filebase64` over
+  the five `.enc` paths), five `aws_ssm_parameter` resources, `type =
   "SecureString"`, `key_id = "alias/lab-secrets"`, names
-  `/${var.project}/apps/vk-llm-on-demand/{vast-api-key,client-keys,admin-key,ssh-private-key}`
+  `/${var.project}/apps/vk-llm-on-demand/{vast-api-key,client-keys,management-tokens,worker-seed,ssh-private-key}`
   (ADR 0009 §3's exact path).
 - `terraform/live/persistent/vk-llm-on-demand-secrets/terragrunt.hcl` — same
   shape as `terraform/live/persistent/secrets/terragrunt.hcl`, pointing at
-  the four files. Applied by hand (`terragrunt apply` in that directory),
+  the five files. Applied by hand (`terragrunt apply` in that directory),
   **not** wired into `persistent-up`'s aggregate run, so a project without
   this app is unaffected (open question below).
 
 `terraform/modules/rolesanywhere/main.tf` (lines 123–145, the `eso` policy
-document): a new local list builds four ARNs the same way
+document): a new local list builds five ARNs the same way
 `postgres_password_arn`/`grafana_password_arn` (lines 13–14) already do;
 both the `ssm:GetParameter` statement's `resources` and the `kms:Decrypt`
 statement's `StringEquals` condition `values` gain that list via
@@ -252,24 +245,21 @@ statement's `StringEquals` condition `values` gain that list via
 
 ```hcl
 locals {
-  vkllm_secret_names = ["vast-api-key", "client-keys", "admin-key", "ssh-private-key"]
+  vkllm_secret_names = ["vast-api-key", "client-keys", "management-tokens", "worker-seed", "ssh-private-key"]
   vkllm_secret_arns = [for n in local.vkllm_secret_names :
     "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project}/apps/vk-llm-on-demand/${n}"
   ]
 }
 ```
 
-Four explicit ARNs, not a wildcard — the existing `StringEquals` condition
+Five explicit ARNs, not a wildcard — the existing `StringEquals` condition
 operator (line 141) has no prefix form, and an explicit list is tighter
 than a wildcard would be. ADR 0009 §3's "widens... to that prefix" is
 satisfied in effect.
 
 ### PR-C: Envoy request timeout
 
-ADR 0007 §4 as amended (ruling 10): the Envoy route timeout MUST be
-disabled or `>= gateway.maxWait + model.generationTimeout` (480 s + 600 s
-= 1080 s, `docs/architecture.md` §9), plus a 120 s stream idle timeout. The
-CRD this needs already runs on the platform —
+ADR 0010 Consequences: the MVP runs `lifecycle.provisioningMode: explicit` only, so no inference request ever waits for a cold start — the Envoy route timeout MUST be disabled or `>= model.generationTimeout + 60 s` (600 s + 60 s = 660 s, `docs/architecture.md` §9), plus a 120 s stream idle timeout. On-demand mode's 1080 s figure (ADR 0007 §4) is future-only and out of this spec's MVP scope. The CRD this needs already runs on the platform —
 `vk-lab-platform/gitops/templates/platform/shared/observability/grafana-traffic-policy.yaml`
 is a working `gateway.envoyproxy.io/v1alpha1` `BackendTrafficPolicy` on
 Envoy Gateway v1.2.1 today — the CRD's presence is verified at
@@ -295,7 +285,7 @@ spec:
       name: gpu-on-demand
   timeout:
     http:
-      requestTimeout: 1080s   # or disabled; ADR 0007 §4 as amended
+      requestTimeout: 660s    # or disabled; ADR 0010 Consequences (explicit mode only)
       idleTimeout: 120s       # stream idle timeout; exact field name unverified, see Open questions
 {{- end }}
 ```
@@ -317,9 +307,7 @@ the chart name) is confirmed only once CORE-080 is written.
 2. Generate an `ed25519` keypair; register the **public** half in the
    account's "Manage Keys" page (every new instance gets it automatically,
    research §1.3); the **private** half → `vk-llm-on-demand-ssh-private-key`.
-3. Generate client/admin keys with `make keygen` here (ADR 0009 §2,
-   `sk-vkllm-` prefix) → `vk-llm-on-demand-client-keys`/`-admin-key`. Run
-   the four `make secret-encrypt` calls and commit the `.enc` files.
+3. Generate inference client keys with `make keygen` (ADR 0009 §2, `sk-vkllm-` prefix) → `vk-llm-on-demand-client-keys`. **Create a management token for the CLI and a separate one for GitHub Actions**, same command (ADR 0012 §3–§5) → both lines in `vk-llm-on-demand-management-tokens`. Generate the worker seed (`openssl rand -base64 32`, ADR 0009 §1) → `vk-llm-on-demand-worker-seed`. Run the five `make secret-encrypt` calls and commit the `.enc` files.
 4. Merge **PR-B** first — PR-A's pointer would otherwise sync a chart whose
    `ExternalSecret`s never resolve (ADR 0009 Risks allows hand-created
    Secrets as a stopgap meanwhile).
@@ -328,10 +316,11 @@ the chart name) is confirmed only once CORE-080 is written.
    to take effect (not to apply without error).
 7. Here: bump `chartVersion`/`tag` only after CORE-120 publishes that
    version to GHCR.
+8. The repository secret `VK_LLM_TOKEN` (one `management-tokens` line) and variable `VK_LLM_API_ENDPOINT` are GitHub repository configuration for `gpu-control.yml`, not a platform pull request — CORE-160 owns that setup, not repeated here.
 
 ### Rollback
 
-0. `POST /admin/v1/scale {"desired":0}`; wait for `state: Idle` and an empty provider instance list for the installation's label prefix — a GPU must not keep billing through a rollback (C-1; FR-4.1 never destroys on shutdown, so this step cannot be skipped).
+0. `POST /api/v1/gpu/stop` (management token; ADR 0012 §1, superseding `/admin/v1/scale`); wait for `state: STOPPED` and an empty provider instance list for the installation's label prefix — a GPU must not keep billing through a rollback (C-1; FR-4.1 never destroys on shutdown, so this step cannot be skipped).
 1. `kubectl -n argocd delete application vk-llm-on-demand` (cascade, via the finalizer) prunes the inner `Application` and every resource it owns — the fast path. Whether cascade also removes namespace `llm` itself is an Argo CD behavior not stated in `docs/research.md` (open question below).
 2. The durable rollback is `git revert` of PR-A in `vk-lab-platform`; PR-B's secrets/SSM/IAM and PR-C's traffic policy are left in place (unused, they cost nothing), so re-adding PR-A later re-attaches to the same values with no new setup.
 
@@ -342,9 +331,9 @@ the chart name) is confirmed only once CORE-080 is written.
 - R3. `gitops/templates/application.yaml` MUST render exactly one Argo `Application` with `spec.source.chart: gpu-on-demand`, `spec.source.targetRevision` equal to `.Values.chartVersion`, and MUST NOT render a Helm parameter with an empty `value`. (source: ADR 0008 §5; platform precedent `barman-plugin-application.yaml`)
 - R4. That `Application`'s `syncPolicy` MUST set `automated.prune: true`, `automated.selfHeal: true`, `CreateNamespace=true`, and `ServerSideApply=true`, and MUST carry the finalizer `resources-finalizer.argocd.argoproj.io`. (source: ADR 0009 §3; `vk-ahorro` precedent)
 - R5. No file committed in this repository's `gitops/` MUST contain a literal domain, `fqdn`, or secret value. (source: C-14; NFR-7.6)
-- R6. PR-B's new SSM parameters MUST use `type = "SecureString"` with `key_id = "alias/lab-secrets"` and MUST NOT be added to the `terraform/modules/persistent-secrets` module every platform project shares. (source: ADR 0009 §3; C-24)
-- R7. PR-B's widened `eso` IAM policy document MUST grant `ssm:GetParameter` and the matching `kms:Decrypt` condition on exactly the four ARNs under `/<project>/apps/vk-llm-on-demand/`, and MUST NOT alter the two existing ARNs (`postgres_password_arn`, `grafana_password_arn`). (source: ADR 0009 §3; C-15)
-- R8. PR-C's `BackendTrafficPolicy` MUST set `spec.timeout.http.requestTimeout` to `1080s` or disable it, and MUST set a 120 s stream idle timeout. (source: ADR 0007 §4 as amended)
+- R6. PR-B's new SSM parameters (all five: `vast-api-key`, `client-keys`, `management-tokens`, `worker-seed`, `ssh-private-key`) MUST use `type = "SecureString"` with `key_id = "alias/lab-secrets"` and MUST NOT be added to the `terraform/modules/persistent-secrets` module every platform project shares. (source: ADR 0009 §1, §3; C-24)
+- R7. PR-B's widened `eso` IAM policy document MUST grant `ssm:GetParameter` and the matching `kms:Decrypt` condition on exactly the five ARNs under `/<project>/apps/vk-llm-on-demand/`, and MUST NOT alter the two existing ARNs (`postgres_password_arn`, `grafana_password_arn`). (source: ADR 0009 §3; C-15)
+- R8. PR-C's `BackendTrafficPolicy` MUST set `spec.timeout.http.requestTimeout` to `660s` (explicit mode's bound: `model.generationTimeout + 60 s`) or disable it, and MUST set a 120 s stream idle timeout. (source: ADR 0010 Consequences; architecture.md §9)
 - R9. This repository MUST hold no platform-side file; PR-A, PR-B, and PR-C are pull requests against `vk-lab-platform`, never a file committed here. (source: C-24)
 - R10. Secrets reaching the pod MUST do so only by the three `existingSecrets.{provider,apiKeys,ssh}` references ADR 0009 §1 defines; this spec MUST NOT introduce a fourth secret-delivery path. (source: C-15; ADR 0009 §1)
 - R11. `scripts/gitops-check.sh` MUST exit nonzero when `gitops/` is rendered with any of `fqdn`, `chartVersion`, `tag` unset, and MUST exit zero when all three are set to placeholder values. (source: R2)
@@ -356,18 +345,18 @@ the chart name) is confirmed only once CORE-080 is written.
 3. Write `templates/application.yaml`. Test: the same `--set` render piped through `yq '.spec.source.chart'` prints `gpu-on-demand`; `yq '.spec.source.helm.parameters[].value'` contains no empty string.
 4. Write `scripts/gitops-check.sh` (the five steps in Design). Test: exits 0 on repo HEAD; exits nonzero at the grep step against a copy with a literal domain hard-coded into `values.yaml`.
 5. Draft PR-A's three files plus the `gitops-render-check.sh` list addition in a `vk-lab-platform` checkout. Test: `./scripts/gitops-render-check.sh update` then (check mode) exits 0; `git diff --stat` shows only the two new objects and the golden directory.
-6. Draft PR-B's Terraform module, live unit, and `rolesanywhere` diff. Test: `terragrunt plan` in the new live unit shows exactly four resources to add; `terraform plan` in `rolesanywhere` shows the `eso` policy gaining exactly four ARNs in both statements, nothing else.
-7. Draft PR-C's traffic-policy file. Test: `helm template vk-lab-platform/gitops --set target=hetzner --set envoyGateway.fqdn=lab.example.com ... | yq 'select(.kind=="BackendTrafficPolicy") | .spec.timeout.http.requestTimeout'` prints `1080s`.
-8. Run the Vast.ai checklist and the four `make secret-encrypt` calls. Test: `secret-decrypt.sh vk-llm-on-demand-vast-api-key` prints a nonempty value, no error.
+6. Draft PR-B's Terraform module, live unit, and `rolesanywhere` diff. Test: `terragrunt plan` in the new live unit shows exactly five resources to add; `terraform plan` in `rolesanywhere` shows the `eso` policy gaining exactly five ARNs in both statements, nothing else.
+7. Draft PR-C's traffic-policy file. Test: `helm template vk-lab-platform/gitops --set target=hetzner --set envoyGateway.fqdn=lab.example.com ... | yq 'select(.kind=="BackendTrafficPolicy") | .spec.timeout.http.requestTimeout'` prints `660s`.
+8. Run the Vast.ai checklist and the five `make secret-encrypt` calls. Test: `secret-decrypt.sh vk-llm-on-demand-vast-api-key` prints a nonempty value, no error.
 
 ## Tests / acceptance criteria
 
-- AC1. `curl -sv https://llm.<fqdn>/v1/models` returns HTTP 200 with a body listing `model.alias`, and the TLS certificate issuer line in `curl -sv`'s stderr names Let's Encrypt. (NFR-8.4)
+- AC1. `curl -sv https://llm.<fqdn>/v1/models` returns HTTP 200 with a body listing `model.alias`, and `curl -sv -H "Authorization: Bearer <management-tokens line>" https://llm.<fqdn>/api/v1/gpu/status` returns HTTP 200 with a status document; both TLS certificate issuer lines in `curl -sv`'s stderr name Let's Encrypt. (NFR-9.4)
 - AC2. `kubectl -n llm get externalsecret -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].reason}'` prints `SecretSynced` for all three `ExternalSecret` objects. (R7; R10)
 - AC3. `kubectl -n argocd get application vk-llm-on-demand gpu-on-demand -o jsonpath='{.status.sync.status}{" "}{.status.health.status}'` (run once per app) prints `Synced Healthy` for both. (R3; R4)
 - AC4. `make gitops-check` (this repository) exits 0 on a clean checkout. (R11)
 - AC5. `grep -rlE '[a-z0-9-]+\.(com|net|org|io|dev)' gitops/ --include=*.yaml` (this repository) returns no match outside `lab.example.com`/`<fqdn>`-style placeholders. (R5)
-- AC6. A streamed request that waits 480 s (`gateway.maxWait`) for cold start, then generates for > 60 s, completes through Envoy with no `504` — proving the 1080 s route timeout (or its disablement) and the 120 s stream idle timeout both clear the real timing. (R8; ADR 0007 §4 as amended)
+- AC6. Against a GPU already `READY` (started with `vk-llm start`, no cold-start wait in explicit mode — ADR 0010 §2), a streamed request that runs for `model.generationTimeout` (10 min) completes through Envoy with no `504` — proving the 660 s route timeout (or its disablement) and the 120 s stream idle timeout both clear real generation timing. (R8; ADR 0010 Consequences)
 - AC7. `terraform plan` in `terraform/live/persistent/vk-llm-on-demand-secrets` and in every other project's `terraform/live/persistent/secrets` both run clean (no forced changes) after PR-B merges, proving the new module didn't touch the shared one. (R6)
 
 ## Definition of done
@@ -383,7 +372,7 @@ the chart name) is confirmed only once CORE-080 is written.
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| Does a 1080 s `requestTimeout` (or disabling it) plus a 120 s stream idle timeout on `BackendTrafficPolicy` behave as shown (CRD itself already confirmed live, see Design)? (Q14) | R8, AC6 | PR-C's implementation step, real render + sync | CRD/field present (`grafana-traffic-policy.yaml`); exact values unverified until PR-C runs |
+| Does a 660 s `requestTimeout` (or disabling it) plus a 120 s stream idle timeout on `BackendTrafficPolicy` behave as shown (CRD itself already confirmed live, see Design)? (Q14) | R8, AC6 | PR-C's implementation step, real render + sync | CRD/field present (`grafana-traffic-policy.yaml`); exact values unverified until PR-C runs |
 | Exact Envoy Gateway v1.2.1 `BackendTrafficPolicy` field for the 120 s stream idle timeout (`http.idleTimeout` assumed above; could be `tcp.idleTimeout` or absent). | R8, AC6 | PR-C's implementation step, real render | assume `http.idleTimeout`; corrected when PR-C renders against a real install |
 | Will the platform accept the SSM prefix and IAM widening in PR-B? (Q15) | R7; ADR 0009 stays Proposed until this merges | PR-B's review | hand-created Secrets until merged (ADR 0009 Risks) |
 | Exact name of the `HTTPRoute` CORE-080's chart renders. | PR-C's `targetRefs.name` | CORE-080's spec | assumed `gpu-on-demand`; corrected with CORE-080 if wrong |

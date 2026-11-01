@@ -2,24 +2,30 @@
 id: "CORE-140"
 status: "DRAFT"
 updated: "2026-11-01"
-depends_on: ["CORE-070", "CORE-080", "CORE-100"]
-adrs: ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"]
+depends_on: ["CORE-055", "CORE-070", "CORE-080", "CORE-100", "CORE-150", "CORE-160"]
+adrs: ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012"]
 ---
 
 # 140 — End-to-end acceptance run
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DRAFT, written 2026-11-01 before any code exists; updated
+2026-11-01 for explicit provisioning (ADR 0010), the 30-minute rolling idle
+timeout and immediate manual stop (ADR 0011), and the management API,
+`vk-llm` CLI and `gpu-control.yml` (ADR 0012) that replace `/admin/v1` and
+workflow leases.
 
 **Complexity:** L
 **Risk:** high — real GPU spend and real destroys against the single live
 installation ([testing-strategy.md](../../../docs/testing-strategy.md)
 tier 3); a bug here can both overspend and leave a GPU running
-**Estimated effort:** one session to write (4–6 h); every run costs ≤
-`VKLLM_E2E_BUDGET_USD` (default $10) and ≤ 60 min wall clock
-**Recommended model:** strong — live results are judged against fifteen
+**Estimated effort:** one session to write (5–7 h); every run costs ≤
+`VKLLM_E2E_BUDGET_USD` (default $10) and ≤ 90 min wall clock
+**Recommended model:** strong — live results are judged against seventeen
 ordered, stateful scenarios and the FR/NFR gates they prove
-**Depends on:** [CORE-070](../070-P-worker-runtime/spec.md) (worker
-contract), CORE-080 (chart), CORE-100 (budget and cost ledger)
+**Depends on:** [CORE-055](../055-P-management-api/spec.md) (management
+API), [CORE-070](../070-P-worker-runtime/spec.md) (worker contract),
+CORE-080 (chart), CORE-100 (budget and cost ledger), CORE-150 (`vk-llm`
+CLI binary), CORE-160 (`gpu-control.yml`)
 
 ## Outcome
 
@@ -27,20 +33,23 @@ Running `make e2e` (or the `e2e` GitHub Action) against a real installation
 — the platform's one installation, or a temporary kind install on a laptop
 with its own `installationId` (testing-strategy.md tier 3) — proves, with a
 real Vast.ai GPU, every row of `docs/requirements.md` whose Spec column
-names 140: cold start, warm performance, tool calls, long context,
-cancellation, concurrency, restart recovery, idle destroy, orphan cleanup,
-the worker's own dead-man exit, checksum failure, budget exhaustion and the
-admin kill switch. When the run ends, no instance carries the
-installation's label prefix, total spend is within the cap, and a Markdown
-measurement table lands in this spec's Evidence and in `docs/research.md`
-§7 as a new subsection after spec 030's spike results.
+names 140: the explicit `vk-llm start`/`stop` lifecycle, the rolling idle
+deadline and what never moves it, the management-token/inference-key
+separation, `gpu-control.yml`, restart recovery (both before and after the
+deadline has passed), racing start/stop, orphan cleanup, checksum failure,
+budget exhaustion, no-offer, concurrency and cancellation. When the run
+ends, no instance carries the installation's label prefix, total spend is
+within the cap, and a Markdown measurement table lands in this spec's
+Evidence and in `docs/research.md` §7 as a new subsection after spec 030's
+spike results.
 
 ## Scope
 
 - `test/e2e/`: one Go package behind build tag `e2e`, one `TestMain` with
   the safety guard, one test function per scenario group below.
-- `make e2e`: runs `go test -tags e2e -timeout 60m ./test/e2e/...`, refusing
-  to start if any required environment variable is unset.
+- `make e2e`: builds `cmd/vk-llm` once to a temp path, then runs `go test
+  -tags e2e -timeout 90m ./test/e2e/...`, refusing to start if any required
+  environment variable is unset.
 - `.github/workflows/e2e.yml`: `workflow_dispatch` only, one GitHub
   Environment holding the keys, `concurrency: {group: e2e,
   cancel-in-progress: false}` so two runs never overlap
@@ -48,17 +57,19 @@ measurement table lands in this spec's Evidence and in `docs/research.md`
 - The Markdown report appended to this spec's Evidence and to
   `docs/research.md` §7.
 
-Excludes: the fake-provider, fake-clock unit and simulation suites of
-specs 020–110 (tier 1, testing-strategy.md); the kind-with-fake-worker
-chart tests (tier 2, spec 080); the Vast offer census and launch-mode
-decision (spec 030's own job, already closed); a live worker-crash
-mid-stream kill (FR-5.6) — the production `Dialer` offers an
+Excludes: the fake-provider/fake-clock suites of specs 020–110 (tier 1);
+the kind-with-fake-worker chart tests (tier 2, spec 080); the Vast offer
+census and launch-mode decision (spec 030, already closed); a live
+worker-crash mid-stream kill (FR-5.6) — the production `Dialer` offers an
 `http.RoundTripper` only, never an exec channel (spec 070 "Open
-questions"), and adding one for this spec alone would be new machinery for
-a single test; FR-5.6 stays proven by the spec 050/060 simulations until an
-ADR adds worker exec access. Official Python/Node SDK conformance (the
-literal clause in FR-1.1) stays a manual, documented smoke step — this
-suite is pure Go over the wire format spec 060 defines, which is the
+questions") — stays proven by the spec 050/060 simulations; full-repository
+`gitleaks` scanning (spec 170's job); the worker's own dead-man exit
+(FR-4.5 names this spec in `docs/requirements.md`, but the update-1
+brief's scenario list omits it — flagged under Open questions, not
+silently dropped); a long-context prompt (no FR tags 140 for it);
+on-demand mode (ADR 0010 §4). Official Python/Node SDK conformance
+(FR-1.1's literal clause) stays a manual, documented smoke step — this
+suite is pure Go over the wire format spec 060 defines, the
 CI-automatable proxy for it.
 
 ## Design and contracts
@@ -67,89 +78,90 @@ CI-automatable proxy for it.
 
 | Variable | Meaning | Source if not set |
 |---|---|---|
-| `VKLLM_E2E_BASE_URL` | `https://llm.<fqdn>/v1` or a kind port-forward base | required, no default |
-| `VKLLM_E2E_CLIENT_KEY` | bearer key for `/v1/*` | required |
-| `VKLLM_E2E_ADMIN_KEY` | bearer key for `/admin/v1/*` (ADR 0007 §3) | required |
+| `VKLLM_E2E_BASE_URL` | scheme and host only, no path — `https://llm.<fqdn>` or a kind port-forward base; the suite builds `/v1/...` and `/api/v1/gpu/...` from it | required, no default |
+| `VKLLM_E2E_CLIENT_KEY` | inference key for `/v1/*` | required |
+| `VKLLM_E2E_MGMT_TOKEN` | management token for `/api/v1/*` (ADR 0012 §3) | required |
 | `VKLLM_E2E_BUDGET_USD` | hard spend cap for the run | default `10` |
-| `VKLLM_E2E_VAST_API_KEY_FILE` | path to the Vast.ai API key, read on stdin like spec 030's `VAST_API_KEY_FILE`; used only by the orphan-injection scenario's direct `CreateInstance`/`DestroyInstance` calls through `internal/provider/vastai` (same module, importable) | required |
+| `VKLLM_E2E_VAST_API_KEY_FILE` | path to the Vast.ai API key, read once, like spec 030's `VAST_API_KEY_FILE`; used only by the orphan-injection scenario's direct `CreateInstance`/`DestroyInstance` calls through `internal/provider/vastai` (same module, importable) | required |
 | `VKLLM_E2E_NAMESPACE`, `VKLLM_E2E_RELEASE` | the Helm release under test, for the config overrides and `kubectl rollout restart` below | required |
 | `KUBECONFIG` | standard kubectl context for that cluster | required |
+| `VKLLM_E2E_GH_REPO` | `owner/repo` dispatched for the `gpu-control.yml` scenario via the `gh` CLI, already authenticated in the environment | required only when that scenario runs (Open questions) |
 
 `VKLLM_E2E_NAMESPACE`, `VKLLM_E2E_RELEASE`, `KUBECONFIG` and
 `VKLLM_E2E_VAST_API_KEY_FILE` are this spec's addition beyond the base
-four, needed for the config overrides and the direct-provider scenario
-(Open questions).
+four, needed for the config overrides and the direct-provider scenario.
+`VKLLM_E2E_MGMT_TOKEN` replaces `VKLLM_E2E_ADMIN_KEY`; `VKLLM_E2E_GH_REPO`
+is new for `gpu-control.yml`. Two scenarios invoke the built `vk-llm`
+binary as a subprocess with `VK_LLM_API_ENDPOINT=$VKLLM_E2E_BASE_URL` and
+`VK_LLM_TOKEN=$VKLLM_E2E_MGMT_TOKEN` (ADR 0012 §4); every other management
+call in this suite goes straight to `GET/POST /api/v1/gpu/*` over HTTP, to
+keep assertions on raw status documents rather than CLI stdout.
 
 ### Target and identity
 
 Per testing-strategy.md, this suite never runs against a `-dev` or `-pr`
 copy: it targets the one real platform installation, or a temporary laptop
 kind install. `installationId` is the chart value ADR 0004 §6 defines,
-default `sha256("<namespace>/<release>")[:12]`. That default is a hash of
-the platform's own fixed namespace and release (`llm`/`gpu-on-demand`), so
-a laptop install that leaves it unset would compute the platform's own
-prefix if it ever used the same namespace and release. A laptop install
-therefore MUST set `installationId` explicitly, for example `--set
-installationId=e2e-<user>`. Before any scenario runs, `TestMain` computes
-the platform's default (`sha256("llm/gpu-on-demand")[:12]`) and fails if
-the prefix read from `/admin/v1/status` equals it — the laptop run's own
-guard against the collision ADR 0004 §6 otherwise prevents only by
-convention. `TestMain` opens by calling `GET /admin/v1/status` with the
-admin key and reads `installationId`, `generation` and `labelPrefix` from
-it (ruling 7 fixes these field names; binding: the orphan-injection
-scenario and the exit guard use exactly this prefix, never one assembled
-from a `kubectl`-read ConfigMap).
+default `sha256("<namespace>/<release>")[:12]` — a hash of the platform's
+own fixed namespace and release, so a laptop install that leaves it unset
+could collide with the platform's prefix. A laptop install therefore MUST
+set `installationId` explicitly, e.g. `--set installationId=e2e-<user>`.
+`TestMain` computes the platform's default and fails if the prefix read
+from `GET /api/v1/gpu/status` equals it. `TestMain` opens by calling the
+management API's status route with the management token and reads
+`installationId`, `generation` and `labelPrefix` from the status document
+(ADR 0012 §1 field set; binding: the orphan-injection scenario and the
+exit guard use exactly this prefix, never one assembled from a
+`kubectl`-read ConfigMap).
 
 Platform caveat: on the platform installation the release is Argo-managed
 (architecture §11); a `helm upgrade --set` made outside Argo either is not
-the live release or is reverted on the next sync, and a `kubectl scale
---replicas=0` can self-heal back before scenario 11's wait elapses. The
-config-override scenarios (9, 11, 12, 13, 14) therefore run only against a
-kind target in this version of the spec; against the platform the suite
-runs the override-free subset (1–8, 10, 15) and records the rest as
-skipped. Tracked under Open questions, settled by spec 130.
+the live release or is reverted on the next sync, and the real 30m idle
+timeout makes waiting out a deadline impractical here. The five
+config-override scenarios (checksum, budget, no-offer, idle-out destroy,
+restart-after-the-deadline) therefore run only against a kind target;
+against the platform the suite runs the override-free subset (scenarios
+1–7, 9–13, 16–17) and records the rest as skipped. Settled by spec 130.
 
 ### Safety: the exit guard
 
 ```go
 func TestMain(m *testing.M) {
-    ctx, cancel := context.WithTimeout(context.Background(), 55*time.Minute)
+    ctx, cancel := context.WithTimeout(context.Background(), 85*time.Minute)
     defer cancel()
     // ... run m.Run() under ctx ...
     sweep(prefix) // always, even on panic or t.Fatal, via defer
 }
 ```
 
-- The internal 55-minute context is the real cap (C-1); `go test -timeout
-  60m` is only the outer backstop, because Go's own `-timeout` kills the
-  process without running deferred cleanup.
+- The internal 85-minute context is the real cap (C-1), raised from this
+  spec's earlier 55-minute figure for the larger update-1 scenario list;
+  `go test -timeout 90m` is only the outer backstop (Go's own `-timeout`
+  skips deferred cleanup). Neither figure is fixed by an ADR; this spec
+  sets both.
 - `sweep(prefix)` lists every provider instance under the label prefix and
   destroys every one found, retried until `GetInstance` confirms absence
-  (C-4), then fails the test run if the list was non-empty at entry.
-- The `e2e.yml` workflow adds a separate `if: always()` job that re-runs
-  the same sweep against the same prefix in case the runner itself was
-  killed before `TestMain`'s defer ran.
-- Every config override made for the run (idle timeout, drain timeout,
-  dead-man timeout, model sha256, budget, attempt budget — the six of R4)
-  is restored by a deferred `helm upgrade` back to the chart defaults
-  (C-7: the defaults are chart values, never hard-coded), so a crashed run
-  cannot poison the next one.
+  (C-4), then fails the run if the list was non-empty at entry. `e2e.yml`
+  adds a separate `if: always()` job that re-runs the same sweep in case
+  the runner was killed before `TestMain`'s defer ran.
+- Every override made for the run (the five of R4) is restored by a
+  deferred `helm upgrade` back to the chart defaults (C-7: never
+  hard-coded), so a crashed run cannot poison the next one.
 
 ### Scenarios
 
-One ordered run through the single installation. Group A reuses one
-instance (scenarios 2–8) to avoid repeated cold starts; group B provisions
-separately per scenario because each needs a different config override.
-Admin calls use `/admin/v1/{warmup,status,leases,scale}` (ADR 0007 §3).
-`controller.reconcileInterval` is left at its 60 s default throughout; only
-the five values named in R4 are overridden, one at a time, and restored
-before the next scenario provisions. `gpu.maxProvisionAttemptsPerHour` (3,
-FR-6.5) is raised to 6, kind only, for the kind-only run (scenarios 9,
-11–14 below), since scenarios 2, 11, 12 and 14 each create once, which
-would otherwise exhaust the default budget on the fourth create and fail
-#14 with `gpu_unavailable` for the wrong reason; this override is restored
-in #15 along with the other five. The platform run (scenarios 1–8, 10, 15)
-creates only once (#2) and never sets this override.
+One ordered run through the single installation. Group A (1–8) reuses one
+instance to avoid repeated cold starts; Group B (9–16) provisions
+separately per scenario because each needs its own trigger or override.
+Management calls use `GET/POST /api/v1/gpu/{start,status,stop,cost}`
+(ADR 0012 §1), replacing the superseded `/admin/v1/{warmup,status,scale,
+leases}`. `controller.reconcileInterval` stays at its 60 s default
+throughout; only the five values of R4 are overridden, restored before
+scenario 17. `lifecycle.safety.maxProvisionAttemptsPerHour` (3 default) is
+raised to 15, kind only, since this run's cold starts and failed attempts
+(scenarios 2, 9, 10, 11, 12, 14, 15) would otherwise exhaust the default
+before scenario 16; the platform run creates only twice (2, 9) and never
+sets this override.
 
 `/metrics` on `:9090` is never routed by Envoy (architecture §6); every
 scenario that reads it does so over a `kubectl port-forward` to the
@@ -157,40 +169,41 @@ control-plane pod, torn down after the scenario.
 
 | # | Scenario | Action | Pass criterion | Max duration |
 |---|---|---|---|---|
-| 1 | Preconditions | `GET /v1/models` 200; `GET /admin/v1/status` 200, state `Idle`, label prefix and `generation` captured; provider `Balance` read; `kubectl top pod` RSS reading | models list has exactly the configured alias; status `Idle`; prefix non-empty; RSS < 128 MiB recorded (NFR-10.4, **A**); if `VKLLM_E2E_BASE_URL` is `https://llm.<fqdn>/v1`, the TLS handshake succeeds with no client override (NFR-8.4) | 30 s |
-| 2 | Scale-from-zero | first streamed chat completion, sent with the same JSON body the OpenAI Python/Node SDKs send for a streamed chat call | SSE heartbeats `: warming up <stage>` every ≤ 15 s (FR-3.3); 8 `vkllm_coldstart_stage_seconds` stages recorded (FR-2.4); cold start total < 8 min (FR-2.3); the request/response bodies match the OpenAI schema byte-for-byte on the fields the SDKs set (FR-1.1 wire-format proof, SDK conformance itself tracked under Open questions) | 8 min |
-| 3 | Warm completion | 5 streamed 1K-token requests, `enable_thinking: false` | median TTFT and median tokens/s recorded (NFR-10.1, NFR-10.2 — **A**, recorded not gated) | 1 min |
-| 4 | Tool-call round trip | one `get_weather(city)` two-leg exchange | leg 1 `finish_reason: "tool_calls"`; leg 2 `finish_reason: "stop"` (FR-1.4) | 30 s |
-| 5 | Long-context prompt | if `model.contextSize ≥ 65536`, a 58K–64K token prompt, else a prompt sized to `contextSize − 2048` | 200; `usage.prompt_tokens` in the expected band | 2 min |
-| 6 | Cancellation | start a long stream, close the client connection | `vkllm_gateway_active_requests` returns to 0 within 2 s (FR-3.4); worker's `vkllm_inference_requests_processing` (spec 070), pulled every 15 s (NFR-9.3), is observed at 0 on the next pull | 30 s |
-| 7 | Concurrency | 5 parallel chat requests; `kubectl top pod` RSS reading mid-load | all 5 complete 200/`[DONE]`; `vkllm_gateway_pending_requests` > 0 observed during the window (FR-3.5); no 429 (5 < `gateway.maxPending` 32); RSS < 256 MiB recorded (NFR-10.4, **A**) | 2 min |
-| 8 | Gateway restart mid-stream | start a stream; `kubectl rollout restart deployment/<release>` | the in-flight stream completes or ends with one in-stream error within the 30 s drain (FR-4.1); `/admin/v1/status` shows the same `generation` before and after (FR-4.4); a new request after the restart succeeds without a new `CreateInstance` call | 2 min |
-| 9 | Idle destroy *(kind only)* | `helm upgrade --set config.gpu.idleTimeout=3m,config.gpu.drainTimeout=10s`; stop traffic; wait `idleTimeout + reconcileInterval` | instance destroyed; provider list for the prefix empty; status `Idle` (FR-4.2) | 5 min |
-| 10 | Orphan injection | read `generation` from `/admin/v1/status`; direct `CreateInstance` with label `<prefix>:<generation-1>` (or `0` if `generation` is 1), a plain `image`/`runtype ssh`/`disk` request with no `env` and no `onstart` (nothing to expose, C-17), bypassing the gateway | the generation used is confirmed absent from the store and lower than the current one before injection (ADR 0003 §3: only then is it an orphan, not a protected newer instance); destroyed within 2 × `controller.reconcileInterval` (120 s); `vkllm_orphans_destroyed_total` incremented (FR-6.6, C-6) | 3 min |
-| 11 | Dead-man exit *(kind only)* | `helm upgrade --set config.worker.deadManTimeout=90s`; trigger demand; as soon as `/admin/v1/status` reports a provider instance id (Creating/Booting, before Ready — the dead-man clock starts at onstart's own script start, spec 070), `kubectl scale deployment/<release> --replicas=0`; poll the provider every 15 s until the instance is `exited` or 15 min elapses; `--replicas=1` | provider reports the instance `exited` before the control plane returns, satisfying spec 070 AC13's literal wording even though the worker exits during download rather than after Ready (ADR 0003 §7, FR-4.7); reconcile destroys it on return | 15 min |
-| 12 | Checksum failure *(kind only)* | `helm upgrade --set config.model.sha256=<64 zeros>`; trigger demand | onstart exits non-zero within the download time; instance destroyed; attempt counted; the failing `machine_id` excluded from the next search for 1 h (ADR 0003 §5, observed as absent from the next offer list if exposed); no instance left (FR-5.5) | 6 min |
-| 13 | Budget exhaustion *(kind only)* | `helm upgrade --set config.budget.monthlyUSD=<current ledger spend>`; trigger demand | `503` with `code: "gpu_unavailable"`, no `Retry-After` (FR-6.3, ADR 0007 §2) | 1 min |
-| 14 | Kill switch *(kind only)* | restore sha256/budget via `helm upgrade`; trigger demand, wait Ready; `POST /admin/v1/scale {"desired": 0}` | state moves Draining → Destroying → Idle; no instance left; ≥ 1 min backoff from #12's failed attempt is accounted for in this scenario's budget, not a new failure | 10 min |
-| 15 | Final | restore all six overrides (R4) to chart defaults, release the port-forward | no instance under the prefix exists; provider balance delta ≤ `VKLLM_E2E_BUDGET_USD`; every metric this suite reads is present under the names fixed in the CORE-090 catalog; `helm get values` and the rendered ConfigMap show every overridden value back at its chart default | 2 min |
+| 1 | Preconditions | `vk-llm status`; `GET /v1/models`; `kubectl top pod` RSS reading | status `STOPPED`; models list has exactly the configured alias; RSS < 128 MiB recorded (NFR-11.4, **A**); if `VKLLM_E2E_BASE_URL` is `https://llm.<fqdn>`, the TLS handshake succeeds with no client override (NFR-9.4) | 30 s |
+| 2 | Start | `vk-llm start` (kind: `lifecycle.idleShutdown.timeout` overridden first, e.g. 4m); first streamed chat completion sent with the same JSON body the OpenAI Python/Node SDKs send | status walks `ALLOCATING → STARTING → LOADING_MODEL → READY` in that order (FR-2.5); `secondsUntilIdleShutdown` ≈ the configured timeout at `READY`, ± one reconcile interval; cold start < 8 min (FR-2.3); the request/response bodies match the OpenAI schema byte-for-byte on the fields the SDKs set (FR-1.1) | 8 min |
+| 3 | Tool call and warm completion | one `get_weather(city)` two-leg exchange; 5 streamed 1K-token requests, `enable_thinking: false` | leg 1 `finish_reason: "tool_calls"`, leg 2 `"stop"`; `idleDeadline` moves to ≈ `now + timeout` after each leg and each request (FR-3.2, FR-3.3); median TTFT < 1.5 s and tokens/s ≥ 40 recorded (NFR-11.1, NFR-11.2, **A**) | 2 min |
+| 4 | Deadline untouched | 100 calls total, 20 each of `vk-llm status`, `GET /api/v1/gpu/cost`, `GET /v1/models`, `/healthz`, `/metrics` | `idleDeadline` byte-identical across all 100 reads (FR-3.5) | 1 min |
+| 5 | Concurrency | 5 parallel chat requests; `kubectl top pod` RSS reading mid-load | all 5 complete 200/`[DONE]`; no premature termination (FR-3.9); RSS < 256 MiB recorded (NFR-11.4, **A**) | 2 min |
+| 6 | Cancellation | start a long stream, close the client connection | `RequestEnd` fires once and the deadline moves (FR-3.2); gateway active-requests gauge returns to 0 within 2 s | 30 s |
+| 7 | Unauthorized matrix | `GET /v1/models` and `GET /api/v1/gpu/status` each with: no header, the inference key, the management token | inference key on `/api/v1/*` → 403; management token on `/v1/*` → 403; no header → 401 on both (NFR-8.1, FR-7.2) | 30 s |
+| 8 | Idle-out or manual close | *(kind)* wait `idleTimeout + reconcileInterval` with no further inference; *(platform)* `vk-llm stop` instead, recorded not gated | *(kind)* instance destroyed, provider list for the prefix empty, status `STOPPED` (FR-3.1); *(platform)* `DRAINING` within one tick, `STOPPED` after destroy (FR-3.6, FR-3.7) | 5 min |
+| 9 | Second start, manual stop | `vk-llm start`; once `READY`, `vk-llm stop` | `DRAINING` within one reconcile tick of the call; `STOPPED` after the destroy confirms (FR-3.6, FR-3.7, FR-7.5) | 10 min |
+| 10 | `gpu-control.yml`, restart, deadline passed | `gh workflow run gpu-control.yml -f action=start --repo $VKLLM_E2E_GH_REPO`; poll `GET /api/v1/gpu/status`; once `READY`, `kubectl rollout restart deployment/<release>`; *(kind)* then scale the deployment to 0, wait past the (still shortened) `idleDeadline`, scale back to 1 | workflow dispatches without error; status shows the same walk to `READY`; polling never moves `idleDeadline` (FR-7.8, FR-7.9); after the quick restart the same generation is re-adopted and `idleDeadline` is unchanged (FR-4.2, FR-3.10 first half); *(kind)* after the deadline-passed restart the controller observes a deadline in the past and moves to `DRAINING` on its first tick, then `DELETING → STOPPED` (FR-3.10 second half) | 16 min |
+| 11 | Stop during provisioning | `vk-llm start`; `vk-llm stop` while state is `ALLOCATING` or `STARTING` | the instance is destroyed as soon as a provider id exists; no `READY` state is ever observed for this generation (FR-3.11 first half) | 2 min |
+| 12 | Start during deletion | `vk-llm start`; once `READY`, `vk-llm stop`; `vk-llm start` again while state is `DRAINING` or `DELETING` | `desired=RUNNING` is recorded at once; the destroy confirms before any `CreateInstance` for the next generation; generation increments by exactly 1 only after that confirmation (FR-3.11 second half, FR-2.8); closed with a final `vk-llm stop` | 12 min |
+| 13 | Orphan injection | read `generation` from `GET /api/v1/gpu/status`; direct `CreateInstance` with label `<prefix>:<generation-1>` (or `0` if `generation` is 1), a plain `image`/`runtype ssh`/`disk` request with no `env` and no `onstart` (nothing to expose, C-17), bypassing the gateway | the generation used is confirmed absent from the store and lower than the current one before injection (ADR 0003 §3: only then is it an orphan, not a protected newer instance); destroyed within 2 × `controller.reconcileInterval` (120 s); `vkllm_orphans_destroyed_total` incremented (FR-6.6, C-6) | 3 min |
+| 14 | Checksum failure *(kind only)* | `helm upgrade --set config.model.sha256=<64 zeros>`; `vk-llm start` | onstart exits non-zero within the download time; instance destroyed; attempt counted; the failing `machine_id` excluded from the next search for 1 h (ADR 0003 §5, observed as absent from the next offer list if exposed); no instance left (FR-5.5) | 6 min |
+| 15 | Budget exhaustion *(kind only)* | `helm upgrade --set config.budget.monthlyUSD=<current ledger spend>`; `vk-llm start` | `503` with `code: "gpu_unavailable"`, `reason: "budget_exhausted"`, no `Retry-After` (FR-6.3) | 1 min |
+| 16 | No offer *(kind only)* | `helm upgrade --set config.lifecycle.safety.maxHourlyPriceUSD=0.01`; `vk-llm start`; poll status; `vk-llm start` again within the attempt backoff | first start `202`, then status shows `unavailable: "no_offer"`, state `STOPPED` (FR-2.6); second start within the backoff → `503 gpu_unavailable`, `reason: "no_offer"` (FR-2.6) | 3 min |
+| 17 | Final | restore all five overrides (R4) to chart defaults, release the port-forward | no instance under the prefix exists; provider balance delta ≤ `VKLLM_E2E_BUDGET_USD`; every metric this suite reads is present under the names fixed in the CORE-090 catalog; `helm get values` and the rendered ConfigMap show every overridden value back at its chart default (FR-6.9) | 2 min |
 
 Scenarios marked *(kind only)* run only when the target is a laptop kind
 install; against the platform installation they are skipped and recorded
-as such (Open questions, Target and identity above).
+as such (Open questions, Target and identity above). Scenario 10's
+deadline-passed half is kind only for the same reason; its workflow-dispatch
+and quick-restart halves run on both targets.
 
-Rough budget on kind, typical case: two full cold starts (#2, #14 ≈ 8 and
-10 min), one partial one that stops at Creating/Booting and exits within
-`deadManTimeout + a few polls` (#11, typically ≈ 2–3 min, capped at 15 min)
-and one that fails at checksum (#12 ≈ 6 min) ≈ 8+10+3+6 = 27 min, plus the
-smaller scenarios (≈ 15 min total) ≈ 42 min, inside the 55-minute internal
-cap with margin for backoff and retries. If #11 runs to its full 15-minute
-cap (an unusually slow host or a reconcile delay), the total rises to
-≈ 54 min, leaving almost no margin; `TestMain`'s 55-minute context (Safety
-section) is the hard stop for that case, not this estimate. On the
-platform (scenarios 1–8, 10, 15 only) the run is one cold start plus the
-smaller scenarios, well under 20 min. Spend: at most three GPU-seconds
-windows at ≤ `gpu.maxHourlyPriceUSD` (0.80) for a combined well under an
-hour of billed time, plus up to three 26 GB downloads' bandwidth (cents,
-ADR 0005 Consequences) — within the $10 default cap.
+Rough budget on kind, worst case: four cold starts to `READY` (#2, #9,
+#10, #12, ≤ 8 min each ≈ 32 min), one partial checksum download (#14, ≈
+6 min), one quick cancelled provision (#11, ≈ 2 min), the smaller
+scenarios and #10's deadline-pass wait (≈ 25 min) ≈ 65 min — inside the
+85-minute internal cap with margin; `TestMain`'s context is the hard stop
+if this runs long. The platform run (two cold starts, no overrides) is
+well under 30 min. Spend: four GPU-time windows at ≤
+`lifecycle.safety.maxHourlyPriceUSD` (0.80), well under an hour combined,
+plus up to four 26 GB downloads' bandwidth (cents, ADR 0005 Consequences)
+— a few dollars at most, inside the $10 cap; wall clock, not spend, is
+this run's tighter constraint.
 
 ### Report
 
@@ -204,13 +217,15 @@ synthetic spike).
 
 ### Security
 
-- No key, address or host name is written to the report or committed
-  anywhere (C-14), matching spec 030's rule.
-- `VKLLM_E2E_VAST_API_KEY_FILE` is read once into the provider client's
-  `APIKey` closure (ADR 0009 §4 pattern) and never logged (C-16).
+- No key, token, address or host name is written to the report or
+  committed anywhere (C-14), matching spec 030's rule.
+  `VKLLM_E2E_VAST_API_KEY_FILE` (ADR 0009 §4 pattern) and `VK_LLM_TOKEN`
+  passed to the `vk-llm` subprocesses are read once, via environment or a
+  closure, never logged (C-16).
 - The suite never mounts or reads the production `existingSecrets.*`
-  Secrets directly; it only calls the already-authenticated `/v1` and
-  `/admin/v1` endpoints and the provider API with its own key file.
+  Secrets; it only calls the already-authenticated `/v1` and `/api/v1/gpu`
+  endpoints, the `gh` CLI, the `vk-llm` binary, and the provider API with
+  its own key file.
 
 ## Requirements
 
@@ -218,19 +233,19 @@ synthetic spike).
   MUST destroy every instance under the installation's label prefix on
   exit, retried until the provider confirms absence. (source: C-1, C-4)
 - R2. The suite MUST read the installation's label prefix and current
-  `generation` from `GET /admin/v1/status`, never assemble either from a
-  separate `kubectl`-read state document. (source: testing-strategy.md
-  "Rules"; ADR 0003 §3)
+  `generation` from `GET /api/v1/gpu/status` with the management token,
+  never assemble either from a separate `kubectl`-read state document.
+  (source: testing-strategy.md "Rules"; ADR 0003 §3; ADR 0012 §1)
 - R3. The orphan-injection scenario MUST create its instance with the
   installation's own label prefix and a generation confirmed lower than
   the store's current `generation` and absent from it, never a value that
   could be mistaken for a newer, protected instance. (source: ADR 0003 §3,
   Risks)
-- R4. Every config value this suite overrides (`gpu.idleTimeout`,
-  `gpu.drainTimeout`, `worker.deadManTimeout`, `model.sha256`,
-  `budget.monthlyUSD`, `gpu.maxProvisionAttemptsPerHour`) MUST be restored
-  to the chart's own defaults before the suite exits, success or failure.
-  (source: C-7)
+- R4. Every config value this suite overrides (`lifecycle.idleShutdown.
+  timeout`, `model.sha256`, `budget.monthlyUSD`, `lifecycle.safety.
+  maxHourlyPriceUSD`, `lifecycle.safety.maxProvisionAttemptsPerHour`)
+  MUST be restored to the chart's own defaults before the suite exits,
+  success or failure. (source: C-7)
 - R5. The suite MUST NOT run under `pull_request`; `.github/workflows/
   e2e.yml` MUST declare only `workflow_dispatch` and a `concurrency` group
   that forbids an overlapping run. (source: testing-strategy.md "Two tier 3
@@ -245,111 +260,121 @@ synthetic spike).
   against a deadline derived from the scenario's max duration. (source:
   C-27; C-29 names this spec the one exception to the unit-test "no
   sleeps" rule, not to bounded waits)
-- R9. The suite MUST import `internal/provider/vastai` directly rather than
-  add a second module or a CLI wrapper. (source: C-25)
-- R10. No key, address, or host name MUST appear in the committed report or
-  in `docs/research.md` §7. (source: C-14)
-- R11. FR-2.3, FR-2.4, FR-4.7, FR-5.5, NFR-10.1 and NFR-10.2 MUST each have
-  a recorded measurement in the report; FR-1.1's wire-format proof and
-  NFR-8.4's TLS check MUST be recorded when the run target makes them
-  applicable, gated or recorded as the scenario table marks them. (source:
+- R9. The suite MUST import `internal/provider/vastai` directly for the
+  orphan scenario and invoke the built `cmd/vk-llm` binary directly for
+  scenarios 2, 9, 11, 12, rather than add a module or reimplement either
+  client. (source: C-25)
+- R10. No key, token, address, or host name MUST appear in the committed
+  report or in `docs/research.md` §7. (source: C-14)
+- R11. FR-2.3, FR-7.8, NFR-9.4, NFR-11.1, NFR-11.2 and NFR-11.4 MUST each
+  have a recorded measurement; FR-1.1's wire-format proof MUST be
+  recorded when the target makes it applicable. (source:
   `docs/requirements.md` Spec column "140")
+- R12. Scenario 7 MUST observe 0 controller calls for every rejected
+  request; credentials MUST stay rejected on each other's surface for the
+  whole run. (source: ADR 0012 §3, FR-7.2)
 
 ## Implementation steps
 
 1. Add `test/e2e/` with the build tag, `TestMain`, env-var validation that
-   exits before any network call if a required variable is missing, and
-   the sweep helper. Check: running `make e2e` with one variable unset
-   prints its name and exits non-zero, no HTTP or provider call made.
-2. Add the admin/provider HTTP helpers (`adminStatus`, `warmup`, `scale`,
-   `leases`) and the direct provider client construction from
-   `VKLLM_E2E_VAST_API_KEY_FILE`. Check: a unit test outside the `e2e` tag
-   decodes a fixture `/admin/v1/status` body and extracts the label prefix.
-3. Scenario 1 (preconditions) and the helm-override helper (`override`,
+   exits before any network call if a required variable is missing, the
+   `vk-llm` build step, the sweep helper, the management HTTP helpers
+   (`mgmtStatus`, `mgmtStart`, `mgmtStop`, `mgmtCost`), a thin `vk-llm`
+   subprocess wrapper, and the direct provider client construction from
+   `VKLLM_E2E_VAST_API_KEY_FILE`. Check: running `make e2e` with one
+   variable unset prints its name and exits non-zero, no HTTP, `gh`, or
+   provider call made; a unit test outside the `e2e` tag decodes a fixture
+   status document and extracts the label prefix.
+2. Scenario 1 (preconditions) and the helm-override helper (`override`,
    `restore`, both `kubectl`/`helm` wrappers with their own timeouts).
    Check: `override` followed immediately by `restore` is a no-op diff on
    the release's values.
-4. Scenarios 2–8 (one instance, in order). Check: each scenario's own
-   assertions as in the table; a shared instance handle is passed between
-   them so #8's restart check reads the generation captured by #2.
-5. Scenario 9 (idle destroy) and scenario 10 (orphan injection). Check: the
-   orphan's generation is verified distinct from the store's current one
-   before injection.
-6. Scenario 11 (dead-man) and scenario 12 (checksum failure). Check: each
-   restores its own override before the next scenario starts.
-7. Scenarios 13–14 (budget, kill switch) and scenario 15 (final sweep and
-   report assembly). Check: the Markdown table has one row per scenario in
-   the table above.
-8. `e2e.yml`: `workflow_dispatch`, one Environment, `concurrency` group,
+3. Scenarios 2–8 (one instance, in order). Check: each scenario's own
+   assertions as in the table; a shared instance handle passes the
+   generation captured by #2 to #7 and #8.
+4. Scenario 9 (second start, manual stop) and scenario 10 (`gpu-control.yml`,
+   restart, deadline passed). Check: the restart in #10 reads the same
+   generation from status before and after `kubectl rollout restart`.
+5. Scenarios 11 and 12 (stop during provisioning, start during deletion)
+   and scenario 13 (orphan injection). Check: #12 asserts the destroy's
+   confirmation timestamp precedes the next `CreateInstance` call's
+   timestamp; the orphan's generation is verified distinct from the
+   store's current one before injection.
+6. Scenarios 14–16 (checksum, budget, no-offer) and scenario 17 (final
+   sweep and report assembly). Check: the Markdown table has one row per
+   scenario in the table above.
+7. `e2e.yml`: `workflow_dispatch`, one Environment, `concurrency` group,
    `permissions: {}`, pinned action SHAs (ADR 0008 §2 pattern, spec 120),
    an `if: always()` sweep job. Check: `actionlint` clean; `grep -c
    "pull_request" .github/workflows/e2e.yml` is `0`.
 
 ## Tests / acceptance criteria
 
-- AC1. Setup: a clean installation. Action: scenario 1. Expected: `/v1/models`
-  200 with exactly the configured alias; `/admin/v1/status` 200, `Idle`,
-  prefix and `generation` captured; RSS reading < 128 MiB recorded.
-  (FR-1.2 implicit, NFR-10.4, NFR-8.4)
-- AC2. Action: scenario 2. Expected: heartbeats every ≤ 15 s; 8 stage
-  timestamps; cold start < 8 min; the request body matches the SDK wire
-  format. (FR-2.3, FR-2.4, FR-3.3, FR-1.1)
-- AC3. Action: scenario 3. Expected: 5 TTFT and 5 tokens/s samples recorded.
-  (NFR-10.1, NFR-10.2)
-- AC4. Action: scenario 4. Expected: leg 1 `tool_calls` with `get_weather`
-  and a JSON `city` argument; leg 2 `stop`. (FR-1.4)
-- AC5. Action: scenario 5. Expected: 200 and `usage.prompt_tokens` in the
-  expected band for the active `model.contextSize`. (Q9 follow-on)
-- AC6. Action: scenario 6. Expected: `vkllm_gateway_active_requests` at 0
-  within 2 s of disconnect; the next 15 s pull of
-  `vkllm_inference_requests_processing` is 0. (FR-3.4)
-- AC7. Action: scenario 7. Expected: 5/5 complete; pending queue > 0
-  observed; 0 responses with status 429; RSS < 256 MiB recorded. (FR-3.5,
-  NFR-10.4)
-- AC8. Action: scenario 8. Expected: in-flight stream resolves within 30 s
-  of `SIGTERM`; `generation` unchanged; the next request proxies without a
-  new `CreateInstance` call. (FR-4.1, FR-4.4)
-- AC9. *(kind only)* Action: scenario 9. Expected: instance destroyed;
-  provider list for the prefix empty; status `Idle`. (FR-4.2)
-- AC10. Action: scenario 10. Expected: the injected generation is confirmed
-  `< current` and absent from the store before injection; destroyed within
-  120 s; `vkllm_orphans_destroyed_total` incremented by 1. (FR-6.6, C-6)
-- AC11. *(kind only)* Action: scenario 11. Expected: the instance reaches
-  `exited` before `--replicas=1`; reconcile destroys it within one
-  `reconcileInterval` of the control plane's return. (FR-4.7)
-- AC12. *(kind only)* Action: scenario 12. Expected: onstart exit non-zero
+- AC1. Setup: a clean installation. Action: scenario 1. Expected: `vk-llm
+  status` and `/v1/models` 200 with exactly the configured alias; RSS
+  reading < 128 MiB recorded. (NFR-11.4, NFR-9.4)
+- AC2. Action: scenario 2. Expected: states in order; cold start < 8 min;
+  `secondsUntilIdleShutdown` within one reconcile interval of the
+  configured timeout; the request body matches the SDK wire format.
+  (FR-2.3, FR-2.5, FR-1.1)
+- AC3. Action: scenario 3. Expected: leg 1 `tool_calls` with `get_weather`
+  and a JSON `city` argument; leg 2 `stop`; `idleDeadline` moved after each
+  leg and each of the 5 warm requests; 5 TTFT and 5 tokens/s samples
+  recorded. (FR-3.2, FR-3.3, NFR-11.1, NFR-11.2)
+- AC4. Action: scenario 4. Expected: `idleDeadline` identical across all
+  100 reads. (FR-3.5)
+- AC5. Action: scenario 5. Expected: 5/5 complete; RSS < 256 MiB recorded.
+  (FR-3.9, NFR-11.4)
+- AC6. Action: scenario 6. Expected: active-requests gauge at 0 within 2 s
+  of disconnect; `RequestEnd` called exactly once. (FR-3.2)
+- AC7. Action: scenario 7. Expected: 401/403 matrix as specified; 0
+  controller calls for every rejected request. (NFR-8.1, FR-7.2, R12)
+- AC8. Action: scenario 8. Expected: *(kind)* instance destroyed, prefix
+  empty, status `STOPPED`; *(platform)* `DRAINING` then `STOPPED`.
+  (FR-3.1, FR-3.6, FR-3.7)
+- AC9. Action: scenario 9. Expected: `DRAINING` within one tick of
+  `vk-llm stop`; `STOPPED` after the destroy confirms. (FR-3.6, FR-3.7, FR-7.5)
+- AC10. Action: scenario 10. Expected: workflow dispatch succeeds; status
+  walk observed; `idleDeadline` unmoved by polling; generation unchanged
+  across the quick restart; *(kind)* `DRAINING` on the first tick after
+  the deadline-passed restart. (FR-7.8, FR-7.9, FR-4.2, FR-3.10)
+- AC11. Action: scenario 11. Expected: destroyed as soon as a provider id
+  exists; no `READY` state observed for that generation. (FR-3.11)
+- AC12. Action: scenario 12. Expected: `desired=RUNNING` recorded at once;
+  the next `CreateInstance` call's timestamp is after the destroy's
+  confirmation; generation +1. (FR-3.11, FR-2.8)
+- AC13. Action: scenario 13. Expected: injected generation confirmed `<` current and absent before injection; destroyed within 120 s; `vkllm_orphans_destroyed_total` incremented by 1. (FR-6.6, C-6)
+- AC14. *(kind only)* Action: scenario 14. Expected: onstart exit non-zero
   within the download time; instance destroyed; no instance left; attempt
-  counted in `/admin/v1/status`. (FR-5.5)
-- AC13. *(kind only)* Action: scenario 13. Expected: `503`,
-  `code: "gpu_unavailable"`, no `Retry-After` header. (FR-6.3)
-- AC14. *(kind only)* Action: scenario 14. Expected: state sequence
-  Draining → Destroying → Idle observed via `/admin/v1/status` polling; no
-  instance left afterward. (ADR 0007 §3 `/admin/v1/scale`)
-- AC15. Action: scenario 15. Expected: prefix empty; balance delta ≤
+  counted in `GET /api/v1/gpu/status`. (FR-5.5)
+- AC15. *(kind only)* Action: scenario 15. Expected: `503`,
+  `code: "gpu_unavailable"`, `reason: "budget_exhausted"`, no
+  `Retry-After` header. (FR-6.3)
+- AC16. *(kind only)* Action: scenario 16. Expected: first start `202`
+  then `unavailable: "no_offer"` in status; second start within the
+  backoff `503 gpu_unavailable` `reason: "no_offer"`. (FR-2.6)
+- AC17. Action: scenario 17. Expected: prefix empty; balance delta ≤
   `VKLLM_E2E_BUDGET_USD`; every metric this suite reads is present under
   its CORE-090 catalog name; `helm get values` and the rendered ConfigMap
-  show all six overridden values back at chart defaults.
-- AC16. Setup: `TestMain` guard. Action: force a scenario to `t.Fatal` mid-
-  run (test-only flag). Expected: the deferred sweep still runs and the
+  show all five overridden values back at chart defaults. (FR-6.9)
+- AC18. Setup: `TestMain` guard. Action: force a scenario to `t.Fatal`
+  mid-run (test-only flag). Expected: the deferred sweep still runs and the
   provider list for the prefix is empty afterward. (R1)
-- AC17. Setup: a full run completes. Action: `helm get values <release> -n
-  <namespace> -a`, cross-checked against the rendered ConfigMap (`helm get
-  manifest` or `kubectl get configmap`). Expected: `config.gpu.idleTimeout`,
-  `config.gpu.drainTimeout`, `config.worker.deadManTimeout`,
-  `config.model.sha256`, `config.budget.monthlyUSD`,
-  `config.gpu.maxProvisionAttemptsPerHour` all equal the chart's own
-  defaults, not the overridden values; `/admin/v1/status` does not expose
-  these values and is not used for this check. (R4)
-- AC18. Action: run the suite twice in sequence against the same
-  installation. Expected: both runs reach `state: Idle` with the prefix
+- AC19. Setup: a full run completes. Action: `helm get values <release> -n
+  <namespace> -a`, cross-checked against the rendered ConfigMap. Expected:
+  the five R4 config paths all equal the chart's own defaults, not the
+  overridden values; `GET /api/v1/gpu/status` does not expose them and is
+  not used for this check. (R4)
+- AC20. Action: run the suite twice in sequence against the same
+  installation. Expected: both runs reach `state: STOPPED` with the prefix
   empty at the end, and no run leaves the installation worse off for the
   next. (R7)
-- AC19. Action: sum the provider balance deltas recorded by scenarios 1 and
-  15. Expected: the delta is ≤ `VKLLM_E2E_BUDGET_USD`. (R6, C-1)
+- AC21. Action: sum the provider balance deltas recorded by scenarios 1 and
+  17. Expected: the delta is ≤ `VKLLM_E2E_BUDGET_USD`. (R6, C-1)
 
 ## Definition of done
 
-- [ ] AC1–AC19 observed on one real run against the target installation.
+- [ ] AC1–AC21 observed on one real run against the target installation.
 - [ ] The Markdown report is in this spec's Evidence and appended to
       `docs/research.md` §7.
 - [ ] `docs/open-questions.md` rows this spec settles (if any) are updated.
@@ -363,10 +388,11 @@ synthetic spike).
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| How are the five runtime config overrides (idle, drain, dead-man, sha256, budget, attempt-budget) applied to the Argo-managed platform release without `helm upgrade` outside Argo being reverted or racing a sync? | scenarios 9, 11–14 need them; architecture §11 says Argo owns the release | spec 130 (platform integration) | not solved here: those five scenarios run on a kind target only; the platform run exercises scenarios 1–8, 10, 15 and records the rest as skipped |
+| FR-4.5 (worker dead-man exit) still names spec 140 as a prover in `docs/requirements.md`, but task-140's update-1 scenario list does not include a dead-man-exit scenario | this spec no longer exercises that path live; `docs/requirements.md`'s Spec column for FR-4.5 is now inaccurate unless re-added or corrected | a `docs/requirements.md` edit outside this spec's scope, or a future revision of this spec adding the scenario back | excluded here; stays proven by spec 030's spike and spec 070's simulation; flagged for the reviewer, not silently dropped |
+| How are the five runtime config overrides (idle timeout, sha256, budget, max price, attempt budget) applied to the Argo-managed platform release without `helm upgrade` outside Argo being reverted or racing a sync? | scenarios 10 (deadline-passed half), 14–16 need them; architecture §11 says Argo owns the release | spec 130 (platform integration) | not solved here: those scenario halves run on a kind target only; the platform run exercises the override-free subset and records the rest as skipped |
+| What credential does `gh workflow run` use inside this suite, and is it distinct from the repository's `VK_LLM_TOKEN` secret the workflow itself reads? | scenario 10 needs `actions: write` on the dispatching identity, which is not the management token | spec 160 / CI environment setup | assumed: the runner's own `GITHUB_TOKEN` (inside Actions) or an operator's `gh auth login` session (on a laptop run), configured outside this suite; not sourced from any Secret this spec mounts |
 | FR-1.1's literal clause names the official Python and Node SDKs; this suite is pure Go | CI cannot shell out to a separate language runtime without adding one | a documented manual smoke step, run once per release, outside this suite | the Go client's requests are byte-identical to what the SDKs send for the two calls FR-1.1 names; recorded as a one-time manual check, not CI-gated |
-| Does the provider `balance` field reflect scenario 9–14's charges by the time scenario 15 reads it, or only after the ≥ 1 h delay spec 030 found? | AC19's timing | spec 030's own open question, inherited here | read balance at the end anyway; record a second read ≥ 1 h later as a non-gating follow-up line in the report |
-| `VKLLM_E2E_NAMESPACE`, `VKLLM_E2E_RELEASE` and `KUBECONFIG` are needed beyond the base four inputs | every `helm upgrade`/`kubectl` step in scenarios 8, 9, 11–14 depends on them | this spec | documented in Inputs; no narrower alternative exists without removing those scenarios |
+| Does the provider `balance` field reflect scenarios 9–16's charges by the time scenario 17 reads it, or only after the ≥ 1 h delay spec 030 found? | AC21's timing | spec 030's own open question, inherited here | read balance at the end anyway; record a second read ≥ 1 h later as a non-gating follow-up line in the report |
 
 ## Evidence
 

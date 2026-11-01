@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted (2026-11-01).
+Accepted as the design of the **future `on-demand` provisioning mode**;
+**not in the MVP**. Superseded for the MVP by [ADR 0010](0010-explicit-provisioning-mode.md)
+(explicit mode). §3's `/admin/v1` endpoints are replaced by the management
+API of [ADR 0012](0012-management-api-cli-and-github-actions.md); the lease
+rows are removed by [ADR 0011](0011-rolling-inactivity-timeout.md). §4's
+1080 s Envoy timeout applies to on-demand mode only.
 
 ## Context
 

@@ -176,3 +176,17 @@ DeltaNet recurrent state is fixed per slot: 30 layers × 32 heads × 128 × 128 
 ## 6. Pipeline facts (from `vk-ahorro`, read 2026-11-01)
 
 See ADR 0008. Key files: `scripts/version.sh`, `.github/workflows/{ci,publish,deploy,release,preview}.yml`, `deploy/docker/ahorro-api.Dockerfile`, `deploy/helm/ahorro-api/templates/_helpers.tpl`, `docs/delivery.md`, `scripts/specs-check.sh`. Pinned actions on 2026-11-01: `actions/checkout` v7.0.1, `docker/setup-buildx-action` v4.4.1, `docker/build-push-action` v7.4.0, `docker/login-action` v4.6.0, `azure/setup-helm` v5.0.1 (helm v4.3.0), `dorny/paths-filter` v4.0.3, `actions/setup-go` v7.0.0, `golangci/golangci-lint-action` v9.3.0 (golangci v2.13.2), kubeconform 0.8.0, actionlint 1.7.12. Go builder image `golang:1.27`, runtime `gcr.io/distroless/static-debian12:nonroot`. Copy the SHAs from the source files at implementation time, not from this page.
+
+Scanning and release conventions compared (read 2026-11-01):
+
+| Convention | vk-ahorro | vk-lab-platform | Recommendation for this repo |
+|---|---|---|---|
+| Action pinning | every action pinned to a commit SHA with a version comment; `permissions: {}` | mostly pinned | SHA-pin everything (ADR 0013) |
+| Secret scanning | none | `gitleaks/gitleaks-action@v2`, **unpinned**, in `.github/workflows/lifecycle-test.yml` | run the `gitleaks` binary, pinned and sha256-verified, on PRs and weekly over history |
+| Dependency vulnerabilities | dependabot (actions, docker, gomod); gosec via golangci | dependabot | add `govulncheck` |
+| Image scanning | none (header notes the 2026 trivy-action compromise) | none | `trivy` binary, pinned and sha256-verified, not the action |
+| Downloaded tools | kubeconform and actionlint as release binaries with `sha256sum -c` | — | same pattern for gitleaks and trivy |
+| GitHub Releases | none; a release is a git tag plus GHCR artifacts | none | GoReleaser for the `vk-llm` binaries (ADR 0013), a new convention |
+| Secret delivery | ConfigMap only, no Secrets | KMS ciphertext → SSM → External Secrets | ADR 0009 |
+
+Both repositories are public (verified via `gh repo view`, 2026-11-01).

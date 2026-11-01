@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted for the MVP (2026-11-01). Spec 030 measures the real download time;
+Accepted for the MVP (2026-11-01). The P2 persistent-volume cache with
+preferred-host scheduling is [ADR 0014](0014-persistent-volume-cache-and-preferred-host.md) (Proposed). Spec 030 measures the real download time;
 if it exceeds the budget in §Consequences the S3 mirror alternative is
 promoted without reopening this ADR's structure.
 

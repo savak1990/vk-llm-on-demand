@@ -3,12 +3,12 @@ id: "CORE-040"
 status: "DRAFT"
 updated: "2026-11-01"
 depends_on: ["CORE-010"]
-adrs: ["0004", "0003"]
+adrs: ["0004", "0003", "0011", "0014"]
 ---
 
 # 040 — State store
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DRAFT, written 2026-11-01 before any code exists; update-1 (ADR 0011): schema 2, `desired` RUNNING|STOPPED, idle timestamps, no leases.
 
 **Complexity:** M
 **Risk:** medium — every other component trusts this package for its only durable state and for write serialisation
@@ -23,59 +23,64 @@ the ConfigMap `<release>-state` with compare-and-swap on
 `metadata.resourceVersion`. Callers mutate state only through
 `store.Transition`, which retries conflicts with jitter, so two writers
 racing 1000 transitions on a kind cluster lose no update. The first `Load`
-of the chart's empty ConfigMap shell returns a fresh document with the
-configured `installationId`; the first `Save` writes it.
+of the chart's empty shell returns a fresh document with the configured
+`installationId` and `desired` `STOPPED` (ADR 0010: nothing runs until the
+first `Start`); the first `Save` writes it.
 Outcomes show as `vkllm_store_conflicts_total` and `vkllm_store_ops_total`.
 
 ## Scope
 
-- `internal/store`: the `Document` type, `Version`, the `Store` interface,
-  sentinel errors, `Encode`/`Decode` (caps, size guard, schema upgrades),
-  `NewDocument`, `Document.IsFresh`, `Transition`, two metrics.
+- `internal/store`: `Document`, `Version`, `Store`, sentinel errors, `Encode`/`Decode`
+  (caps, size guard, upgrade 1→2), `NewDocument`, `IsFresh`, `Transition`, two metrics.
 - `internal/store/configmap`: stdlib `net/http` client for one ConfigMap.
-- `internal/store/fake`: in-memory `Store` with injectable conflicts and
-  failures.
+- `internal/store/fake`: in-memory `Store` with injectable conflicts and failures.
 - The RBAC Role contract the chart (CORE-080) renders.
-- `internal/config.Load()` with `VKLLM_INSTALLATION_ID` and
-  `VKLLM_STATE_CONFIGMAP`; 050/060 add their fields.
-- Unit tests, an httptest suite for the API client, and a kind integration
-  test in CI.
+- `internal/config.Load()` with `VKLLM_INSTALLATION_ID`, `VKLLM_STATE_CONFIGMAP`; 050/060 add fields.
+- Unit tests, an httptest suite for the API client, a kind integration test in CI.
 
-Excludes: the state machine and the meaning of `instance.state` (CORE-050);
-the first-boot sweep of the own prefix `vkllm:<installationId>:`, which
-the controller performs (CORE-050); computing the `installationId` default
+Excludes: the state machine, the meaning of `instance.state` and the first-boot
+sweep of the own prefix `vkllm:<installationId>:` (CORE-050); computing the `installationId` default
 (chart, CORE-080); ledger month rollover, folding into `totalUsd` and cost
-estimation (CORE-100); the worker key (derived, CORE-070); lease and activity
-semantics (CORE-060); the chart templates themselves (CORE-080); any
+estimation (CORE-100); the worker key (derived, CORE-070); the idle rule and
+who writes the idle timestamps (CORE-050, ADR 0011); the `cache` record (P2,
+ADR 0014, CORE-180); the public state name (derived by CORE-050/055 from
+`instance.state`, never stored); the chart templates themselves (CORE-080); any
 leader election or `replicas > 1` support (ADR 0004, Consequences).
 
 ## Design and contracts
 
 ### Document
 
-The JSON shape is ADR 0004 §1, plus `hostKeyFingerprint` (ADR 0006 §3),
-`ops[].finishedAt`, `ledger.entries[].estUsd` and `machineDenylist`
-(FR-5.4, ADR 0003 §5). The worker API key is derived and never stored
-(ADR 0006 §4, CORE-070 `WorkerKey`), so the document has no field for it.
-Optional timestamps are pointers and encode as `null`. All times are UTC.
+The JSON shape is ADR 0004 §1 as amended by ADR 0011, plus `hostKeyFingerprint`
+(ADR 0006 §3), `ops[].finishedAt`, `ledger.entries[].estUsd` and
+`machineDenylist` (FR-5.4). ADR 0011 replaces `activity` and `leases` with the
+nullable `instance` timestamps `readyAt`, `lastInferenceFinishedAt`, `idleDeadline`
+(derived but stored for status and restarts, FR-3.10); the store never computes
+them. `cache` is reserved (ADR 0014), `null` in the MVP. The worker API key is
+derived, never stored (ADR 0006 §4, CORE-070). Optional times are pointers
+encoding as `null`; all times are UTC.
 
 ```go
 package store
 
-const SchemaVersion = 1
+const SchemaVersion = 2
+
+const (
+	DesiredRunning = "RUNNING" // set by the first Start
+	DesiredStopped = "STOPPED" // NewDocument and Stop
+)
 
 type Document struct {
 	SchemaVersion    int           `json:"schemaVersion"`
 	InstallationID   string        `json:"installationId"`
 	Generation       int64         `json:"generation"`
-	Desired          int           `json:"desired"`
+	Desired          string        `json:"desired"` // DesiredRunning | DesiredStopped
 	Instance         *Instance     `json:"instance"` // nil: no instance record
 	Ops              []Op          `json:"ops"`      // newest last, at most 20
 	AttemptsThisHour Attempts      `json:"attemptsThisHour"`
-	Activity         Activity      `json:"activity"`
-	Leases           []Lease       `json:"leases"`
 	Ledger           Ledger        `json:"ledger"`
 	MachineDenylist  []DenyEntry   `json:"machineDenylist"`
+	Cache            json.RawMessage `json:"cache"` // reserved, ADR 0014; MVP writes null
 }
 
 type Instance struct {
@@ -87,7 +92,9 @@ type Instance struct {
 	SSHPort            int        `json:"sshPort"`
 	HostKeyFingerprint string     `json:"hostKeyFingerprint"` // opaque, from internal/tunnel
 	CreatedAt          time.Time  `json:"createdAt"`
-	ReadyAt            *time.Time `json:"readyAt"`
+	ReadyAt                 *time.Time `json:"readyAt"`                 // set once on READY
+	LastInferenceFinishedAt *time.Time `json:"lastInferenceFinishedAt"` // RequestEnd only
+	IdleDeadline            *time.Time `json:"idleDeadline"`            // ADR 0011 §1
 	LastError          string     `json:"lastError"`
 }
 
@@ -108,16 +115,6 @@ type Op struct {
 type Attempts struct {
 	Hour  string `json:"hour"` // UTC, layout "2006-01-02T15"
 	Count int    `json:"count"`
-}
-
-type Activity struct {
-	LastRequestAt *time.Time `json:"lastRequestAt"`
-}
-
-type Lease struct {
-	ID        string    `json:"id"`
-	Owner     string    `json:"owner"`
-	ExpiresAt time.Time `json:"expiresAt"`
 }
 
 type Ledger struct {
@@ -142,7 +139,7 @@ type DenyEntry struct {
 // IsFresh reports a document no instance was ever created from.
 func (d Document) IsFresh() bool { return d.Generation == 0 && d.Instance == nil }
 
-// NewDocument returns an empty schema-1 document with `desired` 1 for the configured id.
+// NewDocument returns an empty schema-2 document, `desired` DesiredStopped, for the configured id.
 func NewDocument(installationID string) (Document, error)
 ```
 
@@ -155,10 +152,8 @@ parses on its last `:`); CORE-080's `values.schema.json` uses the same pattern.
 Type mapping to CORE-020: `providerId` = `strconv.FormatInt(int64(id), 10)`;
 `dph`, `estUsd`, `totalUsd` are USD floats = `float64(provider.Money) / 1e6`.
 
-`IsFresh` is the store's whole contribution to first boot. It is derived,
-not a flag, so it stays true across restarts until the controller first
-increments `generation`; a crash before the controller's own-prefix sweep
-repeats the sweep on the next start instead of skipping it.
+`IsFresh` is the store's whole contribution to first boot: derived, not a
+flag, so a crash before the controller's own-prefix sweep repeats the sweep.
 
 ### Interface and errors
 
@@ -188,8 +183,7 @@ func Decode(b []byte) (Document, error) // schema check, upgrades, unmarshal
 ```
 
 `Load` returns a fresh document on first use and never creates the
-ConfigMap (ADR 0004 §3–4). A stored
-`installationId` that differs from the configured one returns
+ConfigMap (ADR 0004 §3–4). A stored `installationId` that differs from the configured one returns
 `ErrInstallation` and nothing is written: changing the chart value would
 strand the old prefix's instances, so an operator decides. `Save` with an
 empty `Version` is a programming error and returns an error without I/O.
@@ -238,9 +232,9 @@ The integration test builds `Config` by hand against kind. No `client-go`
 | any | 403 | terminal error naming the verb (RBAC is wrong) |
 | any | 5xx, timeout, transport error | wrapped retryable error; the caller's loop retries next tick |
 
-A 404 means the ConfigMap is gone. The client cannot recreate it (no
-`create` verb); `ErrStoreMissing` fails `/readyz` until the empty shell
-is restored, then the fresh-document path (C-13) runs. If the shell reappears between two
+A 404 means the ConfigMap is gone; the client cannot recreate it (no
+`create` verb). `ErrStoreMissing` fails `/readyz` until the empty shell is
+restored, then the fresh-document path (C-13) runs. If the shell reappears between two
 attempts of one `Transition`, the reset rule stops `fn` from running on
 it. Two writers initialising one shell race on its `resourceVersion` and
 one gets `ErrConflict`, as for any write. The token is read on every
@@ -260,9 +254,8 @@ func (f *Fake) Raw() []byte                // stored bytes, for assertions
 func (f *Fake) Put(d Document)             // seed state, bumps version
 ```
 
-The fake stores encoded bytes, not a struct, so tests exercise `Encode` and
-`Decode`. Its version is a decimal counter; a `Save` with a stale version
-returns `ErrConflict` exactly like the API server.
+The fake stores encoded bytes (tests exercise `Encode`/`Decode`); its version
+is a decimal counter, and a stale `Save` returns `ErrConflict` like the API server.
 
 ### Schema evolution
 
@@ -270,11 +263,13 @@ returns `ErrConflict` exactly like the API server.
 `ErrSchemaTooNew`; 0 or missing → `ErrCorrupt`. Below → apply
 `upgrades[v]` for each `v` up to the current version, then unmarshal. The
 table is `map[int]func(map[string]any) error`, keyed by the version it
-upgrades from, and is empty at version 1. An upgraded document is persisted
-by the next successful `Save` (ADR 0004 §5). The store never writes over a
-document it could not decode: `ErrCorrupt` and `ErrSchemaTooNew` stop every
-`Transition` until an operator deletes the ConfigMap, which takes the
-fresh-document path.
+upgrades from. `upgrades[1]`: delete `leases` and `activity`; `desired` 1 →
+`"RUNNING"`, 0 → `"STOPPED"`, any other value → `ErrCorrupt`; on a non-null
+`instance` set `lastInferenceFinishedAt` and `idleDeadline` to null (CORE-050
+recomputes from `readyAt`); `cache` null; `schemaVersion` 2. An upgraded document
+is persisted by the next successful `Save` (ADR 0004 §5). The store never writes
+over a document it could not decode: `ErrCorrupt` and `ErrSchemaTooNew` stop
+every `Transition` until an operator deletes the ConfigMap (fresh-document path).
 
 ### Size and caps
 
@@ -283,10 +278,10 @@ fresh-document path.
 | Encoded document | 256 KiB; above → `ErrTooLarge`, no request sent | `Encode` |
 | `ops` | last 20 kept, oldest dropped | `Encode` |
 | `ledger` | current month; at most 100 entries, older closed entries folded into `totalUsd` | CORE-100 (ADR 0004 Consequences) |
-| `leases`, `machineDenylist` | expired entries removed by their owner's `fn` | CORE-060, CORE-050 |
+| `machineDenylist` | expired entries removed by the owner's `fn` | CORE-050 |
 
-The store never rejects a long ledger (that would also block destroy
-records); the 256 KiB guard is the backstop. At the caps it is < 32 KiB (AC10).
+The store never rejects a long ledger (that would block destroy records);
+the 256 KiB guard is the backstop. At the caps it is < 32 KiB (AC10).
 
 ### RBAC
 
@@ -304,15 +299,14 @@ rules:
     verbs: ["get", "update"]
 ```
 
-The kind test uses a token for exactly this Role: a missing verb fails CI,
-and `create`, `patch`, `delete` and `list` must answer 403.
+The kind test uses a token for exactly this Role (`TestKindRBAC`).
 
 ### Concurrency
 
 - The controller and the gateway share one `Store` value built in `main`.
-- Every mutation goes through `Transition`. A raw `Save` outside this
-  package is a review failure.
-- In-flight counts and the pending queue never enter the document (C-12).
+- Every mutation goes through `Transition`; a raw `Save` elsewhere fails review.
+- In-flight counts, the pending queue, the public state and
+  `secondsUntilIdleShutdown` never enter the document (C-12; derived by CORE-050/055).
 
 ### Observability
 
@@ -335,9 +329,9 @@ with a 2 s timeout whose error fails readiness, so `ErrCorrupt`,
 - R3. `Transition` MUST retry only `ErrConflict`, at most 8 attempts, waiting 10–100 ms with jitter between attempts. (source: ADR 0004 Risks)
 - R4. `Transition` MUST NOT call `Save` when `fn` returns an error or leaves the encoded document unchanged. (source: ADR 0004 §2)
 - R5. Every mutation of durable state MUST go through `Transition`. (source: ADR 0003 §2, architecture §7)
-- R6. `Load` on a ConfigMap without `state.json` MUST return a document with `generation` 0, `desired` 1, no instance and the configured `installationId`; it MUST NOT generate one. (source: ADR 0004 §3, §6, C-13, FR-4.5)
+- R6. `Load` on a ConfigMap without `state.json` MUST return a document with `generation` 0, `desired` `"STOPPED"`, no instance and the configured `installationId`; it MUST NOT generate one. (source: ADR 0004 §3, §6, C-13, FR-4.3)
 - R6a. The client MUST NOT create the ConfigMap; GET or PUT 404 MUST return `ErrStoreMissing` with the operator message above. (source: ADR 0004 §3)
-- R7. `Document.IsFresh` MUST return true exactly when `generation` is 0 and `instance` is nil. (source: ADR 0004 §6, FR-4.5)
+- R7. `Document.IsFresh` MUST return true exactly when `generation` is 0 and `instance` is nil. (source: ADR 0004 §6, FR-4.3)
 - R8. The store MUST NOT perform the provider sweep; it only reports freshness. (source: ADR 0004 §6, CORE-050)
 - R9. A reload inside `Transition` whose `generation` is below the first attempt's MUST return `ErrStoreReset` without calling `fn`. (source: ADR 0004 §6, ADR 0003 §3)
 - R9b. `Load` MUST return `ErrInstallation` and write nothing when the stored `installationId` differs from the configured one. (source: ADR 0004 §6, C-11)
@@ -347,6 +341,9 @@ with a 2 s timeout whose error fails readiness, so `ErrCorrupt`,
 - R13. `Encode` MUST keep at most the 20 newest `ops`. (source: ADR 0004 Consequences)
 - R14. `Decode` MUST refuse `schemaVersion` above the binary's with `ErrSchemaTooNew` and MUST NOT overwrite that document. (source: ADR 0004 §5)
 - R15. Lower schema versions MUST be upgraded in code on read and persisted on the next write. (source: ADR 0004 §5)
+- R15a. `upgrades[1]` MUST drop `leases` and `activity`, map `desired` 1/0 to `"RUNNING"`/`"STOPPED"` and set `idleDeadline` and `lastInferenceFinishedAt` null. (source: ADR 0011 §5, ADR 0004 Status)
+- R15b. The store MUST persist `readyAt`, `lastInferenceFinishedAt` and `idleDeadline` exactly as `fn` sets them and MUST NOT compute or modify them itself. (source: ADR 0011 §1, FR-3.10)
+- R15c. The document MUST have no lease field; `cache` MUST encode as `null` in the MVP. (source: ADR 0011 §5, ADR 0014)
 - R16. The document MUST NOT contain any secret or derived key, including the worker API key. (source: ADR 0006 §4, C-14, C-16)
 - R17. The document MUST NOT contain in-flight counts or the pending queue. (source: ADR 0004 §1, C-12)
 - R18. The Role MUST grant exactly `get` and `update` on ConfigMap `<release>-state` by `resourceNames`, and nothing else. (source: ADR 0004 §3, C-20)
@@ -357,7 +354,7 @@ with a 2 s timeout whose error fails readiness, so `ErrCorrupt`,
 
 ## Implementation steps
 
-1. Types, `NewDocument`, `IsFresh`, `Encode`, `Decode` with the empty upgrade table. Tests: `TestRoundTrip`, `TestIsFresh`, `TestOpsCapped`, `TestTooLarge`, `TestCappedDocumentSize`, `TestNewDocumentRejectsBadID`, `TestSchemaTooNew`, `TestUpgradeChain` (injects a synthetic 1→2 table via an unexported decode).
+1. Types, `NewDocument`, `IsFresh`, `Encode`, `Decode` with the empty upgrade table. Tests: `TestRoundTrip`, `TestIsFresh`, `TestOpsCapped`, `TestTooLarge`, `TestCappedDocumentSize`, `TestNewDocumentRejectsBadID`, `TestSchemaTooNew`, `TestUpgradeV1`, `TestIdleTimestampsRoundTrip`.
 2. `fake` package. Tests: `TestFakeStaleVersion`, `TestFakeInjectedFailure`.
 3. `Transition` and metrics. Tests: `TestTransitionRetriesConflict`, `TestTransitionExhausted`, `TestTransitionFnErrorNoSave`, `TestTransitionNoopNoSave`, `TestTransitionCtxCancel`, `TestTransitionStoreReset`, `TestReadyCheck`.
 4. `configmap` client against `httptest.NewTLSServer`. Tests: `TestLoadKeylessShellIsFresh`, `TestLoadMissing404`, `TestSaveSendsResourceVersion`, `TestSave409Conflict`, `TestSave404Missing`, `TestTokenRefreshOn401`, `TestForbiddenTerminal`, `TestCorruptData`, `TestInstallationMismatch`.
@@ -369,23 +366,25 @@ with a 2 s timeout whose error fails readiness, so `ErrCorrupt`,
 - AC1. Setup: fake store, `ConflictNext(3)`. Action: one `Transition` incrementing `generation`. Expected: success, `generation` 1, `vkllm_store_conflicts_total` 3, 4 Saves attempted. (ADR 0004 Risks)
 - AC2. Setup: `ConflictNext(8)`. Action: one `Transition`. Expected: `ErrRetriesExhausted`, 8 Saves, `vkllm_store_ops_total{op="transition",outcome="exhausted"}` 1, stored bytes unchanged.
 - AC3. Setup: fake store. Action: `fn` returns an error; then `fn` changes nothing. Expected: 0 Saves in both cases; stored version unchanged.
-- AC4. Setup: httptest server whose GET returns a ConfigMap with no `data` and `resourceVersion` `"7"`. Action: `Load`, then `Save`. Expected: `Load` returns `generation` 0, `desired` 1, `instance` null, `installationId` the configured `4f2c1a9b0e77`, `IsFresh()` true, version `"7"`; the PUT carries `resourceVersion` `"7"` and `data["state.json"]`; 0 POSTs. GET 404 instead: `ErrStoreMissing` with the operator message, 0 POSTs. (FR-4.5)
+- AC4. Setup: httptest server whose GET returns a ConfigMap with no `data` and `resourceVersion` `"7"`. Action: `Load`, then `Save`. Expected: `Load` returns `generation` 0, `desired` `"STOPPED"`, `instance` null, `cache` null, `installationId` the configured `4f2c1a9b0e77`, `IsFresh()` true, version `"7"`; the PUT carries `resourceVersion` `"7"` and `data["state.json"]`; 0 POSTs. GET 404 instead: `ErrStoreMissing` with the operator message, 0 POSTs. (FR-4.3)
 - AC5. Setup: fake seeded with `generation` 3 and no instance. Action: `IsFresh`. Expected: false. Seeded with `generation` 0: true.
 - AC6. Setup: httptest server. Action: `Save` with version `"41"`. Expected: PUT body `metadata.resourceVersion` equals `"41"`; server answer 409 yields `errors.Is(err, ErrConflict)`; answer 404 yields `ErrStoreMissing`.
 - AC7. Setup: httptest server that answers 401 until the token file content changes; test rewrites the file. Action: `Load`. Expected: 2 GETs, the second with the new bearer token, result 200. A server answering 401 twice with an unchanged file yields an error after exactly 2 requests.
 - AC8. Setup: document with 25 ops. Action: `Encode`, `Decode`. Expected: 20 ops, the newest 20.
 - AC9. Setup: document whose encoding exceeds 262,144 bytes. Action: `Save` on the httptest client. Expected: `ErrTooLarge`, 0 requests received.
-- AC10. Setup: a full `instance`, 100 closed ledger entries, 20 ops, 10 leases, 10 denylist entries. Action: `Encode`. Expected: size below 32,768 bytes; the size is logged and recorded in Evidence. (ADR 0004 Risks)
-- AC11. Setup: bytes with `schemaVersion` 2. Action: `Load` then `Transition`. Expected: `ErrSchemaTooNew`, 0 PUTs. Bytes with no `schemaVersion`: `ErrCorrupt`.
+- AC10. Setup: a full `instance`, 100 closed ledger entries, 20 ops, 10 denylist entries. Action: `Encode`. Expected: size below 32,768 bytes; the size is logged and recorded in Evidence. (ADR 0004 Risks)
+- AC11. Setup: bytes with `schemaVersion` 3. Action: `Load` then `Transition`. Expected: `ErrSchemaTooNew`, 0 PUTs. Bytes with no `schemaVersion`: `ErrCorrupt`.
 - AC12. Setup: kind cluster, `kubectl create ns` for the test, an empty ConfigMap `<release>-state`, the Role and a ServiceAccount token bound to it. Action: two writers, each with its own client, run 1000 `Transition` calls that increment `generation` and append to a writer-local list of observed values; exhausted calls are retried by the test. Expected: final `generation` 2000; each writer's observed values strictly increasing; `vkllm_store_conflicts_total` > 0; zero 403 responses. (C-10, ADR 0004 §2)
-- AC13. Setup: kind, Role token, store at `generation` 3. Action: delete the ConfigMap; `Transition`; recreate the empty shell with `kubectl create configmap`; `Transition`. Expected: first call `ErrStoreMissing` and `store.Ready` fails; second call succeeds on a document with the same `installationId`, `generation` 0 before `fn`, `IsFresh()` true. (C-13, FR-4.5)
+- AC13. Setup: kind, Role token, store at `generation` 3. Action: delete the ConfigMap; `Transition`; recreate the empty shell with `kubectl create configmap`; `Transition`. Expected: first call `ErrStoreMissing` and `store.Ready` fails; second call succeeds on a document with the same `installationId`, `generation` 0 before `fn`, `IsFresh()` true. (C-13, FR-4.3)
 - AC14. Setup: fake at `generation` 5. Action: one `Transition` whose `fn` calls `Put` with a fresh document (the reset) on its first run. Expected: `ErrStoreReset`, `fn` called exactly once, `vkllm_store_ops_total{op="transition",outcome="reset"}` 1.
 - AC15. Setup: fake holding `installationId` `aaaa`, store configured with `bbbb`. Action: `Load`. Expected: `ErrInstallation`, stored bytes unchanged; `store.Ready` returns that error.
 - AC16. `go list -deps ./internal/store/...` contains no `k8s.io/` module. (ADR 0004 §3)
+- AC17. Setup: schema-1 bytes with `desired` 1, an instance with `readyAt` set, 2 leases and `activity`. Action: `Decode`, then `Encode`. Expected: `schemaVersion` 2, `desired` `"RUNNING"`, `readyAt` unchanged, `idleDeadline` and `lastInferenceFinishedAt` null, no `leases` or `activity` key in the output; with `desired` 0 → `"STOPPED"`; with `desired` 5 → `ErrCorrupt`. (ADR 0011 §5)
+- AC18. Setup: fake store; `Transition` sets `readyAt` t0, `lastInferenceFinishedAt` t1, `idleDeadline` t1+30m. Action: a second `Transition` changing only `generation`, then `Load`. Expected: the three timestamps equal t0, t1, t1+30m to the second, UTC. (FR-3.10)
 
 ## Definition of done
 
-- [ ] AC1–AC16 pass in CI; AC12–AC13 run in the kind job.
+- [ ] AC1–AC18 pass in CI; AC12–AC13 run in the kind job.
 - [ ] `make specs-check` passes; measured AC10 size recorded below.
 - [ ] Status flipped to DONE in the same PR (folder `040-D-state-store`); Evidence filled.
 

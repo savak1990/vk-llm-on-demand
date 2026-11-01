@@ -43,6 +43,11 @@ updated.
 | Q33 | External Secrets Operator API group/version in use on the platform (`external-secrets.io/v1`?) | ExternalSecret templates | 130 | read from the platform's ESO chart version 2.9.0 |
 | Q34 | Grafana sidecar label for dashboards on the platform (`grafana_dashboard: "1"`) and histogram bucket tuning | dashboard discovery; metrics | 090, 140 | platform convention; default buckets until measured |
 | Q35 | Is `dph_total` stable for an instance's whole life (no mid-life repricing)? | ledger accuracy | 030, 140 | assume stable; ledger stores the create-time price |
+| Q36 | GoReleaser action and binary versions, and whether GitHub Releases on a personal repository need extra permissions beyond `contents: write` | CLI release (ADR 0013) | 120 | `contents: write` on the tag job only |
+| Q37 | Does `gitleaks` need a license for history scans on a personal account when run as a binary? | secret scanning | 170 | the binary is free for personal use; verify at implementation |
+| Q38 | Exact `curl`/`jq` availability on `ubuntu-latest` runners and the HTTP behaviour when the management endpoint is unreachable | `gpu-control.yml` | 160 | both present; fail the job on non-2xx |
+| Q39 | Does OpenCode retry on a 503 without `Retry-After`, and how does it surface the `backend_unavailable` message to the user? | explicit-mode UX | 140 | documented in the OpenCode section of the README after one manual run |
+| Q40 | Vast `volume_info` attach semantics and whether a volume can be attached to an instance created from a different offer on the same machine | P2 cache (ADR 0014) | 180 | not needed for the initial release |
 | Q17 | Is an ARM build of the control-plane image needed at all? | pipeline cost | settled by 120: multi-arch kept | — |
 
 ## 2. Risk register
@@ -59,12 +64,16 @@ updated.
 | R8 | Envoy or an intermediary drops SSE comments or times out early | low | cold starts fail for streaming clients | timeout policy in 130; warm-up endpoint documented | 130 |
 | R9 | Vast API rate limits during reconcile + provisioning | medium | slower state transitions | single list per interval, backoff with jitter | 020 |
 | R10 | Qwen3.6 tool calls malformed through llama.cpp | medium | coding assistants degrade | spike verifies; `--reasoning-format` and template flags adjustable | 030 |
-| R11 | A workflow lease without any traffic keeps the GPU up although the worker's dead-man timer fires first | low | one unexpected re-provision, no runaway cost | the dead-man timeout exceeds the idle timeout by 10 min; leases do not extend past `maxLifetime + 30m` | 050, 070 |
+| R11 | A client streams without end and holds the GPU | low | spend up to `maxLifetime` | `model.generationTimeout` ends any single request; `maxLifetime` ends the instance; idle rule counts only finished requests | 050, 060 |
+| R12 | A leaked management token starts GPUs from anywhere | low | budget drained | per-list rotation, rate limit on `/api/v1`, budget caps, gitleaks on every PR | 110, 170 |
+| R13 | The public GitHub Actions workflow is dispatched by someone with repository write access by mistake | low | one cold start, idles out in 30 min | `workflow_dispatch` only; concurrency group; the idle rule applies regardless of who started it | 160 |
 
 ## 3. Decisions deliberately deferred
 
 | Topic | Deferred to |
 |---|---|
+| On-demand provisioning mode | after the initial release; ADR 0007 is the design |
+| `stop --force` | after the initial release; `lifecycle.shutdown.allowForce` reserved |
 | Leader election / `replicas > 1` | when availability requires it; `Store` interface is the seam |
 | Postgres for history and reporting | when multi-month reporting is wanted (ADR 0004 alternatives) |
 | Hashed API keys | after MVP; format already supports it |

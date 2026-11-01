@@ -37,7 +37,7 @@ provider balance dropped by at most $5.
 - Run A2 (conditional): runtype `ssh_direct`, only if A1 is proxied and fails the latency gate.
 - Run B (conditional): runtype `args` with a throwaway custom image adding Caddy TLS, only if A fails.
 - Write-back: research §7, ADR 0006 status, ADR 0005 amendment if triggered, open-questions rows, this spec's Evidence.
-- Recommended values for `provider.filter.minInetDownMBps`, `gateway.maxWait`, `gpu.startupDeadline`.
+- Recommended values for `provider.filter.minInetDownMBps`, `lifecycle.startupTimeout` (and `onDemand.maxWait` for the future mode).
 - A host-side self-stop timer in onstart, and M10: which in-container action turns a real SSH-mode instance `exited` and whether GPU billing then stops (FR-4.7, C-8; closes the open question spec 070 assigns here).
 
 Excludes: any Go code in `internal/`; the production onstart script and
@@ -289,8 +289,8 @@ seconds and estimated cost. The evidence tables are built from these lines.
 | Key | Rule | Inputs |
 |---|---|---|
 | `provider.filter.minInetDownMBps` | r = measured download MB/s ÷ advertised `inet_down`. Value = 25,913 MB ÷ 180 s ÷ r, rounded up to 50. Keep 500 when the value ≤ 500. | Q8; file size research §3; 180 s from ADR 0005 Alternatives |
-| `gateway.maxWait` | 1.25 × cold start (E10 − E0), rounded up to 30 s, clamped to [300, 540] s; 540 keeps 60 s under the SDK's 600 s (research §4) | A run that passed the gate |
-| `gpu.startupDeadline` | 2 × (E9 − E2), rounded up to the minute, clamped to [10, 30] min | same |
+| `onDemand.maxWait` (future mode only) | 1.25 × cold start (E10 − E0), rounded up to 30 s, clamped to [300, 540] s; 540 keeps 60 s under the SDK's 600 s (research §4) | A run that passed the gate |
+| `lifecycle.startupTimeout` | 2 × (E9 − E2), rounded up to the minute, clamped to [10, 30] min | same |
 
 The census from the search table shows how many offers each candidate
 `inet_down` threshold leaves.

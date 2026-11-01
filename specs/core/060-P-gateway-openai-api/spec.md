@@ -3,40 +3,47 @@ id: "CORE-060"
 status: "DRAFT"
 updated: "2026-11-01"
 depends_on: ["CORE-040", "CORE-050"]
-adrs: ["0007", "0002", "0003", "0006", "0009"]
+adrs: ["0010", "0011", "0012", "0002", "0006", "0009", "0007"]
 ---
 
 # 060 — Gateway: OpenAI-compatible API
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DRAFT, written 2026-11-01 before any code exists; updated
+2026-11-01 for explicit provisioning (ADR 0010), the rolling inactivity
+timeout (ADR 0011) and separate management credentials (ADR 0012).
 
-**Complexity:** L
-**Risk:** high — the cold-start wait commits a `200` before success is known, so every later failure must be reported in-band
-**Estimated effort:** three sessions (10–12 h)
+**Complexity:** M
+**Risk:** medium — every exit path of an admitted request must call `RequestEnd` exactly once, because that call is what moves the idle deadline
+**Estimated effort:** two sessions (6–8 h)
 **Recommended model:** strong — streaming, cancellation, shutdown and auth in one package
 **Depends on:** [CORE-040](../040-P-state-store/spec.md), [CORE-050](../050-P-gpu-lifecycle-controller/spec.md)
 
 ## Outcome
 
-`internal/gateway` serves the OpenAI-compatible and admin APIs on port 8080.
-An official OpenAI SDK with a client key completes a plain and a streamed chat
-call; with the GPU Idle the call triggers a cold start, receives
-`: warming up <stage>` every 15 s, then streams tokens. Bad key, body, model
-or rate gets an OpenAI-shaped error. A disconnect cancels upstream within 1 s;
-SIGTERM drains in under 30 s; outcomes show as `vkllm_gateway_*` on 9090.
+`internal/gateway` serves the OpenAI-compatible inference API under `/v1` on
+port 8080. With the GPU READY, an official OpenAI SDK with an inference key
+completes a plain and a streamed chat call; every finished, failed, cancelled
+or disconnected request calls `RequestEnd`, which moves the idle deadline.
+With no READY backend the call gets `503 backend_unavailable` at once, with no
+`Retry-After`, and nothing is started. Bad key, wrong credential kind, body,
+model or rate gets an OpenAI-shaped error. A disconnect cancels upstream within
+1 s; SIGTERM drains in under 30 s; outcomes show as `vkllm_gateway_*` on 9090.
 
 ## Scope
 
-- `net/http` mux with method patterns, middleware, key loading, constant-time auth, per-key token bucket.
-- `POST /v1/chat/completions`, `GET /v1/models`, and the five admin routes of ADR 0007 §3.
-- Validation, `max_tokens` clamp, pending queue, cold-start wait, plain and SSE proxy,
-  error mapping, in-flight accounting, graceful shutdown, metrics, one readiness check.
+- `/v1` handler with method patterns, middleware, constant-time auth through the shared `internal/auth` loader, per-key token bucket.
+- `POST /v1/chat/completions` and `GET /v1/models`.
+- Validation, `max_tokens` clamp, `Admit`/`RequestEnd` admission, plain and SSE proxy,
+  error mapping, drain cutoff on manual stop, graceful shutdown, metrics, one readiness check.
+- The `internal/auth` key loader shared with CORE-055 (see Auth).
 - Tests with `httptest`, fake upstream, fake controller, fake `Transport`, fake clock; an optional SDK job.
 
-Excludes: the 9090 endpoints (CORE-010, CORE-090); `internal/tunnel`, the
-SSH link and host-key pinning (CORE-050); state machine, lease persistence,
-`lastRequestAt` writes, ETA (CORE-050); spend (CORE-100); key
-rotation and threat model (CORE-110); Envoy timeout (CORE-130); dashboards (CORE-090).
+Excludes: the management API `/api/v1/gpu/*` (CORE-055); the 9090 endpoints
+(CORE-010, CORE-090); `internal/tunnel`, the SSH link and host-key pinning
+(CORE-050); state machine, admission mutex, `lastInferenceFinishedAt` and
+`idleDeadline` persistence, drain timer (CORE-050); spend (CORE-100); key
+rotation and threat model (CORE-110); Envoy timeout (CORE-130); dashboards
+(CORE-090); on-demand mode (future, see below).
 
 ## Design and contracts
 
@@ -47,46 +54,43 @@ package gateway
 
 type Config struct{ /* one field per key below */ }
 
-func New(cfg Config, ctl Controller, clk clock.Clock, reg prometheus.Registerer) (*Gateway, error)
-func (g *Gateway) Handler() http.Handler            // the :8080 mux
+func New(cfg Config, ctl Controller, keys *auth.Keys, clk clock.Clock, reg prometheus.Registerer) (*Gateway, error)
+func (g *Gateway) Handler() http.Handler            // serves /v1/*; main mounts it next to CORE-055's /api/v1/*
 func (g *Gateway) Shutdown(ctx context.Context) error // see Shutdown
-func (g *Gateway) KeysLoaded() error                  // appended to /readyz checks
 ```
 
-`Config` carries `model.alias`, `model.parallel`, `gateway.maxWait`,
-`gateway.maxPending`, `gateway.maxBodyBytes`, `gateway.maxTokensCap`,
-`gateway.rateLimitPerKeyRPM`, `gateway.heartbeatInterval` (architecture §9),
-`model.generationTimeout` (10 m), `installationId` (`VKLLM_INSTALLATION_ID`,
-CORE-080) for the worker key, and the two key file paths.
+`Config` carries `model.alias`, `gateway.maxBodyBytes` (1 MiB),
+`gateway.maxTokensCap` (8192), `gateway.rateLimitPerKeyRPM` (60),
+`model.generationTimeout` (10 m) (architecture §9) and `installationId`
+(`VKLLM_INSTALLATION_ID`, CORE-080) for the worker key. There is no
+`provisioningMode` field: `on-demand` is rejected at startup (ADR 0010 §1),
+so the gateway has one behaviour.
 
-`Controller` is the method set used from `*controller.Controller`; it exists
-because a test fake does (C-26).
+`Controller` is the gateway-facing subset of the ADR 0012 §2 interface; it
+exists because a test fake does (C-26):
 
 ```go
-type Controller interface { // the gateway-facing methods of CORE-050
-	Demand(ctx context.Context) (<-chan controller.Ready, error) // one value then close, or close without a value
-	RequestStart(gen int64) error // controller.ErrDraining: do not proxy
-	RequestEnd(gen int64)
-	ReportUpstreamFailure(gen int64)
+type Controller interface { // implemented by *controller.Controller (CORE-050)
+	Admit(gen int64) (http.RoundTripper, error) // controller.ErrBackendUnavailable | controller.ErrDraining
+	RequestEnd(gen int64)                       // sets lastInferenceFinishedAt, recomputes idleDeadline
 	ObserveFirstToken(gen int64, d time.Duration)
-	CreateLease(ctx context.Context, owner string, ttl time.Duration) (store.Lease, error)
-	RenewLease(ctx context.Context, id string, ttl time.Duration) (store.Lease, error)
-	ReleaseLease(ctx context.Context, id string) error
-	SetDesired(ctx context.Context, n int) error
+	ReportUpstreamFailure(gen int64)
 	Status() controller.Snapshot
 }
-// controller.Ready{Generation int64; Transport http.RoundTripper} (CORE-050)
 ```
 
-The gateway has no `Dialer`: the controller owns the one tunnel `Conn` per
-instance and hands out `Ready.Transport`. `clock.Clock` is CORE-010's.
+`Start`, `Stop` and `Demand` are deliberately absent: the inference package
+cannot provision, stop or register demand by construction (ADR 0010 §2). The
+gateway has no `Dialer`: the controller owns the one tunnel `Conn` per
+instance and hands out the `RoundTripper` from `Admit`. `clock.Clock` is CORE-010's.
 
 ### Routes and middleware
 
-`/v1/*` accepts a client or the admin key; `/admin/v1/*` only the admin key.
-`/healthz`, `/readyz`, `/metrics` on 9090 belong to `internal/obs`.
-Any other path or method: `404 not_found` / `405 method_not_allowed` in the
-error schema, after auth.
+`/v1/*` accepts an inference key only. `/api/v1/*` is CORE-055's handler on
+the same mux; `/healthz`, `/readyz`, `/metrics` on 9090 belong to
+`internal/obs`. An unknown path or method under `/v1/` gets `404 not_found` /
+`405 method_not_allowed` in the error schema, after auth. A path under
+neither prefix gets `404 not_found` without auth.
 
 Middleware, outermost first:
 
@@ -99,24 +103,43 @@ Middleware, outermost first:
 | 5 | rate limit | per-key token bucket; see Rate limit |
 | 6 | logging | attaches `key_id` and `route` to the request's `slog` context |
 
-`route` labels (CORE-090): `chat_completions`, `models`, `admin_warmup`, `admin_status`, `admin_leases_create`, `admin_leases_delete`, `admin_scale`, `other`; never the raw path.
+`route` labels (CORE-090): `chat_completions`, `models`, `other`; never the raw path.
 
 ### Auth
 
-- Keys load from the mounted files (ADR 0009 §1), one client key per line;
-  re-read every 10 s (mtime poll, CORE-110 R3), swapped atomically on change (stdlib, no watch module).
-- `subtle.ConstantTimeCompare` of SHA-256 digests against every key, no early
-  exit; hashing removes the length side channel.
-- `key_id` for logs is the first 8 characters after `sk-vkllm-` (ADR 0009 §5).
+`internal/auth` is the key loader shared by this package and CORE-055; this
+spec builds it (the gateway's loader predates the management API) and
+CORE-055 consumes it. Surface relied on here:
 
-| Case | Status | `code` | `auth_failures_total{reason}` |
+```go
+package auth
+
+type Kind int // KindUnknown, KindInference, KindManagement
+func Load(clientKeysFile, mgmtTokensFile, workerSeedFile string, clk clock.Clock) (*Keys, error)
+func (k *Keys) Classify(token string) (Kind, string) // kind, key_id
+func (k *Keys) WorkerSeed() []byte
+func (k *Keys) Loaded() error                        // appended to /readyz checks
+func (k *Keys) Run(ctx context.Context)              // 10 s mtime poll
+```
+
+- Files are the `client-keys`, `management-tokens` and `worker-seed` keys of
+  the `<release>-api-keys` Secret, mounted as files (ADR 0009 §1, ADR 0012 §3);
+  one key per line. Re-read every 10 s (mtime poll, CORE-110), swapped
+  atomically on change (stdlib, no watch module).
+- `Classify` does `subtle.ConstantTimeCompare` of SHA-256 digests against
+  every key of both lists, no early exit; hashing removes the length side channel.
+- `key_id` for logs is the first 8 characters after `sk-vkllm-` (ADR 0009 §5).
+- `Loaded` fails while `client-keys` or `management-tokens` is empty or
+  `worker-seed` is not 32 bytes.
+
+| Case on `/v1/*` | Status | `code` | `auth_failures_total{reason}` |
 |---|---|---|---|
 | no header | 401 | `invalid_api_key` | `missing` |
 | not `Bearer <token>` | 401 | `invalid_api_key` | `malformed` |
 | unknown key | 401 | `invalid_api_key` | `unknown_key` |
-| client key on admin route | 403 | `permission_denied` | `admin_required` |
+| management token | 403 | `permission_denied` | `wrong_surface` |
 
-`KeysLoaded` fails while the client set or the admin key is empty.
+The mirror case (inference key on `/api/v1/*` → 403) is CORE-055's.
 
 ### Rate limit
 
@@ -136,80 +159,63 @@ key removal. Empty → `429 rate_limit_exceeded`, `Retry-After` = seconds to one
    as `max_tokens_clamped=true` with the original value. Non-integer → `400 invalid_request`.
 5. Nothing else is validated; llama-server validates `messages` and tools.
 
-### Admission: pending queue and cold-start wait
-
-`pending` counts waiters for a worker **or** a slot, capped at
-`gateway.maxPending`; `slots` is a channel semaphore of size `model.parallel`.
-llama-server's own queue has no documented cap (research §2), so the gateway queues (FR-3.5).
+### Admission (explicit mode)
 
 ```text
-admit(req):
-  deadline := clk.After(maxWait)          // one timer for both waits
-  ready, err := ctl.Demand(ctx)           // registers demand; ADR 0003 §2
-  if err is ErrUnavailable: fail(gpu_unavailable)
-  non-blocking receive on ready: value → target, ready = nil; closed empty → fail(Status().FailureCode); target + free slot → proxy
-  if !pending.tryInc(): fail(queue_full)  // before any byte is written
-  (pending.dec() on every exit from the loop below, before proxying)
-  if stream: write 200, text/event-stream, Cache-Control: no-cache; flush;
-             write ": warming up <stage>\n\n"; flush
-  hb := clk.After(heartbeatInterval)
-  loop select:
-    case r, ok := <-ready: if !ok: fail(Status().FailureCode); else target = r; ready = nil
-    case slots <- {}:    only enabled once target is set → proxy(target)
-    case <-hb:           if stream: write ": warming up <strings.ToLower(Status().State.String())|queued>\n\n"; flush
-                         hb = clk.After(heartbeatInterval)
-    case <-deadline:     fail(gpu_cold_start)
-    case <-ctx.Done():   outcome client_gone; return (demand stays, ADR 0007 §2)
-    case <-g.stopping:   fail(shutting_down)
-proxy(target):
-  defer { <-slots }
-  if err := ctl.RequestStart(target.Generation); err != nil: release slot, re-Demand, continue loop
-  defer ctl.RequestEnd(target.Generation)
-  ...
+handle(req):                               // after auth, rate limit, validation
+  gen := ctl.Status().Generation
+  rt, err := ctl.Admit(gen)                // one call, no wait, no retry
+  if err is ErrBackendUnavailable or ErrDraining: write 503 backend_unavailable; return
+  if err != nil: write 500 internal_error; return
+  defer ctl.RequestEnd(gen)                // directly after a successful Admit
+  proxy(rt, gen)
 ```
 
-`defer RequestEnd` directly follows a successful `RequestStart`, so panic,
-cancel, shutdown and upstream errors all pass through it.
+- A request rejected with 401, 403, 413, 400, 404 or 429 never reaches
+  `Admit`, so it never moves the deadline (ADR 0011 §2).
+- `Admit` decides under CORE-050's mutex over `(state, inFlight)`: no READY
+  backend (STOPPED, ALLOCATING, STARTING, LOADING_MODEL, DRAINING, DELETING,
+  FAILED), `desired` STOPPED or a stale generation → error. A request admitted
+  before DRAINING is drained; one after gets `backend_unavailable` (ADR 0011 §4).
+  The gateway does not read the state itself before `Admit`.
+- `defer RequestEnd` follows a successful `Admit`, so finish, upstream error,
+  client cancel, disconnect, drain cutoff, pod shutdown and panic all pass
+  through it exactly once.
+- 503 body, verbatim from ADR 0010 §2, `Content-Type: application/json`,
+  **no `Retry-After`**, written before any other byte:
 
-`fail(code)` before any byte is written sends the error response from the
-table. After the stream `200` it sends the in-stream error, each line followed
-by a blank line: `data: {"error":{"message":"GPU is starting; retry in 30s","type":"server_error","code":"gpu_cold_start"}}`
-then `data: [DONE]`.
+```json
+{"error": {"type": "server_error", "code": "backend_unavailable",
+           "message": "GPU backend is stopped; start it with `vk-llm start`"}}
+```
 
-| Wait outcome | `cold_start_outcomes_total{outcome}` | Non-stream | Stream |
-|---|---|---|---|
-| target arrived | `ready` | proxied | proxied |
-| `maxWait` elapsed | `gpu_cold_start` | 503 `gpu_cold_start`, `Retry-After: 30` | in-stream `gpu_cold_start` |
-| closed, `FailureCode` `gpu_cold_start` | `gpu_cold_start` | 503 `gpu_cold_start`, `Retry-After: 30` | in-stream `gpu_cold_start` |
-| `ErrUnavailable` or `FailureCode` `gpu_unavailable` | `gpu_unavailable` | 503 `gpu_unavailable`, no `Retry-After` | in-stream `gpu_unavailable` |
-| queue full | `queue_full` | 429 `queue_full`, `Retry-After: 15` | same (nothing written yet) |
-| client gone | `client_gone` | none | none |
-| shutdown | `shutting_down` | 503 `shutting_down`, `Retry-After: 30` | in-stream `shutting_down` |
-
-Outcomes count only requests that entered the wait; `wait_seconds` observes
-every admitted request, including zero waits.
+- No pending queue and no slot semaphore: concurrent admitted requests go to
+  llama-server, which defers them while no slot is free (research §2);
+  `model.generationTimeout` bounds each.
 
 ### Proxy
 
 - Upstream URL is the constant `http://worker/v1/chat/completions`; `worker`
-  is never resolved: `Ready.Transport` reaches the worker's loopback port.
-  This package reads and dials no address (C-18, ADR 0006 §5).
+  is never resolved: the `RoundTripper` from `Admit` reaches the worker's
+  loopback port. This package reads and dials no address (C-18, ADR 0006 §5).
 - Headers sent: `Content-Type: application/json`, `Accept:
   text/event-stream` when streaming, `Authorization: Bearer
-  <worker.WorkerKey(adminKey, cfg.InstallationID, Generation)>` (CORE-070),
-  computed per request, never logged. No client header is forwarded.
-- `http.Client{Transport: target.Transport, CheckRedirect: return http.ErrUseLastResponse}`,
-  no client timeout; the request context carries
-  `gateway.maxWait + model.generationTimeout` from admission (1080 s default)
-  and is a child of `r.Context()`, so a disconnect cancels the upstream call
-  (FR-3.4) and llama-server stops generating (research §2).
+  <worker.WorkerKey(keys.WorkerSeed(), cfg.InstallationID, gen)>` (ADR 0006 §4,
+  CORE-070), computed per request, never logged. No client header is forwarded.
+- `http.Client{Transport: rt, CheckRedirect: return http.ErrUseLastResponse}`,
+  no client timeout; the request context carries `model.generationTimeout`
+  (600 s) and is a child of `r.Context()`, so a disconnect cancels the
+  upstream call and llama-server stops generating (research §2). Envoy's
+  route timeout must exceed it: 660 s or disabled (ADR 0010 Consequences, CORE-130).
+- Response headers are written only after the upstream answers, so every
+  failure before that gets a normal status code.
 - Plain: copy status, `Content-Type` and body. The body is also teed into a
   buffer capped at `MaxBodyBytes` to read `usage.completion_tokens`.
-- SSE: if headers are unsent, copy status and `Content-Type`; then loop
-  `Read` into a 32 KiB buffer, write the bytes, flush via
-  `http.ResponseController`, with no line assembly. The first byte stamps
-  `ttft_seconds` (from proxy start) and calls `ctl.ObserveFirstToken(gen, ttft)`
-  once per request. Each `data: ` prefix seen counts one output chunk.
+- SSE: copy status and `Content-Type`; then loop `Read` into a 32 KiB
+  buffer, write the bytes, flush via `http.ResponseController`, with no line
+  assembly. The first byte stamps `ttft_seconds` (from proxy start) and calls
+  `ctl.ObserveFirstToken(gen, ttft)` once per request. Each `data: ` prefix
+  seen counts one output chunk.
 
 | Upstream result | Client sees | Side effect |
 |---|---|---|
@@ -218,15 +224,26 @@ every admitted request, including zero waits.
 | 4xx except 401/403, other body | same status, `upstream_rejected` | — |
 | 401 / 403 (worker key rejected) | 502 `upstream_error` | `ReportUpstreamFailure` |
 | 5xx | 502 `upstream_error` | `ReportUpstreamFailure` |
-| Transport closed by the controller | 502 `upstream_error` | — |
-| transport error before headers | 502 `upstream_error` | `ReportUpstreamFailure` |
-| read error mid-stream | in-stream `upstream_error`, `[DONE]` | `ReportUpstreamFailure` (FR-5.6) |
+| transport or read error while `Status()` reports DRAINING or DELETING (drain cutoff) | 503 `backend_unavailable` (body above), or in-stream `backend_unavailable` | — |
+| transport error before headers, otherwise | 502 `upstream_error` | `ReportUpstreamFailure` |
+| read error mid-stream, otherwise | in-stream `upstream_error`, `[DONE]` | `ReportUpstreamFailure` (FR-5.6) |
 | deadline exceeded | 504 `upstream_timeout` or in-stream | — |
 | client disconnect | nothing; `requests_total{code="499"}` | upstream cancelled |
 
 After the stream `200` every row except the first becomes the in-stream
-error with that code. Rows with an in-stream error count as
+error with that code: `data: {"error":{…}}`, a blank line, `data: [DONE]`,
+a blank line. Rows with an in-stream error count as
 `requests_total{code="stream_error"}`.
+
+### Drain on manual stop
+
+`POST /api/v1/gpu/stop` (CORE-055) makes CORE-050 move to DRAINING at once:
+new `Admit` calls fail, admitted requests keep their `RoundTripper` for
+`lifecycle.shutdown.drainTimeout` (60 s). At the cutoff CORE-050 closes the
+tunnel; the gateway's open reads fail, and the drain-cutoff row above
+applies: in-stream `backend_unavailable` + `[DONE]`, then `RequestEnd`
+(FR-3.7). Idle, lifetime and budget drains behave the same (ADR 0011 §5).
+The gateway owns no drain timer.
 
 ### Error body
 
@@ -236,51 +253,25 @@ Every non-2xx body and in-stream error is `{"error":{"message","type","code"}}`
 
 ### `/v1/models`
 
-Answered from configuration, no controller call, no store read (FR-1.2):
+Answered from configuration: no controller call, no `Admit`, no store read, so
+it works with the GPU STOPPED and never touches the deadline (FR-1.2, FR-1.7, FR-3.5):
 
 ```json
 {"object":"list","data":[{"id":"<model.alias>","object":"model","created":<process start, unix s>,"owned_by":"gpu-on-demand"}]}
 ```
 
-### Admin API (ADR 0007 §3)
-
-| Endpoint | Body | Success | Errors |
-|---|---|---|---|
-| `POST /admin/v1/warmup` | empty or `{}` | `202` + status JSON; calls `Demand` | 503 `gpu_unavailable` |
-| `GET /admin/v1/status` | — | `200` + status JSON | — |
-| `POST /admin/v1/leases` | `{"owner":string,"ttlSeconds":int}` | `201` `{"id","owner","expiresAt"}`; calls `CreateLease` then `Demand` | 400 if owner not `[A-Za-z0-9._-]{1,64}` or ttl outside 60–7200 s (narrower than CORE-050's 1 s–2 h) |
-| `DELETE /admin/v1/leases/{id}` | — | `204` | 404 `lease_not_found` |
-| `POST /admin/v1/scale` | `{"desired":0}` or `{"desired":1}` | `202` + status JSON; calls `SetDesired` | 400 for any other value |
-
-A second POST with the same `owner` (found in `Status().LeaseList`) calls
-`RenewLease(ctx, id, ttl)` and returns that id (ADR 0007 §3); caps are CORE-050's.
-
-Status JSON. No `sshHost`, `sshPort`, host key or key material:
-
-```json
-{
-  "installationId": "…", "labelPrefix": "vkllm:…:", "state": "loading", "since": "2026-11-01T10:00:00Z",
-  "generation": 7, "desired": 1, "unavailable": "", "failureCode": "", "stages": {"search": 3.1, "boot": 41.2},
-  "etaSeconds": 140, "instance": {"providerId": "…", "hourlyUsd": 0.62, "createdAt": "…", "readyAt": null},
-  "leases": [{"id": "…", "owner": "ci", "expiresAt": "…"}], "spendMtdUsd": 4.12, "gateway": {"active": 1, "pending": 3}
-}
-```
-
-Fields map 1:1 to `Snapshot` (`InstallationID`, `LabelPrefix`, `State`, `Since`, `Generation`, `Desired`,
-`Unavailable`, `FailureCode`, `Stages`, `ETA`, `ProviderID`/`Hourly`/`CreatedAt`/`ReadyAt`, `LeaseList`,
-`SpendMTDUSD`); `gateway` is local. `etaSeconds` (`ETA` 0) and `instance` are `null` when absent.
-
 ### Shutdown
 
-`main` calls `g.Shutdown(ctx)` and `api.Shutdown(ctx)` together under the
-30 s cap of CORE-010.
+`main` calls `g.Shutdown(ctx)` and the server's `Shutdown(ctx)` together
+under the 30 s cap of CORE-010.
 
-1. `t=0`: close `stopping`; the listener closes; waiters leave with outcome `shutting_down`.
+1. `t=0`: the listener closes; new requests are refused by `net/http`.
 2. Active proxies continue until the `ctx` deadline − 5 s (25 s by default).
 3. Then upstream contexts are cancelled: streams get in-stream `shutting_down`
    + `[DONE]`; plain requests get `503 shutting_down`, `Retry-After: 30`.
 4. `Shutdown` returns when every handler has returned. The instance is never
-   destroyed (FR-4.1, ADR 0003 §8).
+   destroyed and `Stop` is never called (FR-4.1, ADR 0003 §8); the persisted
+   deadline still applies after restart (ADR 0011 §1).
 
 Server: `ReadHeaderTimeout` 10 s, `ReadTimeout` 30 s, `IdleTimeout` 120 s,
 `WriteTimeout` 0 (per-request contexts bound streams). Every gateway
@@ -290,87 +281,103 @@ goroutine is owned by a request or by `Gateway` and exits on its context (C-27).
 
 | Metric | Type | Labels |
 |---|---|---|
-| `vkllm_gateway_requests_total` | counter | `route`, `code` ∈ {200,201,202,204,400,401,403,404,405,413,429,499,500,502,503,504,stream_error} |
+| `vkllm_gateway_requests_total` | counter | `route`, `code` ∈ {200,400,401,403,404,405,413,429,499,500,502,503,504,stream_error} |
 | `vkllm_gateway_active_requests` | gauge | — |
-| `vkllm_gateway_pending_requests` | gauge | — |
-| `vkllm_gateway_wait_seconds` | histogram | — |
 | `vkllm_gateway_request_seconds` | histogram | `route` |
 | `vkllm_gateway_ttft_seconds` | histogram | — |
 | `vkllm_gateway_output_tokens_per_second` | histogram | — |
-| `vkllm_gateway_cold_start_outcomes_total` | counter | `outcome` ∈ {ready,gpu_cold_start,queue_full,gpu_unavailable,client_gone,shutting_down} |
-| `vkllm_gateway_auth_failures_total` | counter | `reason` ∈ {missing,malformed,unknown_key,admin_required} |
+| `vkllm_gateway_auth_failures_total` | counter | `reason` ∈ {missing,malformed,unknown_key,wrong_surface} |
+| `vkllm_gateway_pending_requests` | gauge | — ; on-demand only, registered, always 0 in explicit mode |
+| `vkllm_gateway_wait_seconds` | histogram | — ; on-demand only, no observations in explicit mode |
+| `vkllm_gateway_cold_start_outcomes_total` | counter | `outcome`; on-demand only, always 0 in explicit mode |
 
 Enumerations and buckets per CORE-090. Tokens per second: plain = `usage.completion_tokens` / generation time; stream
-= `data:` chunks minus `[DONE]` / first-to-last-byte time. Log fields: `request_id`, `route`, `status_code`, `duration_ms`, `wait_ms`,
-`key_id`, `stream`, `instance_gen`, `outcome`, `max_tokens_clamped`,
+= `data:` chunks minus `[DONE]` / first-to-last-byte time. Log fields: `request_id`, `route`, `status_code`, `duration_ms`,
+`key_id`, `stream`, `instance_gen`, `outcome` (`backend_unavailable` when `Admit` refused), `max_tokens_clamped`,
 `max_tokens_requested`. Never `Authorization`, request or response bodies,
-prompts, completions, worker keys (C-16, ADR 0009 §5, NFR-7.7).
+prompts, completions, worker keys or the seed (C-16, ADR 0009 §5, NFR-8.7).
+
+### Future: on-demand mode
+
+Not in the MVP; designed by ADR 0007, enabled by `lifecycle.provisioningMode:
+on-demand` (ADR 0010 §4). When implemented, this package gains:
+
+- `Demand(ctx)` on the `Controller` subset, called instead of failing with
+  `backend_unavailable`; it registers demand and returns a ready channel.
+- A bounded wait per request, `onDemand.maxWait` (480 s), and a pending cap,
+  `onDemand.maxPending` (32) → `429 queue_full`, `Retry-After: 15`.
+- For streams: an early `200` and `: warming up <stage>` every
+  `onDemand.heartbeatInterval` (15 s); timeout → in-stream `gpu_cold_start`.
+- Non-stream timeout → `503 gpu_cold_start`, `Retry-After: 30`.
+- The three on-demand metrics above start counting.
+- The upstream context and Envoy timeout grow to `maxWait + generationTimeout`
+  (1080 s, ADR 0007 §4).
+
+None of this is compiled into the MVP paths.
 
 ## Requirements
 
-- R1. Every `/v1` and `/admin/v1` request MUST be authenticated before its body is read or any controller call is made. (source: C-16, NFR-7.1)
-- R2. Key comparison MUST use `subtle.ConstantTimeCompare` over SHA-256 digests with no early exit; a missing or unknown key MUST get 401, a client key on `/admin/v1` 403. (source: ADR 0009 §2, C-16, NFR-7.1)
-- R3. Bodies above `gateway.maxBodyBytes` MUST get 413; `max_tokens` and `max_completion_tokens` MUST NOT reach the worker above `gateway.maxTokensCap`; each key MUST be limited to `gateway.rateLimitPerKeyRPM` with 429 and `Retry-After`. (source: C-19, NFR-7.5)
+- R1. Every `/v1` request MUST be authenticated before its body is read or any controller call is made. (source: C-16, NFR-8.1)
+- R2. Key comparison MUST use `subtle.ConstantTimeCompare` over SHA-256 digests with no early exit; a missing or unknown key MUST get 401, a management token on `/v1` 403. (source: ADR 0012 §3, ADR 0009 §2, FR-7.2, NFR-8.1)
+- R3. Bodies above `gateway.maxBodyBytes` MUST get 413; `max_tokens` and `max_completion_tokens` MUST NOT reach the worker above `gateway.maxTokensCap`; each key MUST be limited to `gateway.rateLimitPerKeyRPM` with 429 and `Retry-After`. (source: C-19, NFR-8.5)
 - R4. A `model` other than `model.alias` MUST get 404 `model_not_found`. (source: ADR 0002 §5, FR-1.3)
 - R5. Every non-2xx body and every in-stream error MUST match `{"error":{"message","type","code"}}`. (source: FR-1.5)
-- R6. `GET /v1/models` MUST answer from configuration without a controller or store call. (source: ADR 0007 §3, FR-1.2)
-- R7. Waiting requests MUST be capped at `gateway.maxPending`; the next MUST get 429 `queue_full` with `Retry-After: 15`. (source: ADR 0007 §2, FR-3.5)
-- R8. A streaming waiter MUST receive `: warming up <stage>` at least every `gateway.heartbeatInterval`. (source: ADR 0007 §2, FR-3.3)
-- R9. A non-streaming waiter MUST get 503 `gpu_cold_start` with `Retry-After: 30` after `gateway.maxWait`; a streaming one MUST get the in-stream error then `data: [DONE]`. (source: ADR 0007 §2, FR-3.6)
-- R10. Budget, attempts, no-offer and desired-zero MUST map to 503 `gpu_unavailable` without `Retry-After`. (source: ADR 0007 §2, FR-2.6)
-- R11. SSE chunks MUST be written and flushed as read, without line buffering; a client disconnect MUST cancel the upstream request via context. (source: FR-3.2, FR-3.4, research §2)
-- R12. Every successful `RequestStart` MUST be followed by exactly one `RequestEnd` on every path, including panic; the first upstream byte MUST call `ObserveFirstToken` once. (source: ADR 0003 §5, CORE-050, FR-2.4)
-- R13. The upstream URL host MUST be the literal `worker` and the transport MUST be `Ready.Transport`; the package MUST NOT read or dial an address. (source: C-18, ADR 0006 §5, CORE-050)
-- R14. The worker key MUST be derived with `worker.WorkerKey` per request and MUST NOT be logged or stored. (source: ADR 0006 §4, CORE-070 R8)
-- R15. Pending queue and in-flight counts MUST live in process memory only. (source: C-12)
-- R16. Shutdown MUST finish within 30 s and MUST NOT destroy the instance. (source: FR-4.1, ADR 0003 §8)
-- R17. Logs MUST NOT contain `Authorization`, bodies, prompts, completions or keys. (source: C-16, NFR-7.7)
-- R18. Every gateway goroutine MUST have an owner and a context, every upstream call a deadline; upstream errors MUST be wrapped with `%w` and classified by the mapping table. (source: C-27, C-28)
-- R19. Metric labels MUST be the enumerations listed; no key ids, request ids or paths. (source: C-34)
-- R20. Unit tests MUST use fakes and the fake clock; no sleeps, no network beyond loopback `httptest`. (source: C-29)
+- R6. `GET /v1/models` MUST answer from configuration without a controller or store call. (source: FR-1.2, FR-1.7, FR-3.5)
+- R7. A chat request MUST call `Admit` exactly once, after validation; `ErrBackendUnavailable` and `ErrDraining` MUST get 503 with the ADR 0010 §2 body and no `Retry-After`. (source: ADR 0010 §2–3, FR-1.6, FR-3.8)
+- R8. The package MUST NOT call or reference `Start`, `Stop` or `Demand`. (source: ADR 0010 §2, FR-1.6)
+- R9. Every successful `Admit` MUST be followed by exactly one `RequestEnd` with the same generation on every path, including panic, disconnect and drain cutoff; the first upstream byte MUST call `ObserveFirstToken` once. (source: ADR 0011 §1, ADR 0012 §2, FR-3.2)
+- R10. A transport failure while `Status()` reports DRAINING or DELETING MUST produce `backend_unavailable` (in-stream after the `200`) and MUST NOT call `ReportUpstreamFailure`. (source: ADR 0011 §3, FR-3.7)
+- R11. SSE chunks MUST be written and flushed as read, without line buffering; a client disconnect MUST cancel the upstream request via context. (source: FR-1.1, research §2)
+- R12. The upstream URL host MUST be the literal `worker` and the transport MUST be the `RoundTripper` from `Admit`; the package MUST NOT read or dial an address. (source: C-18, ADR 0006 §5, NFR-8.4)
+- R13. The worker key MUST be derived with `worker.WorkerKey` from the worker seed per request and MUST NOT be logged or stored. (source: ADR 0006 §4, ADR 0012 §3)
+- R14. In-flight state MUST live in the controller; the gateway MUST keep no request state beyond one handler. (source: C-12, ADR 0011 §4)
+- R15. Shutdown MUST finish within 30 s and MUST NOT destroy or stop the instance. (source: FR-4.1, ADR 0003 §8)
+- R16. Logs MUST NOT contain `Authorization`, bodies, prompts, completions, keys or the seed. (source: C-16, NFR-8.7)
+- R17. Every gateway goroutine MUST have an owner and a context, every upstream call a deadline; upstream errors MUST be wrapped with `%w` and classified by the mapping table. (source: C-27, C-28)
+- R18. Metric labels MUST be the enumerations listed; no key ids, request ids or paths. (source: C-34)
+- R19. Unit tests MUST use fakes and the fake clock; no sleeps, no network beyond loopback `httptest`. (source: C-29)
 
 ## Implementation steps
 
 1. Config fields, error body, route table, `obs.RequestIDMiddleware` wiring and recover middleware. Tests: `TestErrorBodyShape`, `TestRequestIDEcho`, `TestRecoverReturns500`.
-2. Key loading, reload and auth. Tests: `TestAuthMatrix`, `TestKeyReload`, `TestConstantTimeNoEarlyExit` (code review item plus a test that all keys are compared), `TestKeysLoadedReadiness`.
-3. Token bucket. Test: `TestRateLimitFakeClock`.
+2. `internal/auth`: load, reload, classify, seed, readiness. Tests: `TestClassifyMatrix`, `TestKeyReload`, `TestConstantTimeNoEarlyExit` (code review item plus a test that all keys are compared), `TestLoadedReadiness`.
+3. Gateway auth middleware and token bucket. Tests: `TestAuthMatrixV1`, `TestRateLimitFakeClock`.
 4. Chat validation and clamp. Tests: `TestBodyLimit413`, `TestModelMismatch404`, `TestClampMaxTokens`, `TestUnknownFieldsForwarded`.
-5. `/v1/models` and admin handlers against the fake controller. Tests: `TestModelsNoController`, `TestAdminEndpoints`, `TestStatusHasNoAddress`.
-6. Proxy, plain and SSE, against a fake upstream behind a fake `Ready.Transport`. Tests: `TestProxyPlain`, `TestSSEPassThroughLatency`, `TestObserveFirstTokenCalled`, `TestUpstreamErrorMapping`, `TestWorkerKeyHeader`, `TestUpstreamHostIsWorker`.
-7. Admission: pending queue, slots, cold-start wait. Tests: `TestHeartbeatCadence`, `TestMaxWaitNonStream`, `TestMaxWaitStream`, `TestQueueFull`, `TestUnavailable`, `TestDisconnectWhileWaiting`.
-8. In-flight accounting, cancellation, shutdown. Tests: `TestRequestEndOnEveryPath`, `TestDisconnectCancelsUpstream`, `TestShutdownDrains`.
+5. `/v1/models`. Test: `TestModelsNoController`.
+6. Admission. Tests: `TestBackendUnavailable`, `TestDrainingUnavailable`, `TestRejectedNeverAdmits`, `TestNoProvisioningCalls`.
+7. Proxy, plain and SSE, against a fake upstream behind a fake `RoundTripper`. Tests: `TestProxyPlain`, `TestSSEPassThroughLatency`, `TestObserveFirstTokenCalled`, `TestUpstreamErrorMapping`, `TestWorkerKeyHeader`, `TestUpstreamHostIsWorker`.
+8. `RequestEnd` accounting, cancellation, drain cutoff, shutdown. Tests: `TestRequestEndOnEveryPath`, `TestDisconnectCancelsUpstream`, `TestDrainCutoff`, `TestShutdownDrains`.
 9. Metrics and log redaction. Tests: `TestMetricsLabels`, `TestLogRedaction`.
 10. SDK compatibility job: `test/sdk/compat.py` run by `uv run` against the binary with fake controller wiring, CI job `sdk-compat` (optional, non-blocking until it is stable).
 
 ## Tests / acceptance criteria
 
-- AC1. Auth matrix. Setup: one client key, one admin key. Action: each route with no header, `Basic x`, an unknown key, the client key, the admin key. Expected: 401/401/401 on all; client key → 403 on all five admin routes and 2xx on `/v1`; admin key → 2xx everywhere; `auth_failures_total` = 3 per route for 401s plus 5 `admin_required`. (NFR-7.1)
-- AC2. Body limit. Action: POST of 1,048,577 bytes with a valid key. Expected: 413, `request_too_large`; same body without a key: 401. (NFR-7.5)
-- AC3. Model mismatch. Action: `model: "gpt-4o"`. Expected: 404, `code` `model_not_found`, 0 upstream calls. (FR-1.3)
-- AC4. Clamp. Action: `max_tokens: 100000`; then no `max_tokens`. Expected: fake upstream receives 8192 both times; client receives 200; log line has `max_tokens_clamped=true`. (NFR-7.5)
-- AC5. Rate limit. Setup: RPM 60, fake clock frozen. Action: 61 requests. Expected: 60 × 2xx, 1 × 429 with `Retry-After: 1`; after advancing 1 s, one more 2xx. (NFR-7.5)
-- AC6. Error shape. Action: collect every non-2xx body from AC1–AC5 and AC9–AC12. Expected: 100 % parse into the error schema with non-empty `message`, `type`, `code`. (FR-1.5)
-- AC7. `/v1/models` with the fake controller panicking on any call. Expected: 200, `data[0].id` = alias, `len(data)` = 1; 1000 sequential calls p99 < 50 ms. (FR-1.2)
-- AC8. SSE pass-through. Setup: Ready target; fake upstream writes 20 chunks, each released by the test through a channel and flushed. Action: streamed request. Expected: each chunk is read by the client < 50 ms (wall clock, loopback) after its upstream flush; bytes identical, including fixture chunks carrying `reasoning_content` and `tool_calls`; no sleeps; `ObserveFirstToken` called exactly once with the target generation. (FR-3.2, FR-1.4, FR-2.4)
-- AC9. Heartbeat. Setup: fake controller never sends `Ready`; fake clock, synchronised with its `BlockUntil(n)` (CORE-010). Action: streamed request; advance 15 s three times. Expected: 200 with `text/event-stream`; comment lines at t=0, 15, 30, 45 s (4 lines); none between advances. (FR-3.3)
-- AC10. `maxWait`. Same setup; advance 480 s. Expected: plain request → 503, `gpu_cold_start`, `Retry-After: 30`; streamed → in-stream error event then `data: [DONE]`; `cold_start_outcomes_total{outcome="gpu_cold_start"}` = 2. (FR-3.6)
-- AC11. Queue full. Setup: never-ready controller, `maxPending` 32. Action: 40 concurrent requests. Expected: 32 waiting (`pending_requests` = 32), 8 × 429 `queue_full` with `Retry-After: 15`. Warm variant (`Parallel` 1, upstream blocks): 1 active, 32 waiting, 7 × 429. (FR-3.5)
-- AC12. Unavailable. Setup: `Demand` returns `ErrUnavailable{budget}`. Expected: 503 `gpu_unavailable`, no `Retry-After` header, 0 bytes of SSE written. Streamed wait whose channel closes empty with `Status().FailureCode` = `gpu_unavailable`: in-stream `gpu_unavailable`. (FR-2.6)
-- AC13. Disconnect cancels upstream. Setup: fake upstream streaming slowly. Action: client closes after the first chunk. Expected: fake upstream sees `ctx.Done` within 1 s; `RequestEnd` called once; `requests_total{code="499"}` = 1. (FR-3.4) Disconnect while waiting instead: `pending_requests` returns to 0 within 1 s; `outcome="client_gone"` = 1; the controller fake sees no demand withdrawal. (ADR 0007 §2)
-- AC14. `RequestEnd` on every path. Upstream variants: 200, 500, Transport closed by the controller, mid-stream reset, panic in the fake upstream reader, deadline, client cancel. Expected: `RequestStart` count = `RequestEnd` count = 7. (R12)
-- AC15. Error mapping, asserted on the fake `Transport`. Upstream 500 → 502 `upstream_error` and upstream 401 → 502, each with exactly one `ReportUpstreamFailure(gen)`; Transport returning a closed-connection error → 502 `upstream_error`; mid-stream reset → in-stream `upstream_error`. (FR-5.6)
-- AC16. SSRF. Expected: every request observed by the fake `Ready.Transport` has `URL.Host == "worker"`; a grep finds no `SSHHost`, `SSHPort`, `tunnel.` or `net.Dial` in `internal/gateway`. The crafted-document test of NFR-7.4 belongs to CORE-050. (NFR-7.4, C-18) Worker key: upstream `Authorization` equals `Bearer ` + `worker.WorkerKey(admin, cfg.InstallationID, gen)`; the client's own `Authorization` value is absent upstream.
-- AC17. Shutdown. Setup: one open proxied stream, one streaming waiter. Action: `Shutdown` with a 30 s context; fake upstream never finishes. Expected: waiter gets in-stream `shutting_down` at t≈0; stream gets in-stream `shutting_down` at 25 s on the fake clock; `Shutdown` returns before 30 s; the fake controller sees no `SetDesired`. (FR-4.1)
-- AC18. Leases. Action: POST `{owner:"ci",ttlSeconds:1800}` twice, DELETE the id, DELETE again. Expected: 201, 201 with the same id and one `RenewLease` call, 204, 404 `lease_not_found`; `ttlSeconds: 7201` → 400. (FR-4.3)
-- AC19. Status. Expected: JSON has every top-level field above, including `installationId`, `labelPrefix`, `failureCode` equal to the fake `Snapshot`; the body contains neither the fake `SSHHost` value nor `sshPort`. (FR-6.8 fields from CORE-100)
-- AC20. Log redaction. Action: run AC1–AC19 with the slog handler captured. Expected: 0 occurrences of any key, the worker key, a prompt marker string or a completion marker string (NFR-7.7); the gathered registry has only the label values listed in Observability. (C-34)
-- AC21. Overhead. Setup: Ready target, upstream answering at once. Action: 10,000 plain requests. Expected: p99 gateway time minus upstream time < 5 ms. (NFR-10.3)
-- AC22. SDK compatibility (optional job). The official `openai` Python client with `base_url` and `api_key` only completes a chat call, a streamed chat call, `models.list()`, and raises `NotFoundError` for a wrong model and an exception carrying `gpu_cold_start` for an in-stream error. (FR-1.1, FR-1.3)
+- AC1. Auth matrix. Setup: one inference key, one management token. Action: each `/v1` route with no header, `Basic x`, an unknown key, the management token, the inference key. Expected: 401/401/401/403/2xx; 403 body `code` `permission_denied`; `auth_failures_total` = 1 per route for each of `missing`, `malformed`, `unknown_key`, `wrong_surface`; the fake controller sees 0 calls for every non-2xx. (FR-7.2, NFR-8.1)
+- AC2. Body limit. Action: POST of 1,048,577 bytes with a valid key. Expected: 413, `request_too_large`; same body without a key: 401. (NFR-8.5)
+- AC3. Model mismatch. Action: `model: "gpt-4o"`. Expected: 404, `code` `model_not_found`, 0 `Admit` calls, 0 upstream calls. (FR-1.3)
+- AC4. Clamp. Action: `max_tokens: 100000`; then no `max_tokens`. Expected: fake upstream receives 8192 both times; client receives 200; log line has `max_tokens_clamped=true`. (NFR-8.5)
+- AC5. Rate limit. Setup: RPM 60, fake clock frozen. Action: 61 requests. Expected: 60 × 2xx, 1 × 429 with `Retry-After: 1`; after advancing 1 s, one more 2xx; `Admit` count 60. (NFR-8.5)
+- AC6. Error shape. Action: collect every non-2xx body and in-stream error from AC1–AC5, AC9, AC10, AC13–AC16. Expected: 100 % parse into the error schema with non-empty `message`, `type`, `code`. (FR-1.5)
+- AC7. `/v1/models` with the GPU STOPPED and the fake controller panicking on any call. Expected: 200, `data[0].id` = alias, `len(data)` = 1; 1000 sequential calls p99 < 50 ms; 0 `Admit`/`RequestEnd` calls. (FR-1.2, FR-1.7, FR-3.5)
+- AC8. SSE pass-through. Setup: `Admit` returns a fake `RoundTripper`; fake upstream writes 20 chunks, each released by the test through a channel and flushed. Action: streamed request. Expected: each chunk is read by the client < 50 ms (wall clock, loopback) after its upstream flush; bytes identical, including fixture chunks carrying `reasoning_content` and `tool_calls`; no sleeps; `ObserveFirstToken` called exactly once with the admitted generation. (FR-1.1, FR-1.4)
+- AC9. Backend unavailable. Setup: `Admit` returns `ErrBackendUnavailable`; repeat for each public state STOPPED, ALLOCATING, STARTING, LOADING_MODEL, DRAINING, DELETING reported by the fake. Action: one plain and one streamed request per state. Expected: 503; body byte-equal after JSON normalisation to the ADR 0010 §2 body; no `Retry-After` header; `Content-Type: application/json`, no `text/event-stream`; 0 upstream calls; 0 `RequestEnd`; the fake records 0 calls of anything but `Status` and `Admit`. (FR-1.6)
+- AC10. Draining. Setup: `Admit` returns `ErrDraining`. Expected: same response as AC9. (FR-3.8)
+- AC11. No provisioning path. Expected: a grep finds no `Start(`, `Stop(` or `Demand(` call on the controller in `internal/gateway`; the `Controller` interface has exactly the five methods listed. (FR-1.6, R8)
+- AC12. Atomic admission at the deadline (gateway side). Setup: fake controller whose `Admit` succeeds for the first request then switches to `ErrBackendUnavailable` (models the mutex transition). Action: request A, then request B. Expected: A streams to completion with `RequestEnd` 1; B gets AC9's 503; `Admit` 2, `RequestEnd` 1. (FR-3.8)
+- AC13. Disconnect cancels upstream. Setup: fake upstream streaming slowly. Action: client closes after the first chunk. Expected: fake upstream sees `ctx.Done` within 1 s; `RequestEnd` called once with the admitted generation; `requests_total{code="499"}` = 1. (FR-3.2)
+- AC14. `RequestEnd` on every path. Upstream variants: 200 plain, 200 stream, 500, 401, transport error before headers, mid-stream reset, panic in the fake upstream reader, deadline, client cancel, drain cutoff, pod shutdown. Expected: `Admit` count = `RequestEnd` count = 11, each pair with the same generation. (FR-3.2, R9)
+- AC15. Error mapping, asserted on the fake `RoundTripper`. Upstream 500 → 502 `upstream_error` and upstream 401 → 502, each with exactly one `ReportUpstreamFailure(gen)`; transport error before headers with the fake reporting READY → 502 `upstream_error` and one `ReportUpstreamFailure`; mid-stream reset with READY → in-stream `upstream_error` then `data: [DONE]` and one `ReportUpstreamFailure`. (FR-5.6)
+- AC16. Drain cutoff. Setup: fake clock; a streamed request admitted while READY; the fake upstream streams one chunk every 10 s for 90 s; at t=0 the fake switches `Status()` to DRAINING; at t=60 s it closes the `RoundTripper`'s connection (models CORE-050's cutoff). Expected: chunks for t<60 s delivered; at t=60 s the client reads `data: {"error":{…"code":"backend_unavailable"…}}` then `data: [DONE]`; 0 `ReportUpstreamFailure`; `RequestEnd` 1 at t=60 s. Plain variant: 503 `backend_unavailable`, no `Retry-After`. (FR-3.7)
+- AC17. SSRF and worker key. Expected: every request observed by the fake `RoundTripper` has `URL.Host == "worker"`; a grep finds no `SSHHost`, `SSHPort`, `tunnel.` or `net.Dial` in `internal/gateway`. Upstream `Authorization` equals `Bearer ` + `worker.WorkerKey(seed, cfg.InstallationID, gen)`; the client's own `Authorization` value is absent upstream. The crafted-document test belongs to CORE-050. (NFR-8.4, C-18)
+- AC18. Shutdown. Setup: one open proxied stream. Action: `Shutdown` with a 30 s context; fake upstream never finishes. Expected: the stream gets in-stream `shutting_down` at 25 s on the fake clock; `RequestEnd` 1; `Shutdown` returns before 30 s; the fake controller sees no call besides `Status`, `Admit`, `RequestEnd`, `ObserveFirstToken`. (FR-4.1)
+- AC19. Log redaction. Action: run AC1–AC18 with the slog handler captured. Expected: 0 occurrences of any key, token, the seed, the worker key, a prompt marker string or a completion marker string; the gathered registry has only the label values listed in Observability; `pending_requests` = 0 and `cold_start_outcomes_total` = 0. (NFR-8.7, C-34)
+- AC20. Overhead. Setup: `Admit` succeeds, upstream answering at once. Action: 10,000 plain requests. Expected: p99 gateway time minus upstream time < 5 ms. (NFR-11.3)
+- AC21. SDK compatibility (optional job). The official `openai` Python client with `base_url` and `api_key` only completes a chat call, a streamed chat call, `models.list()`; raises `NotFoundError` for a wrong model; raises `InternalServerError` carrying `backend_unavailable` against a STOPPED fake after its default retries (research §4: 5xx is retried twice); raises on an in-stream `backend_unavailable` event. (FR-1.1, FR-1.3, FR-1.6)
 
 ## Definition of done
 
-- [ ] AC1–AC21 pass in CI; AC22 runs as the `sdk-compat` job; `make specs-check` passes.
-- [ ] `/readyz` includes `KeysLoaded`; `main` wires `New` and `Shutdown`.
+- [ ] AC1–AC20 pass in CI; AC21 runs as the `sdk-compat` job; `make specs-check` passes.
+- [ ] `/readyz` includes `auth.Keys.Loaded`; `main` wires `auth.Load`, `New`, `Shutdown` and mounts `/v1/` and CORE-055's `/api/v1/` on one mux.
 - [ ] Status flipped to DONE in the same PR, folder renamed to `060-D-gateway-openai-api`.
 - [ ] Evidence section filled.
 
@@ -378,10 +385,12 @@ prompts, completions, worker keys (C-16, ADR 0009 §5, NFR-7.7).
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| NFR-7.4 "crafted store document with a foreign address is rejected" | the gateway dials nothing, so it cannot test this | CORE-050 | tested in CORE-050's tunnel/reconcile ACs |
-| OpenAI error `type`/`code` vocabulary, `model_not_found`, the `/v1/models` object fields, and whether the Python SDK raises on a `data: {"error":…}` event are not in research.md | SDK exception mapping, OpenCode model match (research §4), in-stream errors (ADR 0007 §2) | AC22 job; add research §4 rows | values above; assumed the SDK raises |
-| Does llama-server honour `max_completion_tokens`, return OpenAI-shaped 4xx bodies, send one token per SSE chunk, send `usage` in streams? | clamp, error pass-through, tokens/s accuracy | CORE-030 / AC22 | clamp both fields; wrap non-conforming 4xx; chunk count as an estimate |
-| Admin-key rotation changes every derived worker key | the running worker rejects the gateway | CORE-110 | worker 401 → 502 + `ReportUpstreamFailure`; the instance is replaced |
+| NFR-8.4 "crafted store document with a foreign address is rejected" | the gateway dials nothing, so it cannot test this | CORE-050 | tested in CORE-050's tunnel/reconcile ACs |
+| OpenAI error `type`/`code` vocabulary, `model_not_found`, the `/v1/models` object fields, and whether the Python SDK raises on a `data: {"error":…}` event are not in research.md | SDK exception mapping, OpenCode model match (research §4), in-stream errors | AC21 job; add research §4 rows | values above; assumed the SDK raises |
+| Does llama-server honour `max_completion_tokens`, return OpenAI-shaped 4xx bodies, send one token per SSE chunk, send `usage` in streams? | clamp, error pass-through, tokens/s accuracy | CORE-030 / AC21 | clamp both fields; wrap non-conforming 4xx; chunk count as an estimate |
+| How CORE-050 ends admitted requests at the drain cutoff | the gateway detects it only through a transport error plus `Status()` DRAINING/DELETING | CORE-050 | close the tunnel `Conn` at `drainTimeout`; state stays DRAINING or DELETING until `RequestEnd` count reaches zero |
+| llama-server's deferred queue has no documented cap (research §2) | many concurrent admitted requests wait inside the worker, bounded only by `generationTimeout` | CORE-140 load run | no gateway queue; `rateLimitPerKeyRPM` limits arrivals |
+| `worker-seed` rotation while an instance runs | derived worker keys change; the running worker rejects the gateway | CORE-110 | worker 401 → 502 + `ReportUpstreamFailure`; the instance is replaced |
 
 ## Evidence
 

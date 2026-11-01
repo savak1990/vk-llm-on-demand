@@ -3,7 +3,7 @@ id: "CORE-000"
 status: "DRAFT"
 updated: "2026-11-01"
 depends_on: []
-adrs: ["0001", "0003", "0004", "0008", "0009"]
+adrs: ["0001", "0003", "0004", "0008", "0009", "0010", "0011", "0012", "0013"]
 ---
 
 # 000 — Constitution
@@ -40,11 +40,12 @@ subsystem's spec and cite the constitution.
 |---|---|
 | C-1 | The GPU is the only expensive resource. Every design choice is judged first by whether it can leave a GPU running unobserved. |
 | C-2 | Every provider mutation (create, destroy) is idempotent under an operation key and bounded by a timeout. A retry can never create a second instance. |
-| C-3 | Every create has a deadline (`gpu.startupDeadline`) and an attempt budget (`gpu.maxProvisionAttemptsPerHour`). Exhaustion means stop and alert, never try harder. |
+| C-3 | Every create has a deadline (`lifecycle.startupTimeout`) and an attempt budget (`lifecycle.safety.maxProvisionAttemptsPerHour`). Exhaustion means stop and alert, never try harder. |
 | C-4 | Destroy is retried until the provider confirms absence. A destroy that keeps failing is an alert, not a log line. |
 | C-5 | Instances are destroyed, never stopped (ADR 0003 §6). |
 | C-6 | The provider's instance list is reconciled against the state store at least every 60 s; an instance carrying our label prefix and unknown to the store is destroyed (ADR 0003 §4). |
-| C-7 | The defaults $30 per month, $0.80 per hour, one instance, 20 minutes idle, 6 hours lifetime are chart defaults and never hard-coded elsewhere. |
+| C-7 | The defaults $30 per month, $0.80 per hour, one instance, 30 minutes rolling inactivity, 60 seconds drain, 12 hours lifetime are chart defaults and never hard-coded elsewhere. |
+| C-7a | Every GPU is subject to the rolling inactivity timeout (ADR 0011); nothing in the inference or management path can disable or extend it except a finished inference request. Provisioning happens only through the management API in the initial release (ADR 0010). |
 | C-8 | The worker exits on its own after `worker.deadManTimeout` without traffic (ADR 0003 §7). |
 | C-9 | A failed read of provider state never triggers a destroy; only a successful observation does, twice in a row. |
 
@@ -61,9 +62,9 @@ subsystem's spec and cite the constitution.
 
 | Id | Rule |
 |---|---|
-| C-14 | No secret, no root domain, no `fqdn` value in Git, chart values, specs, commit messages or CI logs. Placeholders are `<fqdn>` and `lab.example.com`. |
+| C-14 | The repository is public. No secret, no root domain, no `fqdn` value, no token in Git, chart values, specs, examples, fixtures, commit messages or CI logs. Placeholders are `<fqdn>`, `llm.example.com` and `sk-vkllm-REPLACE_ME`. gitleaks runs on every pull request (ADR 0013). |
 | C-15 | Secrets reach the pod by reference to existing Kubernetes Secrets, mounted as files (ADR 0009 §1). |
-| C-16 | Every API request is authenticated before any other work; comparison is constant-time; keys, prompts and completions are never logged or persisted. |
+| C-16 | Every API request is authenticated before any other work; comparison is constant-time; keys, prompts and completions are never logged or persisted. Inference keys and management tokens are separate lists; each is rejected on the other surface (ADR 0012). |
 | C-17 | The inference port on the worker is never bound to a public interface (ADR 0006 §1). |
 | C-18 | The controller dials only addresses the provider API returned for an instance this installation created; the gateway never dials. |
 | C-19 | Request limits are on by default: body 1 MiB, `max_tokens` cap, per-key rate limit. |
@@ -112,7 +113,7 @@ subsystem's spec and cite the constitution.
 ## Tests / acceptance criteria
 
 - AC1. `make specs-check` reports `SPECS-CHECK: specs/ layout is valid.`
-- AC2. Every spec `010`–`140` cites at least one `C-n` rule.
+- AC2. Every spec `010`–`180` cites at least one `C-n` rule.
 
 ## Definition of done
 

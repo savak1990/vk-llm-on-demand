@@ -2,7 +2,12 @@
 
 ## Status
 
-Accepted (2026-11-01).
+Accepted (2026-11-01). §5 (idle rule, lifetime, drain) and the lease clamp
+are amended by [ADR 0011](0011-rolling-inactivity-timeout.md): a 30-minute
+rolling inactivity deadline measured from readiness and the end of the
+last inference, no workflow leases, `maxLifetime` 12h, `drainTimeout` 60s.
+The public state names of ADR 0011 §6 map onto §2 below. Demand-triggered
+provisioning (§2 "demand") applies only to on-demand mode (ADR 0010).
 
 ## Context
 

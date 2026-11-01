@@ -46,9 +46,11 @@ authenticated in both directions.
 4. llama-server additionally requires `--api-key` with a per-instance key
    passed through the provider environment, so a process on the same host
    cannot use the loopback port. The key is derived, not stored:
-   `base64url(HMAC-SHA256(adminKey, "worker:" + installationId + ":" + generation))`,
-   so a restarted control plane can re-adopt a running instance without
-   persisting the key anywhere.
+   `base64url(HMAC-SHA256(workerSeed, "worker:" + installationId + ":" + generation))`,
+   where `workerSeed` is the `worker-seed` key of the `<release>-api-keys`
+   Secret (ADR 0012 §3), so a restarted control plane can re-adopt a running
+   instance without persisting the key anywhere, and rotating management
+   tokens never forces a re-provision.
 5. The controller dials only the `ssh_host`/`ssh_port` the provider API returned
    for the instance id it created. No address from configuration or request
    input is ever dialed. This is the SSRF boundary.

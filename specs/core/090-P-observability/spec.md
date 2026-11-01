@@ -3,18 +3,20 @@ id: "CORE-090"
 status: "DRAFT"
 updated: "2026-11-01"
 depends_on: ["CORE-050", "CORE-060"]
-adrs: ["0003", "0006", "0007", "0009"]
+adrs: ["0003", "0006", "0007", "0009", "0010", "0011", "0012"]
 ---
 
 # 090 — Observability
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists. Specs
-050 and 060 are being written in the same wave from their briefs; this spec
-is the single metric catalog and reconciles every name the four other
-specs (020, 040, 050, 060) and spec 070 already use or propose.
+**Status note:** DRAFT, written 2026-11-01 before any code exists; updated
+2026-11-01 for explicit provisioning (ADR 0010), the rolling inactivity
+timeout (ADR 0011) and the management API (ADR 0012). Specs 050, 055 and
+060 are being updated in the same wave from their briefs; this spec is the
+single metric catalog and reconciles every name the five other specs (020,
+040, 050, 055, 060) and spec 070 already use or propose.
 
 **Complexity:** M
-**Risk:** medium — this is the one place that must stay consistent as five
+**Risk:** medium — this is the one place that must stay consistent as six
 other packages each add metrics and log fields independently
 **Estimated effort:** one session (4–6 h)
 **Recommended model:** standard
@@ -28,7 +30,7 @@ the process-wide `*prometheus.Registry`, the `slog` JSON logger with
 redaction, and request-id propagation. Every metric any package in this
 repository emits appears, under one name, in the catalog below. A Grafana
 dashboard ConfigMap and a `PrometheusRule` with four alerts ship with the
-chart. `curl :9090/metrics` on a kind cluster shows exactly the 37
+chart. `curl :9090/metrics` on a kind cluster shows exactly the 43
 catalogued metric families and no label outside the bounded enumerations.
 
 ## Scope
@@ -53,8 +55,8 @@ catalogued metric families and no label outside the bounded enumerations.
 
 Excludes: the `ServiceMonitor` object (rendered by CORE-080, referenced
 only, §"ServiceMonitor" below); the business logic that decides *when* a
-metric changes (that lives in 020/040/050/060/070/100, each cited per row
-in the catalog); Loki query definitions (platform default, out of scope).
+metric changes (that lives in 020/040/050/055/060/070/100, each cited per
+row in the catalog); Loki query definitions (platform default, out of scope).
 
 ## Design and contracts
 
@@ -136,20 +138,26 @@ requires pre-initializing every declared combination at startup.
 
 | Name | Type | Labels (allowed values) | Help | Source |
 |---|---|---|---|---|
-| `vkllm_gateway_requests_total` | counter | `route`∈{chat_completions,models,admin_warmup,admin_status,admin_leases_create,admin_leases_delete,admin_scale,other}; `code`∈{200,201,202,204,400,401,403,404,405,413,429,499,500,502,503,504,stream_error} | Gateway HTTP requests by route and status code | 060 |
+| `vkllm_gateway_requests_total` | counter | `route`∈{chat_completions,models,other}; `code`∈{200,400,401,403,404,405,413,429,499,500,502,503,504,stream_error} | Gateway HTTP requests by route and status code | 060 |
 | `vkllm_gateway_active_requests` | gauge | none | Requests currently proxied to the worker | 060 |
-| `vkllm_gateway_pending_requests` | gauge | none | Requests queued waiting for the GPU (ADR 0007 §2) | 060 |
-| `vkllm_gateway_wait_seconds` | histogram | none | Time a request spent in the pending queue | 060 |
+| `vkllm_gateway_pending_requests` | gauge | none | On-demand only (ADR 0010 §4); registered, always 0 in explicit mode. Requests queued waiting for the GPU (ADR 0007 §2) | 060 |
+| `vkllm_gateway_wait_seconds` | histogram | none | On-demand only; no observations in explicit mode. Time a request spent in the pending queue | 060 |
 | `vkllm_gateway_request_seconds` | histogram | `route` (same set) | End-to-end gateway handling time, excluding upstream generation | 060 |
 | `vkllm_gateway_ttft_seconds` | histogram | none | Time to first streamed token once proxying started | 060 |
 | `vkllm_gateway_output_tokens_per_second` | histogram | none | Output decode rate observed per completed request | 060 |
-| `vkllm_gateway_cold_start_outcomes_total` | counter | `outcome`∈{ready,gpu_cold_start,queue_full,gpu_unavailable,client_gone,shutting_down} | How a cold-start wait resolved | 060 |
-| `vkllm_gateway_auth_failures_total` | counter | `reason`∈{missing,malformed,unknown_key,admin_required} | Rejected `/v1`\|`/admin/v1` requests (NFR-7.1) | 060 |
-| `vkllm_gpu_state` | gauge | `state`∈{Idle,Searching,Creating,Booting,Loading,Ready,Serving,Draining,Destroying} | One-hot: 1 for the current state, 0 for the other eight | 050 |
+| `vkllm_gateway_cold_start_outcomes_total` | counter | `outcome`∈{ready,gpu_cold_start,queue_full,gpu_unavailable,client_gone,shutting_down} | On-demand only; always 0 in explicit mode. How a cold-start wait resolved | 060 |
+| `vkllm_gateway_auth_failures_total` | counter | `reason`∈{missing,malformed,unknown_key,wrong_surface} | Rejected `/v1` requests; `wrong_surface` is shared with `/api/v1`'s mirror case (ADR 0012 §3, FR-7.2) | 060 |
+| `vkllm_gateway_cancelled_streams_total` | counter | none | Streamed requests ended by a client disconnect before the upstream finished (same event as `requests_total{code="499"}`); FR-3.2, NFR-10.1 | 060 |
+| `vkllm_mgmt_requests_total` | counter | `op`∈{start,status,stop,cost,other}; `code`∈{200,202,400,401,403,404,405,413,429,500,503} | Management API requests by operation and status code (ADR 0012 §1) | 055 |
+| `vkllm_mgmt_request_seconds` | histogram | `op` (same set) | Management API handling time | 055 |
+| `vkllm_gpu_state` | gauge | `state`∈{STOPPED,ALLOCATING,STARTING,LOADING_MODEL,READY,DRAINING,DELETING,FAILED} | One-hot: 1 for the current public state (ADR 0011 §6), 0 for the other seven | 050 |
 | `vkllm_provision_attempts_total` | counter | `outcome`∈{ok,no_offer,provider_error,deadline_exceeded,attempts_exhausted,budget_exhausted,failed_status,lost,cancelled} | Provisioning attempts by how they ended (ADR 0003 §4–5) | 050 |
 | `vkllm_coldstart_stage_seconds` | histogram | `stage`∈{search,create,boot,link,download,load,ready,first_token} | Duration of each cold-start stage (architecture §4) | 050 |
 | `vkllm_gpu_uptime_seconds_total` | counter | none | Cumulative seconds an instance has existed | 050 |
-| `vkllm_gpu_idle_seconds` | gauge | none | Seconds since `max(lastRequestAt, readyAt)` while Ready with 0 in flight; 0 otherwise | 050 |
+| `vkllm_gpu_idle_seconds` | gauge | none | Seconds since `max(readyAt, lastInferenceFinishedAt)` while Ready with 0 in flight; 0 otherwise (ADR 0011 §1) | 050 |
+| `vkllm_gpu_idle_deadline_seconds` | gauge | none | `idleDeadline` as unix seconds; 0 when STOPPED or no deadline set (ADR 0011 §1, FR-3.1) | 050 |
+| `vkllm_gpu_last_inference_finished_seconds` | gauge | none | `lastInferenceFinishedAt` as unix seconds; 0 before the first `RequestEnd` (ADR 0011 §2, FR-3.2) | 050 |
+| `vkllm_shutdowns_total` | counter | `reason`∈{idle,manual,lifetime,budget,failure,orphan} | Once per drain or failure entry, post-commit (ADR 0011 §1, §3) | 050 |
 | `vkllm_destroy_attempts_total` | counter | `outcome`∈{ok,retryable,terminal,fatal} (provider `Error.Class`, spec 020) | Destroy calls by outcome | 050 |
 | `vkllm_orphans_destroyed_total` | counter | none | Instances destroyed because the provider listed them and the store did not (ADR 0003 §4) | 050 |
 | `vkllm_reconcile_runs_total` | counter | `outcome`∈{ok,error} | Reconcile loop ticks | 050 |
@@ -174,7 +182,7 @@ requires pre-initializing every declared combination at startup.
 | `vkllm_cost_instance_usd` | gauge | none | Estimated cost of the current instance so far; 0 when no instance exists | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 | `vkllm_provider_balance_usd` | gauge | none | Last observed Vast.ai account balance (research §1.5) | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 
-37 metric families total. The pull interval for the inference metrics is 15 s over
+43 metric families total. The pull interval for the inference metrics is 15 s over
 the tunnel while the instance is `Ready` or `Serving` (ADR 0006
 §Consequences: llama-server metrics are pulled and re-exported, never
 scraped directly); the loop itself is CORE-050's.
@@ -184,7 +192,7 @@ scraped directly); the loop itself is CORE-050's.
 | Metric | Buckets (seconds) |
 |---|---|
 | `vkllm_gateway_wait_seconds`, `vkllm_coldstart_stage_seconds` | 1, 5, 15, 30, 60, 120, 240, 480, 900 |
-| `vkllm_gateway_request_seconds`, `vkllm_gateway_ttft_seconds`, `vkllm_provider_request_seconds` | `prometheus.DefBuckets` |
+| `vkllm_gateway_request_seconds`, `vkllm_gateway_ttft_seconds`, `vkllm_provider_request_seconds`, `vkllm_mgmt_request_seconds` | `prometheus.DefBuckets` |
 | `vkllm_gateway_output_tokens_per_second` | 1, 5, 10, 20, 40, 80, 160 |
 
 CORE-140's acceptance run records whether these need retuning (Open
@@ -245,7 +253,7 @@ added later without a spec update.
 `ConfigMap` `<release>-dashboard-observability`, label `grafana_dashboard:
 "1"` (the platform's kube-prometheus-stack dashboard-sidecar convention;
 not itself verified in research.md, see Open questions), key
-`dashboard.json`, namespace `{{ .Release.Namespace }}`. Seven panels:
+`dashboard.json`, namespace `{{ .Release.Namespace }}`. Nine panels:
 
 | Panel | Type | Query |
 |---|---|---|
@@ -256,6 +264,8 @@ not itself verified in research.md, see Open questions), key
 | Spend MTD vs budget | stat + gauge | `vkllm_budget_used_ratio` and `vkllm_cost_instance_usd` |
 | Provisioning outcomes | bar chart | `sum by (outcome) (increase(vkllm_provision_attempts_total[1h]))` |
 | Orphan events | time series | `increase(vkllm_orphans_destroyed_total[1h])` |
+| Idle deadline countdown | stat | `vkllm_gpu_idle_deadline_seconds - time()` (ADR 0011 §1; 0 or negative while STOPPED or no deadline) |
+| Shutdowns by reason | bar chart | `sum by (reason) (increase(vkllm_shutdowns_total[1h]))` |
 
 The JSON itself is written when the dashboard is built against a running
 Grafana (Open questions); this spec fixes the panel list and queries so
@@ -274,7 +284,7 @@ provisioning (create-side) failure: the remediation is different (a stuck
 destroy risks unbounded GPU billing; a provisioning failure risks no
 service). `VkllmDestroyStuck` uses `vkllm_gpu_state` with a `for:` clause
 rather than a new counter, because "destroy keeps failing" and "the state
-machine has been stuck in `Destroying` for 10 minutes" are the same
+machine has been stuck in `DELETING` for 10 minutes" are the same
 observable fact and the state gauge already exists.
 
 The `PrometheusRule` CRD wraps one `groups` list under `spec`, which is
@@ -303,10 +313,10 @@ spec:
           labels: {severity: critical}
           annotations: {summary: "GPU provisioning is failing or exhausted its hourly attempt budget"}
         - alert: VkllmDestroyStuck
-          expr: vkllm_gpu_state{state="Destroying"} == 1
+          expr: vkllm_gpu_state{state="DELETING"} == 1
           for: 10m
           labels: {severity: critical}
-          annotations: {summary: "An instance has been destroying for over 10 minutes"}
+          annotations: {summary: "An instance has been deleting for over 10 minutes"}
         - alert: VkllmBudgetHigh
           expr: vkllm_budget_used_ratio >= 0.8
           labels: {severity: warning}
@@ -319,17 +329,18 @@ retried on the next demand, not a failure.
 
 ## Requirements
 
-- R1. The catalog table above MUST be the only source of metric names; a package MUST NOT register a `vkllm_`-prefixed series not listed here without updating this spec in the same change. (source: NFR-9.1, NFR-9.2, NFR-9.3, C-34)
-- R2. Every metric label value set MUST be the bounded enumeration listed; no label MAY carry a request id, key id, instance id or IP address. (source: C-34, C-16)
-- R3. `AuditCardinality` MUST run in CI against a registry built from every real collector and MUST fail the build on a denylisted label name. (source: C-34)
+- R1. The catalog table above MUST be the only source of metric names; a package MUST NOT register a `vkllm_`-prefixed series not listed here without updating this spec in the same change. (source: NFR-10.1, NFR-10.2, NFR-10.4, C-34)
+- R2. Every metric label value set MUST be the bounded enumeration listed; no label MAY carry a request id, key id, instance id or IP address. (source: NFR-10.5, C-34, C-16)
+- R3. `AuditCardinality` MUST run in CI against a registry built from every real collector and MUST fail the build on a denylisted label name. (source: NFR-10.5, C-34)
 - R4. `RedactingHandler` MUST strip `authorization`, `prompt`, `messages` and `content` from a log record whether set via `Handle` or via a logger built with `Logger.With(...)`. (source: C-16, ADR 0009 §5)
 - R5. No log line MAY contain the literal value of a key, token or SSH private key material. (source: C-16, ADR 0009 §5)
 - R6. `/metrics`, `/healthz` and `/readyz` MUST be served on `:9090` only; `:9090` MUST NOT be exposed through the gateway's `:8080` mux. (source: architecture §6)
-- R7. `RequestIDMiddleware` MUST generate a 32-character lowercase-hex id when the inbound `X-Request-Id` does not match `^[0-9a-f]{32}$`, and MUST echo the id on every response. (source: NFR-9.4)
-- R8. `internal/obs` MUST register `vkllm_budget_used_ratio`, `vkllm_cost_estimated_usd_total`, `vkllm_cost_instance_usd`, `vkllm_provider_balance_usd` and `vkllm_inference_scrape_errors_total` directly, pre-initialized, so the catalog is complete independent of CORE-100's and CORE-070's status. (source: NFR-9.3, FR-6.4, FR-6.8)
+- R7. `RequestIDMiddleware` MUST generate a 32-character lowercase-hex id when the inbound `X-Request-Id` does not match `^[0-9a-f]{32}$`, and MUST echo the id on every response. (source: NFR-10.5)
+- R8. `internal/obs` MUST register `vkllm_budget_used_ratio`, `vkllm_cost_estimated_usd_total`, `vkllm_cost_instance_usd`, `vkllm_provider_balance_usd` and `vkllm_inference_scrape_errors_total` directly, pre-initialized, so the catalog is complete independent of CORE-100's and CORE-070's status. (source: NFR-10.4, FR-6.4, FR-6.8)
 - R9. Every metric with a label MUST have every declared label-value combination initialized to zero at process start, so `/metrics` always lists the full combination set. (source: C-34, golden-list testability)
-- R10. The `PrometheusRule` MUST contain exactly four alerts in one group and MUST pass `promtool check rules` with exit code 0. (source: NFR-9.5)
-- R11. The dashboard ConfigMap MUST carry the label `grafana_dashboard: "1"` and exactly seven panels. (source: NFR-9.5)
+- R10. The `PrometheusRule` MUST contain exactly four alerts in one group and MUST pass `promtool check rules` with exit code 0. (source: NFR-10.6)
+- R11. The dashboard ConfigMap MUST carry the label `grafana_dashboard: "1"` and exactly nine panels. (source: NFR-10.6)
+- R12. `vkllm_gpu_state`'s `state` label MUST carry only the eight public states; the controller MUST emit `PublicState()`, never an internal stage name. (source: ADR 0011 §6)
 
 ## Implementation steps
 
@@ -338,27 +349,28 @@ retried on the next demand, not a failure.
 3. `RequestIDMiddleware`, context helpers. Test: `TestRequestIDRoundTrip` (no header → 32-hex generated and echoed; malformed header → replaced; valid header → reused).
 4. `AuditCardinality`, `DeniedMetricLabels`. Test: `TestAuditCatchesDenylistedLabel` (register a throwaway `CounterVec` with label `instance_id`, assert the audit returns an error naming it).
 5. The five obs-owned metrics and setters. Test: `TestObsOwnedMetricsPreInitialized` (fresh registry, `Gather()` before any `Set`/`Add`/`Inc` call shows all five families present with zero value).
-6. `Catalog()` plus the golden-list test. Test: `TestCatalogGolden` (register one fake collector per package per the catalog, call every setter/initializer so every label combination exists once, `Gather()`, assert the sorted family-name list has exactly 37 entries equal to `Catalog()`'s names).
+6. `Catalog()` plus the golden-list test. Test: `TestCatalogGolden` (register one fake collector per package per the catalog, call every setter/initializer so every label combination exists once, `Gather()`, assert the sorted family-name list has exactly 43 entries equal to `Catalog()`'s names).
 7. Scrape-error delta test. Test: `TestInferenceScrapeErrorIncrement` (fixture: a 500 from the worker `/metrics` endpoint increments `vkllm_inference_scrape_errors_total` by 1 and `vkllm_inference_up` reads 0 — the rest of the mapping is CORE-070 AC11, not repeated here).
-8. The dashboard ConfigMap's `dashboard.json` with the seven panels above. Test: `TestDashboardSchema` — `jq -e '(.panels | length) == 7 and (.panels | all(.targets[0].expr | test("vkllm_")))' dashboard.json` exits 0.
+8. The dashboard ConfigMap's `dashboard.json` with the nine panels above. Test: `TestDashboardSchema` — `jq -e '(.panels | length) == 9 and (.panels | all(.targets[0].expr | test("vkllm_")))' dashboard.json` exits 0.
 9. The `PrometheusRule`'s four alerts. Test: `yq '.spec' prometheusrule.yaml | promtool check rules /dev/stdin` exits 0 and reports `4 rules found`.
 
 ## Tests / acceptance criteria
 
-- AC1. `TestCatalogGolden` passes: `Gather()` returns exactly 37 family names, equal to `Catalog()`'s 37 names, sorted; `vkllm_coldstart_stage_seconds` carries exactly 8 `stage` label values. (R1, R9, NFR-9.1, NFR-9.2, NFR-9.3, FR-2.4)
-- AC2. `TestAuditCatchesDenylistedLabel`: a `CounterVec{"instance_id"}` registered into a scratch registry makes `AuditCardinality` return a non-nil error whose message contains `instance_id`. A registry built only from the real catalog returns nil. (R2, R3, NFR-9.4)
-- AC3. `TestRedactionWithAttrsChain`: `logger.With("authorization", "Bearer sk-vkllm-xxxx").Info("auth check")` produces JSON output that does not contain the substring `sk-vkllm-xxxx`. Same for `prompt`, `messages`, `content`. (R4, R5, NFR-7.2, NFR-7.7, NFR-9.4)
-- AC4. `TestRequestIDRoundTrip`: a request with no `X-Request-Id` gets a response header matching `^[0-9a-f]{32}$`; a request with `X-Request-Id: not-valid` gets a *different* 32-hex value back; a request with `X-Request-Id: ` + a valid 32-hex value gets that exact value back. (R7, NFR-9.4)
+- AC1. `TestCatalogGolden` passes: `Gather()` returns exactly 43 family names, equal to `Catalog()`'s 43 names, sorted; `vkllm_coldstart_stage_seconds` carries exactly 8 `stage` label values; `vkllm_gpu_state` carries exactly 8 `state` label values, all from the public-state enumeration. (R1, R9, R12, NFR-10.1, NFR-10.2, NFR-10.4, FR-2.4)
+- AC2. `TestAuditCatchesDenylistedLabel`: a `CounterVec{"instance_id"}` registered into a scratch registry makes `AuditCardinality` return a non-nil error whose message contains `instance_id`. A registry built only from the real catalog returns nil. (R2, R3, NFR-10.5)
+- AC3. `TestRedactionWithAttrsChain`: `logger.With("authorization", "Bearer sk-vkllm-xxxx").Info("auth check")` produces JSON output that does not contain the substring `sk-vkllm-xxxx`. Same for `prompt`, `messages`, `content`. (R4, R5, NFR-8.2, NFR-8.7)
+- AC4. `TestRequestIDRoundTrip`: a request with no `X-Request-Id` gets a response header matching `^[0-9a-f]{32}$`; a request with `X-Request-Id: not-valid` gets a *different* 32-hex value back; a request with `X-Request-Id: ` + a valid 32-hex value gets that exact value back. (R7, NFR-10.5)
 - AC5. `TestObsOwnedMetricsPreInitialized`: immediately after `NewRegistry()` plus obs's own registration, `Gather()` shows `vkllm_budget_used_ratio` 0, `vkllm_cost_estimated_usd_total` 0, `vkllm_cost_instance_usd` 0, `vkllm_provider_balance_usd` 0, `vkllm_inference_scrape_errors_total` 0. (R8)
-- AC6. On a kind cluster with the fake provider, `curl :9090/metrics` returns HTTP 200 and `grep -c '^# TYPE vkllm_'` on the body (one `# TYPE` line per family regardless of `_bucket`/`_sum`/`_count` suffixes) equals `37`. (R1, R6)
-- AC7. `jq` schema check on the rendered dashboard JSON exits 0 for the expression in implementation step 8; a dashboard with 6 panels fails it. (R11, NFR-9.5)
-- AC8. `yq '.spec' prometheusrule.yaml | promtool check rules /dev/stdin` exits 0 and its output reports `4 rules found`. A fifth bogus rule added to a scratch copy changes that count, proving the test is not vacuous. (R10, NFR-9.5)
-- AC9. `TestInferenceScrapeErrorIncrement`: a fixture upstream returning 500 on `GET /metrics` leaves `vkllm_inference_up` at 0 and `vkllm_inference_scrape_errors_total` at 1 after one pull cycle. (R8, NFR-9.3)
-- AC10. `promtool test rules` against a rules-test file that sets `vkllm_budget_used_ratio` to 0.79 at t=0 then 0.8 at t=1m: `VkllmBudgetHigh` is `inactive` at t=0 and `firing` at t=1m. (R10, FR-6.4)
+- AC6. On a kind cluster with the fake provider, `curl :9090/metrics` returns HTTP 200 and `grep -c '^# TYPE vkllm_'` on the body (one `# TYPE` line per family regardless of `_bucket`/`_sum`/`_count` suffixes) equals `43`. (R1, R6)
+- AC7. `jq` schema check on the rendered dashboard JSON exits 0 for the expression in implementation step 8; a dashboard with 8 panels fails it. (R11, NFR-10.6)
+- AC8. `yq '.spec' prometheusrule.yaml | promtool check rules /dev/stdin` exits 0 and its output reports `4 rules found`. A fifth bogus rule added to a scratch copy changes that count, proving the test is not vacuous. (R10, NFR-10.6)
+- AC9. `TestInferenceScrapeErrorIncrement`: a fixture upstream returning 500 on `GET /metrics` leaves `vkllm_inference_up` at 0 and `vkllm_inference_scrape_errors_total` at 1 after one pull cycle. (R8, NFR-10.3)
+- AC10. `promtool test rules` against a rules-test file that sets `vkllm_budget_used_ratio` to 0.79 at t=0 then 0.8 at t=1m: `VkllmBudgetHigh` is `inactive` at t=0 and `firing` at t=1m. (R10, FR-6.4, NFR-10.6)
+- AC11. `promtool test rules` against a rules-test file that sets `vkllm_gpu_state{state="DELETING"}` to 1 at t=0 and holds it: `VkllmDestroyStuck` is `inactive` at t=9m and `firing` at t=11m. (R10, NFR-10.6)
 
 ## Definition of done
 
-- [ ] AC1–AC10 pass in CI.
+- [ ] AC1–AC11 pass in CI.
 - [ ] `make specs-check` passes.
 - [ ] Status flipped to DONE in the same pull request, folder renamed `090-D-observability`.
 - [ ] Evidence section filled with the real `/metrics` output from a kind run and the rendered dashboard/rule files.
@@ -370,6 +382,8 @@ retried on the next demand, not a failure.
 | Histogram bucket boundaries above are a starting guess, not measured | Wrong buckets make `histogram_quantile` noisy without being wrong enough to fail a test | CORE-140's acceptance run | Keep the buckets above; CORE-140 records whether `_bucket` samples cluster at the edges and this spec is amended if so |
 | Exact Grafana dashboard JSON (panel ids, Grafana schema version, datasource UID templating) | Needs a real Grafana instance to author against | Implementation time, against the platform's kube-prometheus-stack Grafana | Panel list and queries above are fixed; JSON structure is mechanical from them |
 | The `grafana_dashboard: "1"` sidecar label and the log level being fixed (no `log.level` key) are not confirmed facts in research.md | C-32 forbids unverified facts as code assumptions | Verify the sidecar label against the platform's kube-prometheus-stack chart values at implementation time; add `log.level` to architecture §9 if runtime-configurable logging turns out to be needed | Keep the label as written; keep log level fixed at `info` |
+| CORE-050's own Observability table and simulation ACs (e.g. AC1, AC3, AC22) still emit `vkllm_gpu_state` with the nine internal `State.String()` values (`Idle`, `Searching`, `Creating`, `Booting`, `Loading`, `Ready`, `Serving`, `Draining`, `Destroying`), not the eight public states this catalog defines (R12, ADR 0011 §6) | Two specs disagree on the only label of a one-hot gauge; whichever ships first makes the other's dashboard panel and `VkllmDestroyStuck` alert wrong | CORE-050, before either spec leaves DRAFT | This catalog is authoritative (R1); CORE-050 must change the setter to `PublicState()` and its fixtures to the eight public-state names in its next revision |
+| `vkllm_gateway_cancelled_streams_total` is added here to satisfy NFR-10.1 ("cancelled streams"), but CORE-060's own text and AC13 describe only `requests_total{code="499"}` on disconnect, not this counter | A metric this spec lists but no implementing spec increments fails AC6/AC1 trivially (always zero, never exercised) | CORE-060, before either spec leaves DRAFT | CORE-060 increments it at the same point it records `code="499"` (one `RequestEnd` call, same disconnect) |
 
 ## Evidence
 

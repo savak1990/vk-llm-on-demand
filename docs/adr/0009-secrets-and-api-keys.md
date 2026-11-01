@@ -8,9 +8,9 @@ contract (§1–2) is final regardless.
 
 ## Context
 
-The MVP needs four secrets: the Vast.ai API key (issued by Vast), one or more
-gateway client API keys (generated), an admin key (generated), and an SSH
-key pair for the worker tunnel (generated; the public half is registered in
+The MVP needs five secret values: the Vast.ai API key (issued by Vast), one or
+more inference client keys (generated), one or more management tokens
+(generated), a worker seed (generated), and an SSH key pair for the worker tunnel (generated; the public half is registered in
 the Vast account). The brief forbids committing keys, asks for Kubernetes or
 externally managed Secrets, bearer-token compatibility, no OAuth, and a
 rotation story.
@@ -29,7 +29,7 @@ that path or GitHub repository secrets.
 | Value | Secret keys | Used by |
 |---|---|---|
 | `existingSecrets.provider` | `VAST_API_KEY` | provider client |
-| `existingSecrets.apiKeys` | `client-keys` (one key per line), `admin-key` | gateway auth |
+| `existingSecrets.apiKeys` | `client-keys` (inference, one per line), `management-tokens` (one per line), `worker-seed` (32 random bytes) | gateway auth, management API auth, worker key derivation (ADR 0006 §4, ADR 0012 §3) |
 | `existingSecrets.ssh` | `id_ed25519` (private key), optional `known_hosts` seed | tunnel dialer |
 
 The chart never creates these Secrets from values. Anyone can install the
@@ -40,7 +40,7 @@ requires recreating them by hand. §3 is the path that survives rebuilds.
 
 ### 2. Key format and validation
 
-Client and admin keys are `sk-vkllm-` followed by 32 random bytes encoded
+Client keys and management tokens are `sk-vkllm-` followed by 32 random bytes encoded
 base64url, generated locally with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`
 (a `make keygen` target prints one). The gateway loads the keys at start and
 on Secret change (file watch on the mounted volume), compares with
@@ -50,7 +50,7 @@ plaintext keys in the Secret; storing only hashes is the recorded upgrade.
 ### 3. Delivery on the platform
 
 Source of truth for the platform installation is SSM Parameter Store under
-`/<project>/apps/vk-llm-on-demand/{vast-api-key,client-keys,admin-key,ssh-private-key}`,
+`/<project>/apps/vk-llm-on-demand/{vast-api-key,client-keys,management-tokens,worker-seed,ssh-private-key}`,
 populated from committed ciphertext files
 `secrets/<project>/vk-llm-on-demand-<name>.enc`, one file per value, exactly
 as the platform does for its own secrets. The platform pull request in spec
@@ -68,12 +68,14 @@ of truth. They remain available for CI-only needs.
 - **Client keys:** add the new key as a new line, roll it out (the pod
   reloads on Secret change), move clients, remove the old line. Zero
   downtime.
-- **Admin key and Vast key:** replace the value; the pod reloads. A failed
-  Vast key is detected by the next provider call and raised as an alert, not
-  a crash.
-- **SSH key:** rotate only while `desired` is 0 and the state is Idle:
+- **Management tokens:** same list procedure as client keys; the CLI and
+  GitHub Actions can hold different tokens. **Vast key:** replace the value;
+  the pod reloads. A failed Vast key is detected by the next provider call and
+  raised as an alert, not a crash. **Worker seed:** rotate only while the GPU
+  is STOPPED; a running instance's derived key would stop matching.
+- **SSH key:** rotate only while the GPU is STOPPED (`desired` STOPPED, no instance):
   generate a new pair, register the public key in the Vast account, replace
-  the Secret, set `desired` back to 1. Instances created afterwards use the
+  the Secret, then start again. Instances created afterwards use the
   new key. There is no dual-key window in the MVP.
 - Rotation steps are a runbook in spec 110.
 
@@ -81,7 +83,8 @@ of truth. They remain available for CI-only needs.
 
 Authorization headers, prompts, completions, provider keys, SSH material.
 Logs carry request ids, key ids (the first 8 characters after the prefix),
-sizes and timings.
+sizes and timings. An inference key is never accepted on `/api/v1/*` and a
+management token never on `/v1/*` (ADR 0012 §3).
 
 ## Alternatives considered
 

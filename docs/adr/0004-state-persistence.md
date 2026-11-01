@@ -3,7 +3,12 @@
 ## Status
 
 Accepted (2026-11-01). Supersedes the brief's working assumption of
-PostgreSQL after the discussion recorded below.
+PostgreSQL after the discussion recorded below. Re-evaluated against the
+2026-11-01 update, which again prefers PostgreSQL; the decision stands
+(ADR 0010 Context). Document fields amended by [ADR 0011](0011-rolling-inactivity-timeout.md):
+`desired` is `RUNNING|STOPPED`; `instance` gains `readyAt`,
+`lastInferenceFinishedAt`, `idleDeadline`; `leases` is removed; a `cache`
+field is reserved for [ADR 0014](0014-persistent-volume-cache-and-preferred-host.md).
 
 ## Context
 
@@ -29,23 +34,26 @@ key `state.json` holding a versioned JSON document:
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "installationId": "4f2c1a9b0e77",
   "generation": 7,
-  "desired": 1,
+  "desired": "RUNNING",
   "instance": {
-    "providerId": "12345678", "label": "vkllm:4f2c…:7", "state": "Ready",
+    "providerId": "12345678", "label": "vkllm:4f2c1a9b0e77:7", "state": "Ready",
     "offer": {"machineId": 1, "gpu": "L40S", "dph": 0.71, "inetDown": 850},
     "sshHost": "ssh5.vast.ai", "sshPort": 12345,
-    "createdAt": "…", "readyAt": "…", "lastError": ""
+    "createdAt": "…", "readyAt": "…", "lastInferenceFinishedAt": "…", "idleDeadline": "…",
+    "lastError": ""
   },
   "ops": [{"key": "create-7", "startedAt": "…", "outcome": "ok"}],
   "attemptsThisHour": {"hour": "2026-11-01T14", "count": 1},
-  "activity": {"lastRequestAt": "…"},
-  "leases": [{"id": "…", "owner": "opencode", "expiresAt": "…"}],
-  "ledger": {"month": "2026-11", "totalUsd": 3.42, "entries": [{"gen": 7, "start": "…", "end": null, "dph": 0.71}]}
+  "ledger": {"month": "2026-11", "totalUsd": 3.42, "entries": [{"gen": 7, "start": "…", "end": null, "dph": 0.71}]},
+  "cache": null
 }
 ```
+
+(Schema 2 as amended by ADR 0011; schema 1 had `desired` 0/1, `activity`
+and `leases`.)
 
 In-flight request counts stay in process memory; they are meaningless
 across a restart.

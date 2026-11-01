@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted (2026-11-01).
+Accepted (2026-11-01). Extended by [ADR 0013](0013-public-repo-security-and-cli-release.md):
+scanning jobs in the PR gate and a GoReleaser-built `vk-llm` release in the
+tag job. The chart's `existingSecrets.apiKeys` Secret now carries
+`client-keys`, `management-tokens` and `worker-seed` (ADR 0012 §3).
 
 ## Context
 

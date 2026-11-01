@@ -63,20 +63,27 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [020](core/020-P-vastai-provider-client/spec.md) | Vast.ai provider client and offer filter | 010 |
 | [030](core/030-P-worker-launch-spike/spec.md) | Spike: launch mode, tunnel, cold-start timings | 020 |
 | [040](core/040-P-state-store/spec.md) | ConfigMap state store with optimistic concurrency | 010 |
-| [050](core/050-P-gpu-lifecycle-controller/spec.md) | GPU lifecycle controller and reconcile loop | 020, 040 |
-| [060](core/060-P-gateway-openai-api/spec.md) | OpenAI-compatible gateway, auth, streaming, cold-start wait | 040, 050 |
+| [050](core/050-P-gpu-lifecycle-controller/spec.md) | GPU lifecycle controller, 30-minute rolling idle, immediate stop, reconcile loop | 020, 040 |
+| [055](core/055-P-management-api/spec.md) | Management API `/api/v1/gpu/*`, management tokens | 050 |
+| [060](core/060-P-gateway-openai-api/spec.md) | OpenAI-compatible gateway, inference keys, streaming, `backend_unavailable` | 040, 050 |
 | [070](core/070-P-worker-runtime/spec.md) | Worker onstart, model download, llama-server contract | 030 |
 | [080](core/080-P-helm-chart/spec.md) | Helm chart `gpu-on-demand` | 060 |
 | [090](core/090-P-observability/spec.md) | Metrics catalog, logs, dashboard, alerts | 050, 060 |
 | [100](core/100-P-cost-controls/spec.md) | Budget, limits, orphan sweep, cost visibility | 050 |
 | [110](core/110-P-security-and-secrets/spec.md) | Keys, rotation, limits, SSRF, threat model | 060, 080 |
-| [120](core/120-P-release-pipeline/spec.md) | Publish, deploy and release workflows, OCI chart | 010, 080 |
+| [120](core/120-P-release-pipeline/spec.md) | Publish, deploy and release workflows, OCI chart, GoReleaser CLI binaries | 010, 080 |
 | [130](core/130-P-platform-integration/spec.md) | Pointer Application and secrets path in `vk-lab-platform` | 080, 110, 120 |
-| [140](core/140-P-e2e-acceptance/spec.md) | Scripted acceptance run on a real GPU instance | 070, 080, 100 |
+| [140](core/140-P-e2e-acceptance/spec.md) | Scripted acceptance run on a real GPU instance | 070, 080, 100, 150, 160 |
+| [150](core/150-P-vk-llm-cli/spec.md) | `vk-llm` CLI: start, status, stop | 055 |
+| [160](core/160-P-github-actions-remote-control/spec.md) | `gpu-control.yml` manual workflow | 055 |
+| [170](core/170-P-security-ci-and-release/spec.md) | gitleaks, govulncheck, trivy, SECURITY.md, release checklist | 010, 120 |
+| [180](core/180-P-persistent-volume-cache/spec.md) | P2: persistent-volume cache and preferred host (not in the initial release) | 020, 050 |
 
 ## Order of work
 
 Implement in numeric order, except that 030 (the spike) runs as soon as 020
-can create an instance, because ADR 0006 waits on its result. Vertical
-slices: after 060 a request can start a GPU and stream a completion; after
-080 the chart installs it; after 120 it ships from `main`.
+can create an instance, because ADR 0006 waits on its result, and 180 waits
+for the initial release. Vertical slices: after 055 the GPU can be started
+and stopped through the API; after 060 a started GPU streams a completion;
+after 080 the chart installs it; after 120 it ships from `main`; after 150
+and 160 a laptop and GitHub can drive it.

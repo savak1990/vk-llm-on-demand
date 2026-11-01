@@ -3,7 +3,7 @@ id: "CORE-120"
 status: "DRAFT"
 updated: "2026-11-01"
 depends_on: ["CORE-010", "CORE-080"]
-adrs: ["0008"]
+adrs: ["0008", "0013"]
 ---
 
 # 120 — Release pipeline
@@ -11,10 +11,10 @@ adrs: ["0008"]
 **Status note:** DRAFT, written 2026-11-01 before any code exists.
 
 **Complexity:** S — adapts three proven workflow files and one doc from
-`vk-ahorro`; no new design, one component instead of two.
-**Risk:** low — the pattern already runs in production in the sibling
-repository (ADR 0008); the only new risk is action-SHA drift between the
-two repos (ADR 0008 Risks).
+`vk-ahorro`, plus one new `.goreleaser.yaml` convention (ADR 0013 §3).
+**Risk:** low — the workflow pattern runs in production in the sibling
+repository; new risks are action-SHA drift and GoReleaser's own supply
+chain, both mitigated by pinning and checksums (ADR 0008/0013 Risks).
 **Estimated effort:** one session (3–5 h)
 **Recommended model:** standard — mechanical adaptation, no novel design.
 **Depends on:** CORE-010 (Go module, Makefile skeleton, `ci.yml`), CORE-080
@@ -25,10 +25,11 @@ two repos (ADR 0008 Risks).
 A commit merged to `main` publishes an image and a chart tagged
 `X.Y.Z-main.<sha7>` to GHCR with no human action and no cluster write. A
 maintainer runs the `release` GitHub Action by hand (or `make release
-BUMP=patch`) and gets a clean `X.Y.Z` image, chart and git tag `vX.Y.Z`,
-with the tag written only after both artifacts exist. Anyone, logged in or
-not, can `docker pull` or `helm pull` any published version from GHCR. A
-pull request run never reaches GHCR.
+BUMP=patch`) and gets a clean `X.Y.Z` image, chart, git tag `vX.Y.Z`
+(written only after both artifacts exist), and a GitHub Release `vX.Y.Z`
+carrying four `vk-llm` binaries and a `checksums.txt`. Anyone, logged in
+or not, can `docker pull`, `helm pull`, or download a CLI binary for any
+published version. A pull request never reaches GHCR or GitHub Releases.
 
 ## Scope
 
@@ -39,7 +40,12 @@ pull request run never reaches GHCR.
   `main` version, calls `publish.yml`. No cluster deploy.
 - `.github/workflows/release.yml`: `workflow_dispatch` with a `bump`
   choice, computes the release version, calls `publish.yml`, then tags the
-  repository — tag job last, gated on publish success.
+  repository — tag job last, gated on publish success. The same `tag` job
+  then runs GoReleaser to cut the `vk-llm` CLI binaries onto the GitHub
+  Release for that tag (ADR 0013 §3).
+- `.goreleaser.yaml`: builds `cmd/vk-llm` for `darwin`/`linux` ×
+  `amd64`/`arm64`, archives and checksums the result, and publishes it to
+  the GitHub Release the `tag` job's `git push` just created.
 - `docs/delivery.md` for this repository: channels, versioning, promotion
   to `vk-lab-platform`, artifact retention, invariants.
 - GHCR package visibility (public) and the untagged-manifest cleanup
@@ -60,7 +66,12 @@ fake-worker image CORE-080's kind integration tests use
 (`docs/testing-strategy.md` tier 2) — it is a CI-only test double that
 `publish.yml` never builds or pushes; the platform-side pointer
 `Application` and `AppProject` that consume the published chart
-(CORE-130); mobile/Android artifacts — not applicable here.
+(CORE-130); mobile/Android artifacts — not applicable here; `cmd/vk-llm`'s
+source and the CLI's command behaviour, config precedence and output
+format (CORE-150 — this spec only builds and publishes the binary
+CORE-150 defines); the `ci.yml` job running AC7's GoReleaser snapshot
+dry run (CORE-010, per the first Excludes clause above) and the secret,
+dependency and image scanning jobs ADR 0013 §1 adds to `ci.yml` (CORE-170).
 
 ## Design and contracts
 
@@ -156,6 +167,7 @@ jobs:
   publish:   # needs: version; uses ./.github/workflows/publish.yml, no go/flutter flags → full copy
   tag:       # needs: [version, publish]; permissions: contents: write
              # git tag vX.Y.Z && git push origin vX.Y.Z
+             # goreleaser/goreleaser-action@<sha> # vN, after the tag push
 ```
 
 The `tag` job runs only if `publish` succeeds — GitHub Actions' default
@@ -165,6 +177,37 @@ a failed publish produces no tag. This is the same ordering
 ("The tag is written only after every artifact exists, so a failed
 publish never leaves a tag naming a version nobody can pull"; research
 §6).
+
+### CLI release (GoReleaser)
+
+The `tag` job's last step, after `git push origin vX.Y.Z` succeeds, runs
+GoReleaser against the tag it just pushed (ADR 0013 §3). It uses the
+job's existing `contents: write` permission — the same grant that pushed
+the tag — and needs no broader one, because it only attaches assets to
+the GitHub Release for that tag:
+
+| `.goreleaser.yaml` key | Value |
+|---|---|
+| `builds[0].main` | `./cmd/vk-llm` |
+| `builds[0].goos` | `darwin`, `linux` |
+| `builds[0].goarch` | `amd64`, `arm64` |
+| `builds[0].env` | `CGO_ENABLED=0` |
+| `builds[0].flags` | `-trimpath` |
+| `builds[0].ldflags` | `-s -w -X main.version={{.Version}}` |
+| `archives` | one archive per `goos`/`goarch` pair — four total |
+| `checksum.name_template` | `checksums.txt` |
+| `release` | GitHub Release `vX.Y.Z` (the pushed tag), generated notes, no signing in the MVP (ADR 0013 Alternatives: cosign deferred) |
+
+The step is `goreleaser/goreleaser-action@<sha> # vN`, pinned the same
+way R4 requires every other `uses:` step (SHA copied at implementation
+time, not from this spec or from `docs/research.md` §6, which
+recommends GoReleaser but gives no version or SHA for it); its
+`with: version:` input pins the GoReleaser binary itself, also read at
+implementation time — neither value is known today (Open questions
+Q36). `GITHUB_TOKEN` reaches the step via `env:` from
+`secrets.GITHUB_TOKEN`, never echoed or logged (NFR-8.8). GoReleaser
+builds only `cmd/vk-llm` (CORE-150); the `publish` job's image and
+chart are unaffected and keep their own version, not the CLI's.
 
 ### Permissions and pinning
 
@@ -226,7 +269,7 @@ fixed by any file in `vk-ahorro` either — see Open questions.
 - R5. `deploy.yml` MUST NOT perform any `helm upgrade`, `helm install`, or
   other write to a Kubernetes cluster. (source: ADR 0008 §2, Alternatives)
 - R6. `release.yml`'s `tag` job MUST depend on `publish` succeeding, so a
-  failed publish leaves no git tag. (source: NFR-8.3)
+  failed publish leaves no git tag. (source: NFR-9.3)
 - R7. `publish.yml` MUST NOT rebuild the image when the `go` input is
   `'false'`; it MUST copy the prior commit's manifest via `docker buildx
   imagetools create` instead. (source: ADR 0008 §2; research §6)
@@ -234,12 +277,23 @@ fixed by any file in `vk-ahorro` either — see Open questions.
   request run MUST produce no GHCR artifact. (source: ADR 0008 §2; C-21)
 - R9. The published chart MUST install with `helm pull
   oci://ghcr.io/savak1990/vk-llm-on-demand/charts/gpu-on-demand --version
-  X.Y.Z` with no `helm registry login`. (source: NFR-8.3; C-23)
+  X.Y.Z` with no `helm registry login`. (source: NFR-9.3; C-23)
 - R10. `docs/delivery.md` MUST state the promotion path from a released
   version to the platform as: bump the chart version pinned in
   `gitops/values.yaml` in this repository, then open a one-line pull
   request in `vk-lab-platform`. This repository MUST hold no platform code.
   (source: ADR 0008 §5; C-24)
+- R11. The `tag` job's GoReleaser step MUST run only after the git tag
+  push succeeds, and MUST publish exactly four archives
+  (`darwin`/`linux` × `amd64`/`arm64`) plus one `checksums.txt` to the
+  GitHub Release named after that tag. (source: ADR 0013 §3; FR-7.7)
+- R12. The GoReleaser action and the GoReleaser binary version it runs
+  MUST both be pinned (full commit SHA with a trailing version comment
+  for the action; an explicit version for the binary), the same rule R4
+  states for every other action. (source: ADR 0013 §3; C-22; Open
+  questions Q36)
+- R13. The GoReleaser step MUST NOT request any permission beyond the
+  `tag` job's own `contents: write`. (source: ADR 0013 §3; C-22)
 
 ## Implementation steps
 
@@ -255,13 +309,20 @@ fixed by any file in `vk-ahorro` either — see Open questions.
    prints `0`.
 4. Write `release.yml` (version, publish, tag jobs). Test: `actionlint`
    passes; the `tag` job's `needs:` array contains `publish`.
-5. Write `docs/delivery.md` with sections: versions and channels, the
+5. Write `.goreleaser.yaml` and add the GoReleaser step to the `tag` job,
+   after the `git push origin vX.Y.Z` step, with the action SHA and
+   GoReleaser version read from GoReleaser's current release at
+   implementation time (Open questions Q36). Test: `goreleaser check`
+   reports the config valid; `actionlint .github/workflows/release.yml`
+   still passes; `grep -c "contents: write" .github/workflows/release.yml`
+   prints `1` (no permission added beyond the existing `tag` job grant).
+6. Write `docs/delivery.md` with sections: versions and channels, the
    pipeline per channel, promotion to the platform, artifact retention,
    invariants. Test: `grep` finds a heading matching each of the five
    topics by keyword (`versions`, `pipeline`, `promotion`, `artifact`,
    `invariant`), not merely a count of `^# ` lines (wave-1 review
    finding #32).
-6. Set both GHCR packages public and configure the untagged-manifest
+7. Set both GHCR packages public and configure the untagged-manifest
    cleanup after the first `publish.yml` run succeeds once in CI. Test:
    `docker pull ghcr.io/savak1990/vk-llm-on-demand/gpu-on-demand:<version>`
    and `helm pull oci://ghcr.io/savak1990/vk-llm-on-demand/charts/gpu-on-demand
@@ -280,13 +341,13 @@ fixed by any file in `vk-ahorro` either — see Open questions.
   `X.Y.Z-main.<sha7>` (7 hex chars), and chart tag `X.Y.Z-main.<sha7>` under
   `charts/gpu-on-demand`. Verified with `docker buildx imagetools inspect
   ghcr.io/savak1990/vk-llm-on-demand/gpu-on-demand:X.Y.Z-main.<sha7>`
-  returning exit code 0. (R1, R2, NFR-8.3)
+  returning exit code 0. (R1, R2, NFR-9.3)
 - AC3. `workflow_dispatch` with `bump=patch` on a repository at `v0.3.0`:
   `release.yml`'s `version` job outputs `0.3.1`; the `tag` job runs only
   after `publish` reports success; the result is git tag `v0.3.1` pointing
   at the dispatched commit, and `helm pull
   oci://ghcr.io/savak1990/vk-llm-on-demand/charts/gpu-on-demand --version
-  0.3.1` exits 0. (R6, R9, NFR-8.3)
+  0.3.1` exits 0. (R6, R9, NFR-9.3)
 - AC4. The same dispatch, with the `images` job forced to fail: the `tag`
   job's status is `skipped` (GitHub Actions default `needs` behavior), no
   new git tag exists afterward, and `git tag --points-at HEAD` before and
@@ -296,10 +357,23 @@ fixed by any file in `vk-ahorro` either — see Open questions.
   `helm registry login` call exits 0. (R9, C-23)
 - AC6. `grep -c "permissions: {}" .github/workflows/{publish,deploy,release}.yml`
   reports exactly one match per file, at the top of the file. (R3)
+- AC7. A release dry run — `goreleaser release --snapshot --clean` run
+  in `ci.yml` (CORE-010, on a diff touching `cmd/vk-llm/**` or
+  `.goreleaser.yaml`) — exits 0 and leaves exactly four archives under
+  `dist/` named `vk-llm_<version>_<goos>_<goarch>.*` for the four
+  `darwin`/`linux` × `amd64`/`arm64` pairs, plus one `dist/checksums.txt`
+  listing all four. No GitHub Release is created by a snapshot run.
+  (R11, FR-7.7)
+- AC8. A real `release.yml` dispatch whose `tag` job succeeds: the
+  GitHub Release `vX.Y.Z` it produces has exactly four archive assets
+  and one `checksums.txt` asset attached, each downloadable with
+  `curl -fsSL` and no authentication, and the `checksums.txt` entries
+  verify against the downloaded archives with `sha256sum -c`. (R11, R12,
+  FR-7.7, NFR-9.3)
 
 ## Definition of done
 
-- [ ] AC1–AC6 pass, demonstrated by a real run of each workflow (deploy on
+- [ ] AC1–AC8 pass, demonstrated by a real run of each workflow (deploy on
       a scratch branch merged to a throwaway `main`, or GitHub's "re-run"
       on the actual repository once seeded) — not `act`, which cannot run
       `docker buildx imagetools create` or OCI `helm push` realistically.
@@ -314,10 +388,11 @@ fixed by any file in `vk-ahorro` either — see Open questions.
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| Is GHCR's untagged-manifest cleanup a native package setting or a scheduled workflow? No file in `vk-ahorro` implements either — only the stated invariant in its `docs/delivery.md` §5. | Decides whether this spec needs a fourth workflow file (`cleanup.yml`) or only a manual toggle. | Implementation step 6, checked against `vk-ahorro`'s current GHCR package settings at that time | No new workflow file; use GitHub's package-level cleanup-policy UI setting, matching the absence of such a workflow in `vk-ahorro`. |
+| Is GHCR's untagged-manifest cleanup a native package setting or a scheduled workflow? No file in `vk-ahorro` implements either — only the stated invariant in its `docs/delivery.md` §5. | Decides whether this spec needs a fourth workflow file (`cleanup.yml`) or only a manual toggle. | Implementation step 7, checked against `vk-ahorro`'s current GHCR package settings at that time | No new workflow file; use GitHub's package-level cleanup-policy UI setting, matching the absence of such a workflow in `vk-ahorro`. |
 | Exact commit SHAs for pinned actions. | R4 requires a full SHA, and `docs/research.md` §6 explicitly forbids copying SHAs from itself. | Implementation steps 2–4, read directly from `vk-ahorro`'s current workflow files | Copy verbatim from `vk-ahorro/.github/workflows/{publish,deploy,release}.yml` at implementation time. |
-| Does a brand-new GHCR package default to private, requiring the manual toggle in step 6 before AC5 can pass on the first release? | AC5 is an anonymous-pull test; if visibility isn't public yet it fails for a reason unrelated to the pipeline. | Implementation step 6, first real run | Assume private-by-default; toggle public manually once, immediately after the first successful `publish.yml` run. |
+| Does a brand-new GHCR package default to private, requiring the manual toggle in step 7 before AC5 can pass on the first release? | AC5 is an anonymous-pull test; if visibility isn't public yet it fails for a reason unrelated to the pipeline. | Implementation step 7, first real run | Assume private-by-default; toggle public manually once, immediately after the first successful `publish.yml` run. |
 | Does the required status check (`ci-ok`) and branch protection setup belong to this spec or to CORE-010? | ADR 0008 Consequences mentions `make repo-settings` for the required check; CORE-010 owns `ci.yml` itself. | CORE-010's spec | CORE-010 owns `repo-settings` and the `ci-ok` check; this spec only adds the GHCR visibility and cleanup steps. |
+| Q36: GoReleaser action and binary versions, and whether GitHub Releases on a personal repository need extra permissions beyond `contents: write`. | R12/AC8 need a real pinned SHA and version; `docs/research.md` §6 recommends GoReleaser but gives no version or SHA. | Implementation step 5, read directly from GoReleaser's current release at that time (`docs/open-questions.md` Q36) | `contents: write` on the `tag` job only; no extra permission. |
 
 ## Evidence
 

@@ -10,7 +10,7 @@ Never reference specific documents (specs, ADRs, tickets) in code comments. Expl
 
 ## Project purpose
 
-`vk-llm-on-demand` is a Go control plane that exposes an OpenAI-compatible API and rents a GPU instance (Vast.ai first) only while requests arrive. It is deployed onto the separate platform repository `vk-lab-platform`, but its Helm chart must install into any Kubernetes cluster.
+`vk-llm-on-demand` is a Go control plane that exposes an OpenAI-compatible API and rents a GPU instance (Vast.ai first) that the user starts explicitly and that a 30-minute rolling inactivity timeout or `vk-llm stop` releases. It is deployed onto the separate platform repository `vk-lab-platform`, but its Helm chart must install into any Kubernetes cluster.
 
 This repository holds the control plane, the worker launch scripts, the Helm chart and the release pipeline. It MUST NOT hold platform code. Platform changes (Argo pointer Application, External Secrets policy, SSM parameters) go to `vk-lab-platform` as a pull request; spec `core/130` lists them.
 
@@ -30,7 +30,11 @@ Short version, for orientation only:
 - State is one ConfigMap JSON document written with `resourceVersion` optimistic concurrency; the provider instance list is reconciled against it every minute (ADR 0004).
 - Model weights download from Hugging Face on every provision, checksum verified (ADR 0005).
 - The controller opens an SSH tunnel to the worker and hands the gateway a transport; llama-server never listens on a public interface (ADR 0006, Proposed).
-- Cold starts are covered by holding the request up to `gateway.maxWait` with SSE heartbeats, then `503` + `Retry-After` (ADR 0007).
+- Provisioning is explicit: `vk-llm start` or `POST /api/v1/gpu/start`; inference with no GPU returns `backend_unavailable`; on-demand mode is future (ADR 0010, ADR 0007).
+- Every GPU is destroyed 30 minutes after the last inference finished (rolling, from readiness if none); `stop` drains for 60 s and destroys at once; no leases (ADR 0011).
+- The management API `/api/v1/gpu/*` uses management tokens; the inference API `/v1/*` uses inference keys; `vk-llm` and `gpu-control.yml` are thin clients (ADR 0012).
+- gitleaks, govulncheck and trivy run as pinned binaries in the PR gate; the `vk-llm` CLI ships via GoReleaser on GitHub Releases (ADR 0013).
+- Persistent-volume caching and preferred-host scheduling are P2 (ADR 0014, Proposed).
 - The pipeline and chart conventions copy `vk-ahorro` (ADR 0008).
 - Runtime secrets reach the cluster through the platform's KMS ciphertext → SSM → External Secrets path (ADR 0009, Proposed).
 
@@ -40,13 +44,13 @@ Short version, for orientation only:
 
 The GPU is the only expensive thing. Every provider mutation is idempotent, every create is bounded by a deadline and an attempt budget, every destroy is retried until the provider confirms absence, and anything carrying our label that the state store does not know is destroyed. Never weaken one of these to make a test or a feature easier.
 
-Defaults the user set: monthly budget $30, maximum hourly price $0.80, one instance, idle timeout 20 minutes.
+Defaults the user set: monthly budget $30, maximum hourly price $0.80, one instance, 30-minute rolling inactivity timeout, 60-second drain on manual stop.
 
 ---
 
 ## Nothing sensitive in Git
 
-No secret, no root domain, and no `fqdn` value is ever committed — not in code, not in a chart value, not in a spec, a commit message, a pull request body, or a CI log. Use `<root-domain>` or `lab.example.com` where a shape must be shown. API keys, prompts and completions are never logged.
+This repository is public. No secret, no root domain, and no `fqdn` value is ever committed — not in code, not in a chart value, not in a spec, a commit message, a pull request body, or a CI log. Use `<root-domain>` or `lab.example.com` where a shape must be shown. API keys, prompts and completions are never logged.
 
 ---
 
@@ -84,7 +88,7 @@ Do not silently change a requirement to make implementation easier. If requireme
 
 ## Go rules
 
-Standard library first: `net/http` with method patterns, `log/slog`, `context` everywhere, `errors.Is/As`. Allowed third-party modules are listed in `specs/core/010`; adding one needs an ADR. Interfaces exist where a second implementation exists or a test needs a fake (provider, store, tunnel dialer, clock). No framework.
+Standard library first: `net/http` with method patterns, `log/slog`, `context` everywhere, `errors.Is/As`, `flag` for the CLI. Allowed third-party modules are listed in `specs/core/010`; adding one needs an ADR. Interfaces exist where a second implementation exists or a test needs a fake (provider, store, tunnel dialer, clock). No framework.
 
 ---
 

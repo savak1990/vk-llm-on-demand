@@ -3,7 +3,7 @@ id: "CORE-070"
 status: "DRAFT"
 updated: "2026-11-01"
 depends_on: ["CORE-020", "CORE-030"]
-adrs: ["0002", "0003", "0005", "0006", "0009"]
+adrs: ["0002", "0003", "0005", "0006", "0009", "0011"]
 ---
 
 # 070 — Worker runtime
@@ -57,15 +57,15 @@ sends `env` as a JSON object). Nothing is rendered into the script text.
 | `CTX` | `model.contextSize` | `32768` | no |
 | `PARALLEL` | `model.parallel` | `1` | no |
 | `WORKER_API_KEY` | `WorkerKey(...)` (ADR 0006 §4) | 43 chars base64url | **yes** |
-| `DEADMAN_SECONDS` | `worker.deadManTimeout` in seconds | `1800` | no |
+| `DEADMAN_SECONDS` | `lifecycle.idleShutdown.timeout + 10m` in seconds (ADR 0011 §5) | `2400` | no |
 | `REASONING_FORMAT` | constant `deepseek` (ADR 0002 §3) | `deepseek` | no |
 | `NGL`, `POLL_SECONDS` | tests only, never set by `BuildCreate` | `0`, `1` | no |
 
 ### Worker key
 
 ```go
-// base64url(HMAC-SHA256(adminKey, "worker:"+installationID+":"+generation)), no padding.
-func WorkerKey(adminKey []byte, installationID string, generation int64) string
+// base64url(HMAC-SHA256(workerSeed, "worker:"+installationID+":"+generation)), no padding.
+func WorkerKey(workerSeed []byte, installationID string, generation int64) string
 ```
 
 The key is derived, never stored (ADR 0006 §4). Raw base64url of 32 bytes is
@@ -81,7 +81,7 @@ type CreateParams struct {
     Label          string        // vkllm:<installation-id>:<generation>
     ModelURL, ModelSHA256, Alias string
     Ctx, Parallel  int
-    DeadMan        time.Duration // worker.deadManTimeout
+    DeadMan        time.Duration // lifecycle.idleShutdown.timeout + 10m
     WorkerKey      string
 }
 func BuildCreate(p CreateParams) (provider.CreateRequest, error)
@@ -237,9 +237,9 @@ so a worker whose control plane vanished during the download also stops.
 On expiry `fail idle_exit 0` runs. An `exited` instance stops GPU billing;
 storage bills until the reconcile loop destroys it (research §1.5, ADR 0003 §7). CORE-030 M10
 measures which action turns an SSH-mode instance `exited` and whether GPU
-billing stops. The dead-man ends an instance after `worker.deadManTimeout`
-with no inference, lease or not; leases protect against the controller's
-idle rule only (CORE-050).
+billing stops. The dead-man ends an instance after
+`lifecycle.idleShutdown.timeout + 10m` with no inference, regardless of
+controller state (CORE-050).
 
 ### Readiness client
 
@@ -294,7 +294,7 @@ series are absent and `vkllm_inference_up` is 0.
 ### Logs
 
 `slog` JSON, fields `instance_gen`, `stage`, `readiness`, `status_code`,
-`duration_ms`. Never the worker key, the admin key, `env` values or bodies.
+`duration_ms`. Never the worker key, the worker seed, `env` values or bodies.
 
 ### Security
 
@@ -308,9 +308,9 @@ per-generation HMAC key, and no port mapping in bundle A.
 - R3. llama-server MUST NOT listen on any address other than `127.0.0.1`. (source: C-17, ADR 0006 §1, NFR-7.3)
 - R4. The script MUST verify `MODEL_SHA256` before starting llama-server and MUST exit 3 on mismatch. (source: ADR 0005 §1, FR-5.5)
 - R5. The download MUST use `aria2c -x 16 -s 16` when available, else ranged parallel `curl`, and MUST resume a partial file. (source: ADR 0005 §2)
-- R6. The script MUST exit 0 after `DEADMAN_SECONDS` without a change in token counters or a processing request. (source: C-8, ADR 0003 §7, FR-4.7)
+- R6. The script MUST exit 0 after `DEADMAN_SECONDS` without a change in token counters or a processing request. (source: C-8, ADR 0003 §7, FR-4.5)
 - R7. The script MUST NOT write the API key or any `env` value to stdout, stderr or disk. (source: C-16, ADR 0009 §5)
-- R8. `WORKER_API_KEY` MUST be `WorkerKey(adminKey, installationId, generation)`. (source: ADR 0006 §4)
+- R8. `WORKER_API_KEY` MUST be `WorkerKey(workerSeed, installationId, generation)`. (source: ADR 0006 §4)
 - R9. `BuildCreate` MUST set `runtype` `ssh` and MUST NOT add a port-mapping key to `env`. (source: ADR 0006 §1, C-17)
 - R10. `Probe` MUST return `Ready` only after `/health` 200 and `/v1/models` listing the alias. (source: ADR 0002 §4, FR-3.1)
 - R11. The eight `llamacpp:*` metrics MUST be re-exported under the names in the mapping table with no labels. (source: NFR-9.3, C-34)
@@ -338,13 +338,13 @@ per-generation HMAC key, and no port mapping in bundle A.
 - AC4. Key: `WorkerKey([]byte("k"), "i", 7)` equals the vector recorded in the test, is 43 characters, contains no `,`, and differs for generation 8. (R8)
 - AC5. Create: `BuildCreate` with valid params yields `runtype=ssh`, `disk=60`, exactly the eight env keys, no key starting with `-p`; a 63-character sha256 returns an error. (R9, NFR-7.3)
 - AC6. Checksum (stub container, `ubuntu:24.04`, `/app/llama-server` stub, `MODEL_URL=file:///src.bin`, `MODEL_SHA256=bad`): exit code 3 within 10 s, last stage `fail_checksum`, no `server_spawn` line; a `TERM` trap in the container's PID 1 fires. (R4, FR-5.5)
-- AC7. Dead-man (same container, correct sha256, `DEADMAN_SECONDS=3`, `POLL_SECONDS=1`): exit 0 within 6 s of `server_spawn`; stub process gone; `/models/model.gguf` sha256 equals the source; combined stdout, stage log and `/models` listing contain zero matches of the key value. (R5, R6, R7, FR-4.7)
+- AC7. Dead-man (same container, correct sha256, `DEADMAN_SECONDS=3`, `POLL_SECONDS=1`): exit 0 within 6 s of `server_spawn`; stub process gone; `/models/model.gguf` sha256 equals the source; combined stdout, stage log and `/models` listing contain zero matches of the key value. (R5, R6, R7, FR-4.5)
 - AC8. Real image (gated, network, `make test-worker-image`): pinned `server-cuda` digest, tiny GGUF, `NGL=0`, `DEADMAN_SECONDS=20`, `POLL_SECONDS=2`: stage `server_healthy` within 120 s; `Probe` returns `Ready` through a loopback transport; a probe from a second container to `<container-ip>:8080` gets connection refused. (R2, R3, R10, FR-3.1, NFR-7.3)
 - AC9. Same run: one completion sent at t+10 s after `server_healthy` delays `idle_exit` to at least 20 s after that request; then exit 0. (R6)
 - AC10. Probe table: refused → `Unreachable`; 503 → `Loading`; 200 + alias → `Ready`; 200 without alias → `Loading` + error; 401 → error. (R10, FR-3.1)
 - AC11. Metrics: fixture with the eight metrics yields the eight `vkllm_inference_*` values and `vkllm_inference_up 1`; a 500 yields `vkllm_inference_up 0` and no inference series. (R11, NFR-9.3)
 - AC12. Stages: a fixture of eight stage lines plus 20 noise lines parses to eight timestamps; `VKLLM_STAGE x notanumber` returns an error. (FR-2.4 input)
-- AC13. Real host: `exited` behaviour from CORE-030 M10; checksum and dead-man on a real host from CORE-140: altered sha256 → onstart exits 3 within the download time; control plane stopped → instance reaches `exited` within `DEADMAN_SECONDS + 60 s`; external port scan shows only SSH. (FR-5.5, FR-4.7, NFR-7.3)
+- AC13. Real host: `exited` behaviour from CORE-030 M10; checksum and dead-man on a real host from CORE-140: altered sha256 → onstart exits 3 within the download time; control plane stopped → instance reaches `exited` within `DEADMAN_SECONDS + 60 s`; external port scan shows only SSH. (FR-5.5, FR-4.5, NFR-7.3)
 
 AC6–AC9 touch Docker and AC8–AC9 the network, so they run as separate make targets, not in the unit gate (C-29).
 
@@ -377,7 +377,7 @@ Applies only if CORE-030 fails bundle A (ADR 0006 alternative B).
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| Which action turns the container `exited` in SSH mode: script exit, `kill -TERM 1`, or neither? | FR-4.7; otherwise the dead-man frees no GPU billing | settled by CORE-030 M10 | do both, as the script does |
+| Which action turns the container `exited` in SSH mode: script exit, `kill -TERM 1`, or neither? | FR-4.5; otherwise the dead-man frees no GPU billing | settled by CORE-030 M10 | do both, as the script does |
 | Does `onstart` run as root, under bash, with the `env` map exported? | `/models`, `apt-get`, `${!v}` | CORE-030 (Q1) | yes |
 | `--model` and `--alias` are in ADR 0002 but not in the research §2 flag table | R2 | AC8 | ADR 0002 line as written |
 | Does `/metrics` require the API key? | dead-man and `Metrics` | AC8 | send the key always |
@@ -385,7 +385,7 @@ Applies only if CORE-030 fails bundle A (ADR 0006 alternative B).
 | Which tiny public GGUF does AC8 use, and its sha256? | AC8 must be reproducible | this spec's implementation | the smallest public GGUF found then, pinned by URL and sha256 in `testdata` |
 | Does llama-server's default log level print prompt text? | C-16 vs debuggability | AC8 (grep the log for a marker prompt) | discard output |
 | Does `GET /api/v0/instances/{id}` return `env` values, exposing the worker key to Vast account readers? | blast radius of the key | settled by CORE-030 | accept; key is per generation and HMAC-derived |
-| Admin key rotation changes every derived worker key; a running instance cannot be re-adopted after it | ADR 0009 §4 rotation | CORE-110 runbook | rotate the admin key only while Idle |
+| Worker seed rotation changes every derived worker key; a running instance cannot be re-adopted after it | ADR 0009 §4 rotation | CORE-110 runbook | rotate the worker seed only while STOPPED |
 | Should the controller read the stage log through an SSH exec channel? | per-stage precision of `download` vs `load` | CORE-030 | no; `Probe` inference only |
 | `onstart` in `args` mode (Q2) and SSL in the image (Q11) | bundle B only | CORE-030 | B uses its own entrypoint |
 | A download that stalls without failing keeps the script in `download` until the dead-man fires | billing while stuck, if the control plane is also down | CORE-030 timings | dead-man covers it: the idle clock starts at script start |
