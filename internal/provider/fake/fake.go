@@ -198,6 +198,10 @@ func (f *Fake) DestroyInstance(ctx context.Context, id provider.InstanceID) erro
 		f.mu.Unlock()
 		return &provider.Error{Op: "destroy", Class: provider.Retryable, Err: fmt.Errorf("fake destroy failure")}
 	}
+	if _, ok := f.instances[id]; !ok {
+		f.mu.Unlock()
+		return &provider.Error{Op: "destroy", Class: provider.Terminal, Err: fmt.Errorf("instance %d: %w", id, provider.ErrNotFound)}
+	}
 	delete(f.instances, id)
 	f.mu.Unlock()
 	if err := f.wait(ctx, "destroy"); err != nil {

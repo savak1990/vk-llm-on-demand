@@ -208,3 +208,13 @@ func TestFailDestroy(t *testing.T) {
 		t.Errorf("Calls(destroy) = %d, want 4", f.Calls("destroy"))
 	}
 }
+
+func TestDestroyMissingIDReturnsNotFound(t *testing.T) {
+	f := New(clock.Real{})
+	ctx := context.Background()
+
+	err := f.DestroyInstance(ctx, provider.InstanceID(999))
+	if !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("DestroyInstance on a missing id = %v, want ErrNotFound", err)
+	}
+}
