@@ -19,15 +19,18 @@ echo "REPO-SETTINGS: applying to $REPO"
 # PATCH to update parts idempotently.
 if ! gh api "repos/$REPO/branches/$BRANCH/protection" >/dev/null 2>&1; then
   echo "REPO-SETTINGS: creating initial branch protection"
-  gh api -X PUT "repos/$REPO/branches/$BRANCH/protection" \
-    -f required_status_checks='{"strict":false,"checks":[{"context":"ci-ok"}]}' \
-    -F enforce_admins=true \
-    -F required_linear_history=true \
-    -F allow_force_pushes=false \
-    -F allow_deletions=false \
-    -F required_pull_request_reviews=null \
-    -F restrictions=null \
-    --silent
+  cat <<'PROTECTION' |
+{
+  "required_status_checks": {
+    "strict": false,
+    "checks": [{"context": "ci-ok"}]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+PROTECTION
+    gh api -X PUT "repos/$REPO/branches/$BRANCH/protection" --input - --silent
   echo "REPO-SETTINGS: initial protection created"
 fi
 
