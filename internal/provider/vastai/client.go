@@ -128,7 +128,6 @@ func (c *Client) do(ctx context.Context, op string, timeout time.Duration, maxRe
 			continue
 		}
 
-		c.metrics.requestsTotal.WithLabelValues(op, "ok").Inc()
 		return status, body, nil
 	}
 }
@@ -162,6 +161,15 @@ func fatalOrTerminal(op string, status int) *provider.Error {
 	return &provider.Error{Op: op, Class: provider.Terminal, Status: status, Err: fmt.Errorf("request failed")}
 }
 
+// outcomeLabel maps a business-level *provider.Error to the metric label
+// its class warrants; do() only counts retries, so callers own this split.
+func outcomeLabel(err *provider.Error) string {
+	if err.Class == provider.Fatal {
+		return "fatal"
+	}
+	return "terminal"
+}
+
 func decodeJSON(body []byte, v any) error {
 	d := json.NewDecoder(bytes.NewReader(body))
 	return d.Decode(v)
@@ -181,7 +189,9 @@ func (c *Client) SearchOffers(ctx context.Context, f provider.OfferFilter) ([]pr
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, fatalOrTerminal("search", status)
+		fe := fatalOrTerminal("search", status)
+		c.metrics.requestsTotal.WithLabelValues("search", outcomeLabel(fe)).Inc()
+		return nil, fe
 	}
 	var decoded struct {
 		Offers []struct {
@@ -198,8 +208,10 @@ func (c *Client) SearchOffers(ctx context.Context, f provider.OfferFilter) ([]pr
 		} `json:"offers"`
 	}
 	if err := decodeJSON(respBody, &decoded); err != nil {
+		c.metrics.requestsTotal.WithLabelValues("search", "terminal").Inc()
 		return nil, &provider.Error{Op: "search", Class: provider.Terminal, Err: fmt.Errorf("decode offers: %w", err)}
 	}
+	c.metrics.requestsTotal.WithLabelValues("search", "ok").Inc()
 	out := make([]provider.Offer, 0, len(decoded.Offers))
 	for _, o := range decoded.Offers {
 		out = append(out, provider.Offer{
@@ -243,15 +255,20 @@ func (c *Client) GetInstance(ctx context.Context, id provider.InstanceID) (provi
 		return provider.Instance{}, err
 	}
 	if status == http.StatusNotFound {
+		c.metrics.requestsTotal.WithLabelValues("get", "not_found").Inc()
 		return provider.Instance{}, &provider.Error{Op: "get", Class: provider.Terminal, Status: 404, Err: fmt.Errorf("instance %d: %w", id, provider.ErrNotFound)}
 	}
 	if status < 200 || status >= 300 {
-		return provider.Instance{}, fatalOrTerminal("get", status)
+		fe := fatalOrTerminal("get", status)
+		c.metrics.requestsTotal.WithLabelValues("get", outcomeLabel(fe)).Inc()
+		return provider.Instance{}, fe
 	}
 	var dto instanceDTO
 	if err := decodeJSON(body, &dto); err != nil {
+		c.metrics.requestsTotal.WithLabelValues("get", "terminal").Inc()
 		return provider.Instance{}, &provider.Error{Op: "get", Class: provider.Terminal, Err: fmt.Errorf("decode instance: %w", err)}
 	}
+	c.metrics.requestsTotal.WithLabelValues("get", "ok").Inc()
 	return dto.toInstance(), nil
 }
 
@@ -269,13 +286,16 @@ func (c *Client) listPage(ctx context.Context, cursor string) ([]instanceDTO, st
 		return nil, "", err
 	}
 	if status < 200 || status >= 300 {
-		return nil, "", fatalOrTerminal("list", status)
+		fe := fatalOrTerminal("list", status)
+		c.metrics.requestsTotal.WithLabelValues("list", outcomeLabel(fe)).Inc()
+		return nil, "", fe
 	}
 	var decoded struct {
 		Instances  []instanceDTO `json:"instances"`
 		NextCursor string        `json:"next_cursor"`
 	}
 	if err := decodeJSON(body, &decoded); err != nil {
+		c.metrics.requestsTotal.WithLabelValues("list", "terminal").Inc()
 		return nil, "", &provider.Error{Op: "list", Class: provider.Terminal, Err: fmt.Errorf("decode page: %w", err)}
 	}
 	return decoded.Instances, decoded.NextCursor, nil
@@ -302,6 +322,7 @@ func (c *Client) ListInstances(ctx context.Context, labelPrefix string) ([]provi
 		}
 		cursor = next
 	}
+	c.metrics.requestsTotal.WithLabelValues("list", "ok").Inc()
 	return out, nil
 }
 
@@ -313,9 +334,16 @@ func (c *Client) DestroyInstance(ctx context.Context, id provider.InstanceID) er
 	if err != nil {
 		return err
 	}
-	if status < 200 || status >= 300 {
-		return fatalOrTerminal("destroy", status)
+	if status == http.StatusNotFound {
+		c.metrics.requestsTotal.WithLabelValues("destroy", "not_found").Inc()
+		return &provider.Error{Op: "destroy", Class: provider.Terminal, Status: 404, Err: fmt.Errorf("instance %d: %w", id, provider.ErrNotFound)}
 	}
+	if status < 200 || status >= 300 {
+		fe := fatalOrTerminal("destroy", status)
+		c.metrics.requestsTotal.WithLabelValues("destroy", outcomeLabel(fe)).Inc()
+		return fe
+	}
+	c.metrics.requestsTotal.WithLabelValues("destroy", "ok").Inc()
 	return nil
 }
 
@@ -328,13 +356,17 @@ func (c *Client) Balance(ctx context.Context) (provider.Money, error) {
 		return 0, err
 	}
 	if status < 200 || status >= 300 {
-		return 0, fatalOrTerminal("balance", status)
+		fe := fatalOrTerminal("balance", status)
+		c.metrics.requestsTotal.WithLabelValues("balance", outcomeLabel(fe)).Inc()
+		return 0, fe
 	}
 	var decoded struct {
 		Balance float64 `json:"balance"`
 	}
 	if err := decodeJSON(body, &decoded); err != nil {
+		c.metrics.requestsTotal.WithLabelValues("balance", "terminal").Inc()
 		return 0, &provider.Error{Op: "balance", Class: provider.Terminal, Err: fmt.Errorf("decode balance: %w", err)}
 	}
+	c.metrics.requestsTotal.WithLabelValues("balance", "ok").Inc()
 	return provider.Money(decoded.Balance*1e6 + 0.5), nil
 }

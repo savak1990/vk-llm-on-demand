@@ -9,9 +9,40 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 )
+
+// counterValue reads one vkllm_provider_requests_total sample by its op and
+// outcome labels, via Gather so no direct client_model import is needed.
+func counterValue(t *testing.T, reg *prometheus.Registry, op, outcome string) float64 {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "vkllm_provider_requests_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			var gotOp, gotOutcome string
+			for _, l := range m.GetLabel() {
+				switch l.GetName() {
+				case "op":
+					gotOp = l.GetValue()
+				case "outcome":
+					gotOutcome = l.GetValue()
+				}
+			}
+			if gotOp == op && gotOutcome == outcome {
+				return m.GetCounter().GetValue()
+			}
+		}
+	}
+	return 0
+}
 
 func serveFile(t *testing.T, path string) http.HandlerFunc {
 	t.Helper()
@@ -150,6 +181,27 @@ func TestListPageFailure(t *testing.T) { // AC10, with failure: error, nil slice
 	}
 }
 
+func TestGetNotFoundCountsOutcome(t *testing.T) { // regression: 404 must not count as "ok"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, reg := newTestClient(t, srv, c)
+
+	if _, err := cl.GetInstance(context.Background(), 1); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("GetInstance err = %v, want ErrNotFound", err)
+	}
+
+	if notFound := counterValue(t, reg, "get", "not_found"); notFound != 1 {
+		t.Fatalf("not_found count = %v, want 1", notFound)
+	}
+	if ok := counterValue(t, reg, "get", "ok"); ok != 0 {
+		t.Fatalf("ok count = %v, want 0", ok)
+	}
+}
+
 func TestDestroyNotFound(t *testing.T) { // AC11
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -172,6 +224,23 @@ func TestDestroyNotFound(t *testing.T) { // AC11
 	_, err := cl.GetInstance(context.Background(), 1)
 	if !errors.Is(err, provider.ErrNotFound) {
 		t.Fatalf("GetInstance err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDestroyInstanceDirect404(t *testing.T) { // a 404 on the DELETE itself must surface ErrNotFound
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, reg := newTestClient(t, srv, c)
+
+	if err := cl.DestroyInstance(context.Background(), 1); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("DestroyInstance err = %v, want ErrNotFound", err)
+	}
+	if notFound := counterValue(t, reg, "destroy", "not_found"); notFound != 1 {
+		t.Fatalf("not_found count = %v, want 1", notFound)
 	}
 }
 
