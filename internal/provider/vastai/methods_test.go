@@ -45,6 +45,21 @@ func counterValue(t *testing.T, reg *prometheus.Registry, op, outcome string) fl
 	return 0
 }
 
+// rateLimitedValue reads the unlabeled vkllm_provider_rate_limited_total.
+func rateLimitedValue(t *testing.T, reg *prometheus.Registry) float64 {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() == "vkllm_provider_rate_limited_total" {
+			return mf.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	return 0
+}
+
 func serveFile(t *testing.T, path string) http.HandlerFunc {
 	t.Helper()
 	body, err := os.ReadFile(path)

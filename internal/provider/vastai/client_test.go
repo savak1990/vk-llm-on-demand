@@ -68,16 +68,17 @@ func TestBackoff429(t *testing.T) { // AC3
 			_, _ = w.Write([]byte("API requests too frequent endpoint threshold=2"))
 			return
 		}
-		_, _ = w.Write([]byte(`{"id":1,"actual_status":"running","ssh_port":41022,"start_date":1000}`))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"instances":{"id":1,"actual_status":"running","ssh_port":41022,"start_date":1000}}`))
 	}))
 	defer srv.Close()
 
 	c := fakeclock.New(time.Unix(0, 0))
-	cl, _ := newTestClient(t, srv, c)
+	cl, reg := newTestClient(t, srv, c)
 
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := cl.do(context.Background(), "GetInstance", 5*time.Second, 5, getInstanceReq(srv))
+		_, err := cl.GetInstance(context.Background(), 1)
 		done <- err
 	}()
 	// Each 429 triggers one sleep; wait for the request that produced it,
@@ -89,10 +90,23 @@ func TestBackoff429(t *testing.T) { // AC3
 	}
 	<-reqs // the third, successful request
 	if err := <-done; err != nil {
-		t.Fatalf("do returned error: %v", err)
+		t.Fatalf("GetInstance returned error: %v", err)
 	}
 	if attempts != 3 {
 		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+	if got := counterValue(t, reg, "get", "ok"); got != 1 {
+		t.Fatalf("get/ok = %v, want 1", got)
+	}
+	if got := rateLimitedValue(t, reg); got != 2 {
+		t.Fatalf("rate_limited_total = %v, want 2", got)
+	}
+	// FR-5.1: the first retry's delay is in [1s, 2s), the second in [2s, 4s).
+	if d := cl.backoff(0); d < time.Second || d >= 2*time.Second {
+		t.Fatalf("backoff(0) = %v, want [1s, 2s)", d)
+	}
+	if d := cl.backoff(1); d < 2*time.Second || d >= 4*time.Second {
+		t.Fatalf("backoff(1) = %v, want [2s, 4s)", d)
 	}
 }
 
