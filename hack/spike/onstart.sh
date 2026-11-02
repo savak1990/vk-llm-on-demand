@@ -2,6 +2,11 @@
 # Shipped verbatim in the Vast.ai `onstart` field (CORE-030); no functions
 # exported, nothing here is sourced by launch.sh.
 
+if ((BASH_VERSINFO[0] < 5)); then
+  echo "ONSTART: bash >= 5 is required (found ${BASH_VERSION})." >&2
+  exit 1
+fi
+
 log() { printf '%s %s\n' "$EPOCHREALTIME" "$*" >>/root/spike-events.log; }
 
 # Fires 40 min after onstart begins even if the laptop watchdog is gone;
