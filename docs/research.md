@@ -31,6 +31,7 @@ Date of research: 2026-11-01. Re-verify V items older than six months before rel
 | `reliability2` appears in responses ("alternative reliability score") but is not documented as a request filter; `reliability` is the documented filter. New machines start at 60 % | V | https://docs.vast.ai/guides/concepts |
 | Unauthenticated search returned offers in our test | S | observed 2026-11-01 |
 | Live snapshot: 7 verified, rentable 1×L40S on-demand offers at $0.54–$0.92/h, median ≈ $0.80; `reliability2` 0.955–0.999; `cuda_max_good` 12.8–13.4; all 7 had `static_ip=false` | S | our API snapshot, 2026-11-01 |
+| CORE-020 read-only probe, real L40S offers: `inet_down` ~272–4626, `inet_up` ~269–4347, `disk_bw` ~528–20992, `cpu_ram` ~64123–257985. These magnitudes are consistent with the existing MB/s (`inet_*`, `disk_bw`) and MB (`cpu_ram`) assumption, but the probe did not fetch the Vast console UI for the same offer, so this is not an independent console cross-check | S | our API probe, 2026-11-02 |
 
 ### 1.3 Create instance
 
@@ -55,6 +56,9 @@ Date of research: 2026-11-01. Re-verify V items older than six months before rel
 | Quoted from the spec: "if `actual_status` becomes `exited`, `unknown`, or `offline` it will never reach `running` — destroy and retry" | V | same |
 | Console states: Creating, Loading (image download), Connecting, Running, Inactive (stopped), Scheduling (restart waiting for GPU), Offline (machine disconnected) | V | https://docs.vast.ai/guides/instances/manage-instances |
 | An exhaustive enum of `actual_status` values | U | CORE-020 records what it observes |
+| `GET /api/v1/instances` list page pagination field is named `next_token`, not `next_cursor` (the original, never externally verified code and fixtures used `next_cursor`); fixed in `internal/provider/vastai/client.go` and its pagination fixtures (commit 6ee38b4) | S | our API probe, 2026-11-02 |
+| Request-side pagination query parameter name sent when requesting page 2+ (`&cursor=` in `client.go`'s `listPage`) | U | the probe account had zero instances, so a second page was never actually requested; still to confirm, likely in CORE-050's reconcile loop or CORE-030's spike |
+| CORE-020 probe: the account used had zero running instances (`GET /api/v1/instances` returned `instances_found: 0`), so no live `actual_status` value was observed; the enum remains U pending a future observation against a real running instance | S | our API probe, 2026-11-02 |
 
 ### 1.5 Stop, destroy, billing
 
@@ -67,7 +71,8 @@ Date of research: 2026-11-01. Re-verify V items older than six months before rel
 | GPU time is billed per second while the instance is active/connected; **not charged while Loading**; bandwidth billed per byte in any state; no minimum charge stated | V | https://docs.vast.ai/guides/reference/faq/billing |
 | Prepaid credit model; at $0 balance "instances, storage volumes, and data will be scheduled for deletion" | V | same |
 | `GET /api/v0/users/current` has a `balance` field | V | https://docs.vast.ai/api-reference/accounts/show-user |
-| A per-instance charges endpoint (`GET /api/v0/charges`) and `GET /api/v1/invoices` were reported by our first research pass but **not found** in the OpenAPI document on a second fetch | U | CORE-020 settles it; the budget design does not depend on it |
+| CORE-020 probe: `GET /api/v0/users/current` returned the expected shape with a populated `billing_threshold` and zero current balance | S | our API probe, 2026-11-02 |
+| `GET /api/v0/charges` **exists**: the probe got HTTP 401 with body `{"success":false,"msg":"Authorization Error. Your key lacks the billing_read permission group which is required for this action."}` — a permission gate, not a 404. The endpoint's existence is now confirmed; it remains unused, as the budget design does not depend on it (CORE-100 ledger handles the real spend estimate) | S | our API probe, 2026-11-02 |
 | `PUT /api/v0/instances/recycle/{id}` recreates the container from a freshly pulled image; on-demand contracts have a maximum duration and expired instances "may be deleted 48 hours after expiration" | V | https://docs.vast.ai/guides/instances/choosing/instance-types |
 
 ### 1.6 Networking

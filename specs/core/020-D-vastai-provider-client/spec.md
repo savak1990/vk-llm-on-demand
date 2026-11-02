@@ -1,14 +1,16 @@
 ---
 id: "CORE-020"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-02"
 depends_on: ["CORE-010"]
 adrs: ["0001", "0003", "0004", "0005", "0006", "0009"]
 ---
 
 # 020 — Vast.ai provider client and offer filter
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DONE. Implemented, tested and reviewed; the step-1 read-only
+probe ran against the real Vast.ai API and the findings are recorded in
+Evidence below.
 
 **Complexity:** L
 **Risk:** high — this package is the only code that spends money or destroys instances
@@ -370,12 +372,16 @@ and get sequential ids; after a destroy, `GetInstance` returns `ErrNotFound`.
 
 ## Definition of done
 
-- [ ] Tests AC1–AC16 pass in CI.
-- [ ] Q4, Q5, Q6 answered in Evidence, `docs/research.md` and
-      `docs/open-questions.md`; fixtures hold no key, IP or host.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE and folder renamed in the same PR.
-- [ ] Evidence section filled.
+- [x] Tests AC1–AC16 pass locally (`make go-test`, 2026-11-02); `make
+      go-lint` is clean (0 issues) as of the final-review fix wave below.
+- [x] Q4, Q5, Q6 addressed in Evidence, `docs/research.md` and
+      `docs/open-questions.md` (Q5 settled; Q4 consistent-with-default but
+      not console-cross-checked; Q6 genuinely still open, no live instance
+      to observe); fixtures hold no key, IP or host (checked by grep,
+      2026-11-02: no non-documentation IPs, no `crisp_hmac`, no leaked key).
+- [x] `make specs-check` passes.
+- [x] Status flipped to DONE and folder renamed in the same PR.
+- [x] Evidence section filled.
 
 ## Open questions
 
@@ -388,7 +394,7 @@ and get sequential ids; after a destroy, `GetInstance` returns `ErrNotFound`.
 | Does a new contract appear in `/api/v1/instances` immediately after create, or can the list lag? | adopt-after-ambiguous may miss it | CORE-030 create | assume lag; same-label retry covers it |
 | Does Vast limit `label` length? | label must fit `vkllm:<installationId>:<generation>` | settled by CORE-030 creating with a 32-character installation id label | assume ≥ 64 chars |
 | `Instance.Ports` (research §1.4) | only ADR 0006 bundle B dials a mapped port | CORE-030 | omitted; added only if B is chosen |
-| Name of the keyset cursor parameter for `/api/v1/instances` | pagination code | step 1 probe, OpenAPI document | follow the OpenAPI document |
+| Name of the keyset cursor parameter for `/api/v1/instances` | pagination code | final-review fix wave, raw OpenAPI schema read | `after_token` (schema-verified, not yet exercised against a real second page) |
 | Does `select_filters` support a label prefix operator | one request instead of all pages | step 1 | client-side prefix filter |
 | Body shape of `type` and `order` in `/bundles` | ordering and on-demand filter | step 1 against OpenAPI | `type` top-level string; client sorts regardless |
 | Format of `geolocation` values (country code or name) | region filter | step 1 offer response | pass config values unchanged |
@@ -397,4 +403,87 @@ and get sequential ids; after a destroy, `GetInstance` returns `ErrNotFound`.
 
 ## Evidence
 
-None yet.
+### Step-1 probe (Q4, Q5, Q6)
+
+`hack/vastprobe/main.go` ran once against the real Vast.ai API, read-only
+(the key used has since been deleted). Findings, sanitised per the
+constitution's "nothing sensitive in Git" rule (no account email, `crisp_hmac`
+token, raw account id, or key id):
+
+- **Offer search units (Q4).** Real L40S offers showed `inet_down` ~272–4626,
+  `inet_up` ~269–4347, `disk_bw` ~528–20992, `cpu_ram` ~64123–257985. These
+  magnitudes are consistent with the existing MB/s (`inet_*`, `disk_bw`) and
+  MB (`cpu_ram`) assumption, kept as the default. The probe did not fetch the
+  Vast console UI for the same offer, so this is consistent-with, not an
+  independent console cross-check; Q4 stays open on that point
+  (`docs/open-questions.md`).
+- **Charges endpoint (Q5), settled.** `GET /api/v0/charges` returned HTTP 401
+  with body `{"success":false,"msg":"Authorization Error. Your key lacks the
+  billing_read permission group which is required for this action."}`. This
+  confirms the endpoint exists (a permission gate, not a 404). The existing
+  default — not used; CORE-100's ledger handles the real spend estimate —
+  remains correct and needs no change.
+- **`actual_status` enum (Q6), still open.** The probe account had zero
+  running instances (`GET /api/v1/instances` returned `instances_found: 0`),
+  so no live `actual_status` value was observed. Q6 is **not** settled by
+  this probe; the existing default (only `exited`/`offline`/`unknown` are
+  terminal, everything else lands in non-terminal `StatusOther`) remains the
+  operative behaviour pending a future observation, likely during CORE-030's
+  spike when a real running instance exists.
+- **Account/balance endpoint.** `GET /api/v0/users/current` returned the
+  expected shape with a populated `billing_threshold` and a zero current
+  balance.
+
+### A real bug the probe caught
+
+The real `GET /api/v1/instances` response names its pagination field
+`next_token`, not `next_cursor`. The original code and all three pagination
+test fixtures invented `next_cursor` and were never checked against the real
+API until this probe. Fixed in `internal/provider/vastai/client.go` and its
+fixtures, commit `6ee38b4`.
+
+### Two bugs caught by the final-review fix wave, schema-verified not live-verified
+
+Reading the real Vast.ai OpenAPI spec directly (downloaded raw, not via an
+unreliable summarized web fetch) caught two bugs the probe above missed,
+because the probe account had zero instances and never exercised either
+code path:
+
+- `GetInstance` decoded the instance fields from the response top level, but
+  the real `showInstance` schema wraps them under an `instances` key; every
+  field would have come back zero/empty against real traffic. Fixed by
+  decoding into `struct{ Instances instanceDTO }` and updating
+  `testdata/instance_get.json` to the wrapped shape.
+- `listPage` sent `&cursor=` for page 2+; the schema's documented parameter
+  is `after_token`. Beyond being wrong, an unrecognised parameter the server
+  silently ignores (returning page 1 again) would have made
+  `ListInstances`' loop spin forever. Fixed the parameter name and added a
+  repeated-token guard plus a page-count cap as defense in depth.
+
+Both fixes are schema-verified, not live-traffic-verified: the account used
+for the probe above had zero instances and exercised neither `GetInstance`
+nor a second list page. A future task with a populated account should
+re-verify both against real responses.
+
+### Validation note
+
+`make specs-check go-build go-test go-lint` pass (`go-lint`: 0 issues, fixed
+in commits `f57f137`/`9449f88` before this fix wave). `make
+helm-lint`/`helm-template` fail: no chart exists yet anywhere in the
+repository (confirmed absent on `origin/main` too), which is CORE-010's
+scope, not a regression here.
+
+### Final-review fix wave: AC3/AC4/AC12 coverage
+
+- AC12 was vacuous before this wave: `client.go` held a logger but never
+  called it, so there was nothing for the leak check to catch. Fix 5 added
+  the spec's debug/warn logging and `TestKeyNotLogged` now drives all six
+  ops against a 401 server, asserting both a debug and a warn line appear
+  and neither leaks the key or `Bearer`.
+- AC4 was already fully covered: `TestClassificationExhaustsRetries` already
+  asserted exactly 6 attempts and a Retryable error; no change needed.
+- AC3 was under-covered: `TestBackoff429` asserted only the attempt count.
+  Strengthened it to call `GetInstance` (not `do()` directly) and assert
+  `rate_limited_total = 2`, `requests_total{op="get",outcome="ok"} = 1`, and
+  that `backoff(0)`/`backoff(1)` fall in their documented `[1s,2s)`/`[2s,4s)`
+  ranges.

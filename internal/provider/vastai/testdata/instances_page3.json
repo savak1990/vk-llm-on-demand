@@ -1,0 +1,89 @@
+{
+  "instances": [
+    {
+      "id": 51,
+      "label": "other:51",
+      "actual_status": "running",
+      "status_msg": "",
+      "machine_id": 51,
+      "public_ipaddr": "192.0.2.1",
+      "ssh_host": "192.0.2.1",
+      "ssh_port": 41051,
+      "dph_total": 0.5,
+      "start_date": 1700000000.0
+    },
+    {
+      "id": 52,
+      "label": "other:52",
+      "actual_status": "running",
+      "status_msg": "",
+      "machine_id": 52,
+      "public_ipaddr": "192.0.2.1",
+      "ssh_host": "192.0.2.1",
+      "ssh_port": 41052,
+      "dph_total": 0.5,
+      "start_date": 1700000000.0
+    },
+    {
+      "id": 53,
+      "label": "vkllm:test:53",
+      "actual_status": "running",
+      "status_msg": "",
+      "machine_id": 53,
+      "public_ipaddr": "192.0.2.1",
+      "ssh_host": "192.0.2.1",
+      "ssh_port": 41053,
+      "dph_total": 0.5,
+      "start_date": 1700000000.0
+    },
+    {
+      "id": 54,
+      "label": "other:54",
+      "actual_status": "running",
+      "status_msg": "",
+      "machine_id": 54,
+      "public_ipaddr": "192.0.2.1",
+      "ssh_host": "192.0.2.1",
+      "ssh_port": 41054,
+      "dph_total": 0.5,
+      "start_date": 1700000000.0
+    },
+    {
+      "id": 55,
+      "label": "vkllm:test:55",
+      "actual_status": "running",
+      "status_msg": "",
+      "machine_id": 55,
+      "public_ipaddr": "192.0.2.1",
+      "ssh_host": "192.0.2.1",
+      "ssh_port": 41055,
+      "dph_total": 0.5,
+      "start_date": 1700000000.0
+    },
+    {
+      "id": 56,
+      "label": "vkllm:test:56",
+      "actual_status": "running",
+      "status_msg": "",
+      "machine_id": 56,
+      "public_ipaddr": "192.0.2.1",
+      "ssh_host": "192.0.2.1",
+      "ssh_port": 41056,
+      "dph_total": 0.5,
+      "start_date": 1700000000.0
+    },
+    {
+      "id": 57,
+      "label": "vkllm:test:57",
+      "actual_status": "running",
+      "status_msg": "",
+      "machine_id": 57,
+      "public_ipaddr": "192.0.2.1",
+      "ssh_host": "192.0.2.1",
+      "ssh_port": 41057,
+      "dph_total": 0.5,
+      "start_date": 1700000000.0
+    }
+  ],
+  "next_token": ""
+}

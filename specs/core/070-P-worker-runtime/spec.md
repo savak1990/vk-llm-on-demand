@@ -16,7 +16,7 @@ results may change values here.
 **Risk:** medium — the script runs on hosts we cannot debug, and two Vast behaviours it relies on are unverified
 **Estimated effort:** two sessions (6–8 h)
 **Recommended model:** strong — shell, process groups and a security boundary in one small file
-**Depends on:** [CORE-020](../020-P-vastai-provider-client/spec.md), [CORE-030](../030-P-worker-launch-spike/spec.md)
+**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md), [CORE-030](../030-P-worker-launch-spike/spec.md)
 
 ## Outcome
 

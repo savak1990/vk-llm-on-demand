@@ -14,7 +14,7 @@ adrs: ["0006", "0002", "0005", "0003", "0007"]
 **Risk:** medium — real GPU spend on a rented host, bounded by a hard cap, a trap and a prepaid balance
 **Estimated effort:** two sessions (≤ 8 h), ≤ $5 GPU spend
 **Recommended model:** strong — live results must be judged against ADR gates and written back into ADRs
-**Depends on:** [CORE-020](../020-P-vastai-provider-client/spec.md)
+**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md)
 
 ## Outcome
 
