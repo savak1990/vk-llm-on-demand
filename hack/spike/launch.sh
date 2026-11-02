@@ -670,12 +670,14 @@ extend_watchdog_for_m10() {
   WATCHDOG_PID=$!
 }
 
-# One GET /api/v0/users/current/, returns the balance or empty on failure.
+# One GET /api/v0/users/current/, returns the spendable balance or empty
+# on failure. Reads .credit first: on a real account .balance stayed
+# stuck at 0 while .credit held the funds GPU billing actually draws down.
 read_balance() {
   local v0_base="$1" balance
   vast_call GET "$v0_base/users/current/" "" 15
   [[ "$VAST_STATUS" == 2* ]] || { echo ""; return; }
-  balance="$(jq -r '.balance // empty' <<<"$VAST_BODY" 2>/dev/null)" || balance=""
+  balance="$(jq -r '.credit // .balance // empty' <<<"$VAST_BODY" 2>/dev/null)" || balance=""
   echo "$balance"
 }
 
@@ -1762,7 +1764,9 @@ run() {
   : >"$JSONL_FILE"
 
   vast_call GET "$V0_BASE/users/current/" "" 15
-  [[ "$VAST_STATUS" == 2* ]] && BALANCE_START="$(jq -r '.balance // empty' <<<"$VAST_BODY" 2>/dev/null)" || true
+  # .credit first, same reason as read_balance: .balance is stuck at 0
+  # on a real account, .credit holds the funds that actually move.
+  [[ "$VAST_STATUS" == 2* ]] && BALANCE_START="$(jq -r '.credit // .balance // empty' <<<"$VAST_BODY" 2>/dev/null)" || true
 
   local offer_id
   if [[ -n "${SPIKE_OFFER_ID:-}" ]]; then
