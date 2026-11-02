@@ -348,4 +348,6 @@ The census from the search table shows how many offers each candidate
 
 ## Evidence
 
-None yet.
+- `launch.sh`'s laptop-side JSON parsing (the `--run` measurement code, M1-M10)
+  uses `jq`, already a dependency of this script since Task 3/4; no new
+  dependency was added.
