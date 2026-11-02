@@ -74,6 +74,7 @@ keeps it, and spec 140 is the repeatable real-provider run (C-29).
 | `SPIKE_RUNTYPE` | `ssh` (default), `ssh_direct`, `args` | research §1.3 lists all three |
 | `SPIKE_BUDGET_LEFT_USD` | budget not yet spent | pre-flight refuses a run that could exceed it |
 | `SPIKE_SELF_STOP_SECONDS` | host self-stop delay, passed in `env` | default 2400; 60 in the local timer test |
+| `SPIKE_LOCAL_TEST` | skip `apt-get`, the download and the checksum; run `sleep infinity` in place of `llama-server` | set only for the Docker self-stop timer test, passed in `env`, never set for a real GPU run |
 | `SPIKE_API_BASE` | provider base URL | default `https://console.vast.ai/api/v0` (research §1.1); a local stub in the step 3 check |
 | `SPIKE_OFFER_ID` | skip search and use this offer | used by the step 3 check only |
 
