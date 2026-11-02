@@ -363,11 +363,11 @@ A1's destroy, a real mid-session delta of $0.4273 for A1 alone); and
 **$23.78597240426** read 63 minutes after A2's (the last) destroy — the
 reading AC13 itself asks for ("balance read ≥ 1 h after the last
 destroy"). **Final delta: $25.0000 − $23.78597240426 = $1.21402759574**,
-well under the $5.00 cap. Per the open-questions row on balance timing
-("use the larger delta"), this final, most-complete reading is the
-authoritative one — it is both the later reading and the larger delta,
-superseding the earlier $0.4273 partial figure, which only ever covered
-A1's spend and an incomplete settling window.
+well under the $5.00 cap. This later, more complete reading supersedes
+the earlier $0.4273 partial figure, which only ever covered A1's spend
+alone and an incomplete settling window — the ≥ 1 h-after-last-destroy
+reading is both the later and the larger of the two real deltas
+observed, and is the one AC13 itself asks for.
 
 This real delta is about **36 % higher** than the two runs' own
 `estimated_cost_usd × lifetime` figures summed ($0.8919). The script's
