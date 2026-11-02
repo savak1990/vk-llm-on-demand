@@ -21,6 +21,7 @@ usage() {
 }
 
 readonly SWEEP_LABEL_PREFIX="vkllm:spike:"
+readonly MAX_LIST_PAGES=1000
 
 # vast_call issues one authenticated request and sets VAST_STATUS/VAST_BODY.
 # The key is read fresh from VAST_API_KEY_FILE and handed to curl via -K -
@@ -40,7 +41,7 @@ EOF
 # every instance whose label starts with SWEEP_LABEL_PREFIX, one per line.
 # A full page with no next_token is refused: we cannot know it is the end.
 list_sweep_matches() {
-  local v1_base="$1" after="" after_enc url next count
+  local v1_base="$1" after="" after_enc url next count pages=0
   while true; do
     url="$v1_base/instances/?limit=25"
     if [[ -n "$after" ]]; then
@@ -66,6 +67,15 @@ list_sweep_matches() {
         return 1
       fi
       return 0
+    fi
+    if [[ "$next" == "$after" ]]; then
+      echo "LAUNCH: sweep: pagination did not advance, got repeated token" >&2
+      return 1
+    fi
+    pages=$((pages + 1))
+    if ((pages >= MAX_LIST_PAGES)); then
+      echo "LAUNCH: sweep: exceeded $MAX_LIST_PAGES pages" >&2
+      return 1
     fi
     after="$next"
   done
