@@ -324,7 +324,7 @@ The census from the search table shows how many offers each candidate
 ## Definition of done
 
 - [x] Run A1, and A2 or B where the gate required them, completed with summary lines. A1 and A2 both ran to a `summary` line (research §7.1–§7.5). B was **not** run, even though A2 also failed G5 and the gate's own decision rule literally says "otherwise run B": the project owner reviewed the real G5 numbers and explicitly chose to skip B (research §7.6), overriding that branch of the rule rather than the rule concluding B wasn't needed. Recorded, not hidden.
-- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7. **Not fully true.** AC1–AC5, AC7–AC12, AC14–AC17 hold (see the AC table below). AC6 does not hold: the Q9 VRAM matrix was never obtained (every restart failed health in both runs). AC13 holds only partly: the $5 cap is not in doubt, but the specific "≥ 1 h after the last destroy" balance reading was never taken (research §7.5).
+- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7. **Not fully true.** AC1–AC5, AC7–AC12, AC15–AC17 hold (see the AC table below). AC6 does not hold: the Q9 VRAM matrix was never obtained (every restart failed health in both runs). AC13 and AC14 hold only partly: AC13's $5 cap is not in doubt but the "≥ 1 h after the last destroy" reading was never taken (research §7.5); AC14's ADR/recommended-values halves hold but its "Q1–Q3 and Q7–Q12 closed" half does not, because Q9 is explicitly left open.
 - [x] ADR 0006 Accepted or amended; ADR 0005 amended only if download > 300 s. ADR 0006 is Accepted (bundle A) with an explicit G5 amendment; ADR 0005 is amended, because one of the two real samples (403.9 s) exceeded 300 s even though the other (289.3 s) did not.
 - [ ] Open-questions rows Q1–Q3, Q7–Q12 closed. **Eight of nine closed**: Q1, Q2, Q3, Q7, Q8, Q10, Q11, Q12. **Q9 is not closed** — every restart attempt in both runs failed to become healthy, so no VRAM measurement exists; it is recorded as genuinely open with root-cause context (research §7.2), which is the honest outcome but is not the "measured value or moot" R10 calls for. This is a known gap against R10's literal text, not papered over by marking Q9 closed.
 - [x] The gate thresholds reviewed by the controller and the outcome noted in Evidence.
@@ -338,15 +338,15 @@ The census from the search table shows how many offers each candidate
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| Which user name does Vast's SSH mode accept? | the tunnel dialer's config (spec 060) | this spike, from the first successful login | `root` |
-| Are `env` values readable back through `GET /api/v0/instances/{id}`? | `WORKER_API_KEY` exposure (ADR 0006 §4, spec 070) | this spike inspects the GET response (spec 070 assigns it here too) | treat as readable by the account holder |
+| Which user name does Vast's SSH mode accept? | the tunnel dialer's config (spec 060) | this spike, from the first successful login | **settled: `root`**, both real runs |
+| Are `env` values readable back through `GET /api/v0/instances/{id}`? | `WORKER_API_KEY` exposure (ADR 0006 §4, spec 070) | this spike inspects the GET response (spec 070 assigns it here too) | not directly checked in the real runs; still treat as readable by the account holder |
 | Does Hugging Face publish the sha256 of the chosen GGUF? | `SPIKE_MODEL_SHA256` and spec 070's pin | operator before the run | compute on the host, record, spec 070 pins |
-| Does `apt-get` reach a mirror quickly inside `server-cuda` on Vast? | aria2c vs curl choice in spec 070 | this spike, step 2 of onstart | single-stream curl |
-| Does `--host` win over `LLAMA_ARG_HOST` when both are set? | spec 070 may skip the `unset` | spec 070; this spike unsets and proves sockets only | always unset |
-| How fast does the `balance` field reflect charges? | AC13 timing | this spike, readings at end and ≥ 1 h later | use the larger delta |
-| Does an in-container action (script exit, `kill -TERM 1`) turn an SSH-mode instance `exited`, and does GPU billing stop? | the host self-stop and C-8 depend on it | M10 in this spike | host timer does both; balance ≤ $10 as second layer |
-| Can the on-demand contract's maximum duration (research §1.5) cap a spike instance? | a server-side stop independent of the container | not used; it is set by the host, not by us | host self-stop timer |
-| Does `curl -sfIL` report the final `Content-Length` after Hugging Face redirects? | spec 070's curl fallback | onstart step 3 of this spike | fetch without a size check, rely on sha256 |
+| Does `apt-get` reach a mirror quickly inside `server-cuda` on Vast? | aria2c vs curl choice in spec 070 | this spike, step 2 of onstart | **settled: yes**, both real runs (3.6 s, 8.6 s); aria2c used, curl fallback never exercised (research §7.1) |
+| Does `--host` win over `LLAMA_ARG_HOST` when both are set? | spec 070 may skip the `unset` | spec 070; this spike unsets and proves sockets only | always unset; loopback-only confirmed on `/proc/net/tcp` in both real runs (research §7.3 G3) |
+| How fast does the `balance` field reflect charges? | AC13 timing | this spike, readings at end and ≥ 1 h later | not settled: `.balance` stayed pinned at 0 on this account, `.credit` moved (research §7.5); a real delta was observed over ~32 min, no ≥1h-later reading was taken |
+| Does an in-container action (script exit, `kill -TERM 1`) turn an SSH-mode instance `exited`, and does GPU billing stop? | the host self-stop and C-8 depend on it | M10 in this spike | **settled: no**, in both real runs — neither action reached `exited` within 120 s each (research §7.4 M10); ADR 0003 §7 flagged for review as a result |
+| Can the on-demand contract's maximum duration (research §1.5) cap a spike instance? | a server-side stop independent of the container | not used; it is set by the host, not by us | host self-stop timer; never triggered in either real run (both destroyed by the script's own `DELETE`) |
+| Does `curl -sfIL` report the final `Content-Length` after Hugging Face redirects? | spec 070's curl fallback | onstart step 3 of this spike | **settled: yes**, both real runs matched the expected size exactly (research §7.1) |
 | Tool behaviour assumed, not in research: bash ≥ 5 `$EPOCHREALTIME`; Caddy `tls internal` self-signed | timing and fallback B | `launch.sh` fails at start without `$EPOCHREALTIME`; the B image build and first TLS connection | as stated |
 | Is there a maximum `label` length? | production labels may be longer than the spike's 22 characters | spec 020; this spike records only that its label round-trips | ≤ 22 characters proven |
 | Does one boot sample say anything about image cache frequency (Q12)? | cold-start budget | spec 140 adds samples | one sample, marked as such |
@@ -529,7 +529,7 @@ the numbers.
 | AC11 | Yes | research §7.3 G4, §7.4 M2 |
 | AC12 | Yes | both runs' `--sweep` and direct `GET` confirmation, above |
 | AC13 | **Partly** | research §7.5 — $5 cap not in doubt; the ≥1h-after-last-destroy reading was not taken |
-| AC14 | Yes | this Evidence section; research §7.6, §7.7; `docs/open-questions.md` |
+| AC14 | **Partly** — ADR 0006/recommended-values halves hold; the "Q1–Q3 and Q7–Q12 marked closed" half does not, Q9 is explicitly left open | this Evidence section; research §7.6, §7.7; `docs/open-questions.md` |
 | AC15 | Yes (prior task) | implementation step 4's local Docker test, run before any real spend |
 | AC16 | Yes | research §7.4 M10 — both steps, both runs; step c never ran (its precondition, `exited`, was never met) |
 | AC17 | Yes (prior task) | implementation step 3's stub check |

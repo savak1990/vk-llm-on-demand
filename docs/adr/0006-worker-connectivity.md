@@ -119,7 +119,9 @@ least new machinery.
 - Metrics from llama-server are pulled by the gateway over the tunnel and
   re-exported, not scraped by Prometheus directly.
 - Throughput for a streaming completion is bounded by the SSH channel;
-  spec 030 measures time-to-first-token and tokens-per-second through it.
+  spec 030 measured time-to-first-token and tokens-per-second through it
+  (research §7.2 Q10): tokens-per-second close to on-host speed, TTFT
+  roughly 0.8–0.9 s slower than on-host.
 - The worker needs the public key only; the private key never leaves the
   cluster.
 
