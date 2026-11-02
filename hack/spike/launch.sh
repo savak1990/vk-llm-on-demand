@@ -759,6 +759,14 @@ restart_llama_server() {
   record_event restart_key_file_check "" "$(jq -cn --arg c "$ctx" --arg p "$parallel" --arg k "$key_check" \
     '{ctx: $c, parallel: $p, key_file: $k}')"
 
+  # onstart unsets LLAMA_ARG_HOST before its own exec; this restart's
+  # fresh session never repeats that, so record what it actually sees
+  # instead of assuming the explicit --host flag always wins over it.
+  local env_check
+  env_check="$(ssh_exec "env | grep -E '^LLAMA_ARG_'")" || env_check=""
+  record_event restart_env_check "" "$(jq -cn --arg c "$ctx" --arg p "$parallel" --arg e "$env_check" \
+    '{ctx: $c, parallel: $p, llama_arg_env: $e}')"
+
   ssh_exec "rm -f /root/llama.log; nohup /app/llama-server --host 127.0.0.1 --port 8080 \
     --model /models/model.gguf -c $ctx -np $parallel -ngl all -fa on --no-mmproj --metrics \
     --jinja --reasoning-format deepseek --api-key-file /root/spike_api_key.txt --timeout 600 \
@@ -771,6 +779,9 @@ restart_llama_server() {
   local running_after log_tail
   running_after="$(ssh_exec "pgrep -x llama-server")" || running_after=""
   log_tail="$(ssh_exec "tail -n 40 /root/llama.log 2>/dev/null")" || log_tail=""
+  # Redacted unconditionally: this must hold regardless of what the
+  # server actually prints, not because it's assumed never to echo the key.
+  log_tail="${log_tail//$WORKER_API_KEY/<redacted>}"
   record_event restart_attempt_diagnostics "" "$(jq -cn --arg c "$ctx" --arg p "$parallel" \
     --arg running "$([[ -n "$running_after" ]] && echo yes || echo no)" --arg log "$log_tail" \
     '{ctx: $c, parallel: $p, process_running_after_5s: $running, log_tail: $log}')"
