@@ -1,14 +1,19 @@
 ---
 id: "CORE-030"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-02"
 depends_on: ["CORE-020"]
 adrs: ["0006", "0002", "0005", "0003", "0007"]
 ---
 
 # 030 — Worker launch spike
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DONE, 2026-11-02. Two real runs (A1, A2) against one
+1×L40S Vast.ai instance each answered Q1–Q3 and Q7–Q12, Q9 excepted (still
+open; see Evidence); ADR 0006 is Accepted (bundle A) with an amendment to
+its G5 latency threshold; ADR 0005 is amended with the observed download
+range. `hack/spike/` is deleted; `docs/research.md` §7 and
+`docs/open-questions.md` carry the durable record.
 
 **Complexity:** M
 **Risk:** medium — real GPU spend on a rented host, bounded by a hard cap, a trap and a prepaid balance
@@ -318,16 +323,16 @@ The census from the search table shows how many offers each candidate
 
 ## Definition of done
 
-- [ ] Run A1, and A2 or B where the gate required them, completed with summary lines.
-- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7.
-- [ ] ADR 0006 Accepted or amended; ADR 0005 amended only if download > 300 s.
-- [ ] Open-questions rows Q1–Q3, Q7–Q12 closed.
-- [ ] The gate thresholds reviewed by the controller and the outcome noted in Evidence.
-- [ ] M10 result recorded in research §7 so spec 070 can cite it.
-- [ ] Any recommended value that differs from an Accepted ADR is listed as "needs ADR amendment".
-- [ ] `hack/spike/` deleted in the same pull request.
-- [ ] `make specs-check` passes in CI.
-- [ ] Status flipped to DONE and the folder renamed in the same PR; evidence section filled.
+- [x] Run A1, and A2 or B where the gate required them, completed with summary lines. A1 and A2 both ran to a `summary` line (research §7.1–§7.5). B was **not** run, even though A2 also failed G5 and the gate's own decision rule literally says "otherwise run B": the project owner reviewed the real G5 numbers and explicitly chose to skip B (research §7.6), overriding that branch of the rule rather than the rule concluding B wasn't needed. Recorded, not hidden.
+- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7. **Not fully true.** AC1–AC5, AC7–AC12, AC14–AC17 hold (see the AC table below). AC6 does not hold: the Q9 VRAM matrix was never obtained (every restart failed health in both runs). AC13 holds only partly: the $5 cap is not in doubt, but the specific "≥ 1 h after the last destroy" balance reading was never taken (research §7.5).
+- [x] ADR 0006 Accepted or amended; ADR 0005 amended only if download > 300 s. ADR 0006 is Accepted (bundle A) with an explicit G5 amendment; ADR 0005 is amended, because one of the two real samples (403.9 s) exceeded 300 s even though the other (289.3 s) did not.
+- [ ] Open-questions rows Q1–Q3, Q7–Q12 closed. **Eight of nine closed**: Q1, Q2, Q3, Q7, Q8, Q10, Q11, Q12. **Q9 is not closed** — every restart attempt in both runs failed to become healthy, so no VRAM measurement exists; it is recorded as genuinely open with root-cause context (research §7.2), which is the honest outcome but is not the "measured value or moot" R10 calls for. This is a known gap against R10's literal text, not papered over by marking Q9 closed.
+- [x] The gate thresholds reviewed by the controller and the outcome noted in Evidence.
+- [x] M10 result recorded in research §7 so spec 070 can cite it.
+- [x] Any recommended value that differs from an Accepted ADR is listed as "needs ADR amendment".
+- [x] `hack/spike/` deleted in the same pull request.
+- [x] `make specs-check` passes in CI.
+- [x] Status flipped to DONE and the folder renamed in the same PR; evidence section filled.
 
 ## Open questions
 
@@ -432,3 +437,99 @@ The census from the search table shows how many offers each candidate
   sha256 of the chosen GGUF?" — yes, via `X-Linked-ETag` on the `resolve/`
   redirect; this spike no longer needs to compute it on the host from
   scratch, only to confirm the match.
+
+### Real runs A1, A2 (Tasks 9–10, live, real spend, 2026-11-02)
+
+Full numbers, per-stage timings, the ADR 0006 gate table, all M1–M10
+measurements, the cost accounting and the recommended-value derivation
+live in [`docs/research.md` §7](../../../docs/research.md). This section
+is the pointer and the decisions that follow from it; it does not repeat
+the numbers.
+
+- Both runs' instances were independently confirmed destroyed by a direct
+  `GET /api/v0/instances/{id}` (`{"instances": null}`) and by
+  `launch.sh --sweep` (0 instances), not just trusted from the script's
+  own log.
+- **A1** (`ssh`): G1/G2/G4/G6 passed; G3 inconclusive (no confirming
+  external scan, but no evidence of exposure either); G5 failed (804 ms
+  TTFT delta against a 300 ms cap; tokens/s unaffected).
+- **A2** (`ssh_direct` requested): G1/G2/G4/G6 passed; G3 passed
+  conclusively; G5 failed (941 ms delta). Requesting `ssh_direct` did not
+  change the observed SSH routing for this host — both runs were
+  classified `proxy` by the script's own test — so direct mode's effect on
+  G5 remains unconfirmed, not disproved.
+- The gate's own decision rule ("A2 passes → Accepted with `ssh_direct`
+  pinned; otherwise run B") has no clean branch for "A2 also fails G5, no
+  genuinely-direct sample exists." The project owner reviewed this real
+  data and made the call: Accept bundle A anyway, amend the G5 threshold,
+  and skip fallback B — a sub-second latency miss with no throughput cost
+  did not justify a custom TLS-proxy image.
+- **ADR 0006** is now Accepted (bundle A), with the G5 threshold amendment
+  recorded above and in the ADR itself.
+- **ADR 0005** is amended: one real sample (403.9 s) exceeded the 300 s
+  trigger, the other (289.3 s) did not. The S3 mirror is **not** promoted
+  from this alone (two samples, real host variance); that call is deferred
+  to spec 140's repeated runs.
+- **M10 / ADR 0003 §7 flag.** In both runs, neither `pkill -x llama-server`
+  nor a subsequent `kill -TERM 1` brought the instance to `actual_status:
+  exited` within 120 s each. Only the script's own `DELETE` call ended
+  either instance. [ADR 0003](../../../docs/adr/0003-gpu-lifecycle-management.md)
+  §7 states that an exited instance stops GPU billing even when the
+  control plane is down; this spike's data (2/2 real samples) suggests the
+  in-container half of reaching `exited` does not hold within the window
+  tested. **ADR 0003 is not amended by this spec** — out of this spike's
+  explicit scope — but the finding is recorded here and in research §7.4
+  so spec 070 or a dedicated review picks it up deliberately.
+- **Q9 (VRAM matrix) stays open.** All eight restart attempts across both
+  runs (V1–V4 twice) failed to become healthy; A2's run used a 420 s
+  per-config timeout and still timed out at the full duration each time,
+  ruling out "just needs more time" within that budget. Two unconfirmed
+  root-cause candidates (the restart path's `--api-key-file` vs the boot
+  path's inline `--api-key`; the restart path not repeating `onstart.sh`'s
+  `unset LLAMA_ARG_HOST`) and new diagnostic logging added to `launch.sh`'s
+  restart cycle in this session are recorded in research §7.2 for spec 140
+  to retry with.
+- **Cost.** A1 $0.3539 (`dph_total` $0.55/h), A2 $0.5380 (`dph_total`
+  $0.8111/h) — combined $0.8919, well under the $5.00 cap (R5, AC13). A2's
+  real price exceeds R6's literal $0.80 text but is within the $1.00
+  ceiling this spec's Evidence already authorized for these runs. A real
+  balance delta (not just the estimate) was captured for A1: $25.0000 →
+  $24.5727 across the ~32 minutes between A1's destroy and A2's create,
+  i.e. $0.4273, about 21% above A1's own estimate — plausibly bandwidth,
+  billed separately by Vast. No balance reading was taken ≥ 1 h after A2's
+  destroy, so AC13's exact stated check was not performed; the cap is not
+  in doubt, but that specific reading is a recorded gap, not silently
+  checked off.
+- **Backstop deviation, recorded not fixed.** The account balance was
+  **not** brought to ≤ $10 before these runs, a deviation from this spec's
+  own Safety and cost controls table. The user was told accurately what
+  the backstop covers (worst-case loss if every other safeguard fails at
+  once, not expected spend) and chose to keep it at $25. Actual spend
+  ($0.3539, $0.5380 per run) never came close to testing it.
+- **`read_balance()` concern (raised in the Task 8 Evidence above) is
+  resolved**: it reads `.credit` before falling back to `.balance`, so the
+  before/after readings in both runs' `summary` lines reflect real
+  spendable funds, not the `.balance` field that stays pinned at 0 on this
+  account.
+
+### AC1–AC17
+
+| AC | Holds? | Where |
+|---|---|---|
+| AC1 | Yes | research §7.1 (8 stages + cold start total, both runs) |
+| AC2 | Yes | research §7.2 Q1 |
+| AC3 | Yes | research §7.2 Q3, §7.4 M1/M8 |
+| AC4 | Yes | research §7.2 Q7, §7.4 M5 (5/5 both runs) |
+| AC5 | Yes | research §7.1, §7.2 Q8 |
+| AC6 | **No** | research §7.2 Q9, §7.4 M7 — never obtained, recorded as open |
+| AC7 | Yes | research §7.2 Q10, §7.4 M4 |
+| AC8 | Yes | research §7.2 Q2, Q11 |
+| AC9 | Yes | research §7.1, §7.2 Q12 |
+| AC10 | Yes | research §7.3 G3, §7.4 M1 (A2 pass; A1 inconclusive but not failed) |
+| AC11 | Yes | research §7.3 G4, §7.4 M2 |
+| AC12 | Yes | both runs' `--sweep` and direct `GET` confirmation, above |
+| AC13 | **Partly** | research §7.5 — $5 cap not in doubt; the ≥1h-after-last-destroy reading was not taken |
+| AC14 | Yes | this Evidence section; research §7.6, §7.7; `docs/open-questions.md` |
+| AC15 | Yes (prior task) | implementation step 4's local Docker test, run before any real spend |
+| AC16 | Yes | research §7.4 M10 — both steps, both runs; step c never ran (its precondition, `exited`, was never met) |
+| AC17 | Yes (prior task) | implementation step 3's stub check |

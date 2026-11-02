@@ -15,7 +15,7 @@ decision, the ADR changes first.
 
 ## Folder name
 
-`NNN-X-name`, for example `core/030-P-worker-launch-spike`.
+`NNN-X-name`, for example `core/030-D-worker-launch-spike`.
 
 - `NNN` and the front-matter `id` are the stable identifiers. Never renumber
   them. Numbers step by ten; insert new specs into the gaps.
@@ -61,7 +61,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [000](core/000-P-constitution/spec.md) | Constitution: engineering invariants | — |
 | [010](core/010-D-repo-skeleton-and-ci/spec.md) | Go module, Makefile, CI gate, Dockerfile, lint | 000 |
 | [020](core/020-D-vastai-provider-client/spec.md) | Vast.ai provider client and offer filter | 010 |
-| [030](core/030-P-worker-launch-spike/spec.md) | Spike: launch mode, tunnel, cold-start timings | 020 |
+| [030](core/030-D-worker-launch-spike/spec.md) | Spike: launch mode, tunnel, cold-start timings | 020 |
 | [040](core/040-P-state-store/spec.md) | ConfigMap state store with optimistic concurrency | 010 |
 | [050](core/050-P-gpu-lifecycle-controller/spec.md) | GPU lifecycle controller, 30-minute rolling idle, immediate stop, reconcile loop | 020, 040 |
 | [055](core/055-P-management-api/spec.md) | Management API `/api/v1/gpu/*`, management tokens | 050 |

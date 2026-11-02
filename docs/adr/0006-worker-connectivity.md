@@ -2,10 +2,31 @@
 
 ## Status
 
-**Proposed** (2026-11-01). Becomes Accepted when spec 030 shows that the SSH
-launch mode works with the `server-cuda` image and that SSE streams through
-the tunnel at acceptable latency. Fallback B below is pre-approved if it
-does not.
+**Accepted (bundle A, SSH launch mode)**, 2026-11-02, by two real runs of
+spec [030](../../specs/core/030-D-worker-launch-spike/spec.md) against one
+1×L40S Vast.ai instance each (research §7). SSH launch mode works with the
+`server-cuda` image, with no manual step, in both runs (G1, G2, G4, G6 all
+passed; G3 passed conclusively in one run and was inconclusive — not
+failed — in the other, for lack of a confirming external scan).
+
+**Amendment to §G5 (latency gate) — this status's one caveat.** The
+300 ms tunnel-vs-host TTFT cap this ADR's gate proposed was **not met in
+either real run**: the measured delta was 804 ms (run 1) and 941 ms (run
+2), against a cap of 300 ms. Streamed tokens-per-second was essentially
+unaffected both times (≥ 99.6 % of on-host speed; faster than on-host in
+one run). The project owner reviewed this real data and decided to accept
+bundle A anyway rather than build fallback B for a sub-second latency
+difference with no throughput cost; building a custom image with Caddy and
+TLS was judged not worth it for that gap. This is an **explicit,
+informed amendment of the G5 threshold**, not a silent pass: a future
+reader should not assume 300 ms was met. Fallback B remains pre-approved
+below if a future measurement shows a materially worse tunnel.
+
+Requesting Vast's `ssh_direct` runtype, in the one run that tried it, did
+not change the SSH routing observed for that host — the script's own
+direct/proxy test classified both runs as proxied. Whether a genuinely
+direct connection exists, or would change the G5 numbers, is **unconfirmed**
+by this evidence, not ruled out; see research §7.2 (Q3).
 
 ## Context
 
@@ -106,5 +127,13 @@ least new machinery.
 
 - Vast's SSH injection may not work in the `server-cuda` image, or may run
   through Vast's SSH proxy with different behaviour. Spec 030 is the gate;
-  B is the answer if it fails.
-- SSH proxy hosts could throttle long-lived channels. Measured in spec 030.
+  B is the answer if it fails. **Resolved for bundle A**: both real runs
+  were proxied (research §7.2 Q3), and the SSH injection itself worked via
+  a derived-image build both times (research §7.1).
+- SSH proxy hosts could throttle long-lived channels. **Measured in spec
+  030**: 0 channel drops in both runs, but sustained bulk throughput
+  through the tunnel measured only 1.6–2.2 MB/s — well under the host's
+  own HF download throughput (65–100 MB/s) — while interactive streaming
+  (TTFT, tokens/s) was close to on-host speed. The proxy appears to throttle
+  sustained bulk transfer specifically, not interactive completions;
+  research §7.2 (Q3) and §7.4 (M8) have the numbers.
