@@ -283,7 +283,7 @@ func (d instanceDTO) toInstance() provider.Instance {
 // GetInstance fetches one instance by id.
 func (c *Client) GetInstance(ctx context.Context, id provider.InstanceID) (provider.Instance, error) {
 	status, body, err := c.do(ctx, "get", 15*time.Second, 5, func() (*http.Request, error) {
-		return http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/v0/instances/%d", c.baseURL, id), nil)
+		return http.NewRequest(http.MethodGet, instanceURL(c.baseURL, id), nil)
 	}, "instance_id", id)
 	if err != nil {
 		return provider.Instance{}, err
@@ -313,7 +313,7 @@ func (c *Client) GetInstance(ctx context.Context, id provider.InstanceID) (provi
 // The request parameter is after_token, per the real API's OpenAPI schema.
 func (c *Client) listPage(ctx context.Context, cursor string) ([]instanceDTO, string, error) {
 	status, body, err := c.do(ctx, "list", 15*time.Second, 5, func() (*http.Request, error) {
-		reqURL := c.baseURL + "/api/v1/instances?limit=25"
+		reqURL := c.baseURL + "/api/v1/instances/?limit=25"
 		if cursor != "" {
 			reqURL += "&after_token=" + url.QueryEscape(cursor)
 		}
@@ -373,10 +373,16 @@ func (c *Client) ListInstances(ctx context.Context, labelPrefix string) ([]provi
 	return out, nil
 }
 
+// instanceURL dials the trailing-slash form directly, so a redirected
+// DELETE can never collapse into a GET.
+func instanceURL(baseURL string, id provider.InstanceID) string {
+	return fmt.Sprintf("%s/api/v0/instances/%d/", baseURL, id)
+}
+
 // DestroyInstance deletes an instance by id.
 func (c *Client) DestroyInstance(ctx context.Context, id provider.InstanceID) error {
 	status, _, err := c.do(ctx, "destroy", 30*time.Second, 5, func() (*http.Request, error) {
-		return http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/v0/instances/%d", c.baseURL, id), nil)
+		return http.NewRequest(http.MethodDelete, instanceURL(c.baseURL, id), nil)
 	}, "instance_id", id)
 	if err != nil {
 		return err
@@ -525,12 +531,20 @@ func (c *Client) Balance(ctx context.Context) (provider.Money, error) {
 		return 0, fe
 	}
 	var decoded struct {
-		Balance float64 `json:"balance"`
+		Balance float64  `json:"balance"`
+		Credit  *float64 `json:"credit"`
 	}
 	if err := decodeJSON(body, &decoded); err != nil {
 		c.recordOutcome("balance", "terminal", status)
 		return 0, &provider.Error{Op: "balance", Class: provider.Terminal, Err: fmt.Errorf("decode balance: %w", err)}
 	}
 	c.recordOutcome("balance", "ok", status)
-	return provider.Money(decoded.Balance*1e6 + 0.5), nil
+	// balance stays pinned at 0 on a renter-only account; the spendable
+	// funds are in credit. Prefer credit, fall back for account shapes
+	// where it's absent.
+	amount := decoded.Balance
+	if decoded.Credit != nil {
+		amount = *decoded.Credit
+	}
+	return provider.Money(amount*1e6 + 0.5), nil
 }

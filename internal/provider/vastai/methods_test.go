@@ -297,3 +297,106 @@ func TestBalanceFixture(t *testing.T) {
 		t.Fatalf("Balance = %d, want 42500000 (42.5 USD in micro-USD)", bal)
 	}
 }
+
+// A renter-only account keeps balance pinned at 0; spendable funds live in
+// credit. Balance must prefer credit when present.
+func TestBalancePrefersCreditOverBalance(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"balance": 0, "credit": 25.0}`))
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, srv, c)
+
+	bal, err := cl.Balance(context.Background())
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal != 25000000 {
+		t.Fatalf("Balance = %d, want 25000000 (25.0 USD in micro-USD, from credit not balance)", bal)
+	}
+}
+
+// credit: 0 is a legitimate value, not "absent" — it must not fall back to
+// balance, the exact edge case the pointer type exists to distinguish.
+func TestBalanceZeroCreditIsNotAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"balance": 42.5, "credit": 0}`))
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, srv, c)
+
+	bal, err := cl.Balance(context.Background())
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal != 0 {
+		t.Fatalf("Balance = %d, want 0 (credit: 0 is real, must not fall back to balance)", bal)
+	}
+}
+
+// DestroyInstance must dial the trailing-slash form directly: the real API
+// 301-redirects the bare form, and Go's http.Client converts a redirected
+// DELETE into a GET, which would silently turn destroy into a no-op.
+func TestDestroyInstanceUsesTrailingSlashURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/v0/instances/1/" {
+			t.Errorf("got %s %s, want DELETE /api/v0/instances/1/", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, srv, c)
+
+	if err := cl.DestroyInstance(context.Background(), 1); err != nil {
+		t.Fatalf("DestroyInstance: %v", err)
+	}
+}
+
+// GetInstance must also dial the trailing-slash form, to avoid a silent
+// extra redirect round trip on every poll (it is called every 5s).
+func TestGetInstanceUsesTrailingSlashURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v0/instances/1/" {
+			t.Errorf("got %s %s, want GET /api/v0/instances/1/", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"instances": {"id": 1, "actual_status": "running"}}`))
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, srv, c)
+
+	if _, err := cl.GetInstance(context.Background(), 1); err != nil {
+		t.Fatalf("GetInstance: %v", err)
+	}
+}
+
+// ListInstances must also dial the trailing-slash form, for the same reason.
+func TestListInstancesUsesTrailingSlashURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/instances/" {
+			t.Errorf("got %s %s, want GET /api/v1/instances/", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"instances": []}`))
+	}))
+	defer srv.Close()
+
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, srv, c)
+
+	if _, err := cl.ListInstances(context.Background(), ""); err != nil {
+		t.Fatalf("ListInstances: %v", err)
+	}
+}
