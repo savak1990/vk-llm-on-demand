@@ -9,11 +9,12 @@ adrs: ["0006", "0002", "0005", "0003", "0007"]
 # 030 — Worker launch spike
 
 **Status note:** DONE, 2026-11-02. Two real runs (A1, A2) against one
-1×L40S Vast.ai instance each answered Q1–Q3 and Q7–Q12, Q9 excepted (still
-open; see Evidence); ADR 0006 is Accepted (bundle A) with an amendment to
-its G5 latency threshold; ADR 0005 is amended with the observed download
-range. `hack/spike/` is deleted; `docs/research.md` §7 and
-`docs/open-questions.md` carry the durable record.
+1×L40S Vast.ai instance each answered Q1–Q2 and Q7–Q8, Q10–Q12 fully; Q3
+partly (proxied confirmed, direct mode's effect stays unconfirmed); Q9
+stays genuinely open (see Evidence). ADR 0006 is Accepted (bundle A) with
+an amendment to its G5 latency threshold; ADR 0005 is amended with the
+observed download range. `hack/spike/` is deleted; `docs/research.md` §7
+and `docs/open-questions.md` carry the durable record.
 
 **Complexity:** M
 **Risk:** medium — real GPU spend on a rented host, bounded by a hard cap, a trap and a prepaid balance
@@ -324,14 +325,16 @@ The census from the search table shows how many offers each candidate
 ## Definition of done
 
 - [x] Run A1, and A2 or B where the gate required them, completed with summary lines. A1 and A2 both ran to a `summary` line (research §7.1–§7.5). B was **not** run, even though A2 also failed G5 and the gate's own decision rule literally says "otherwise run B": the project owner reviewed the real G5 numbers and explicitly chose to skip B (research §7.6), overriding that branch of the rule rather than the rule concluding B wasn't needed. Recorded, not hidden.
-- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7. **Not fully true.** AC1–AC5, AC7–AC12, AC15–AC17 hold (see the AC table below). AC6 does not hold: the Q9 VRAM matrix was never obtained (every restart failed health in both runs). AC13 and AC14 hold only partly: AC13's $5 cap is not in doubt but the "≥ 1 h after the last destroy" reading was never taken (research §7.5); AC14's ADR/recommended-values halves hold but its "Q1–Q3 and Q7–Q12 closed" half does not, because Q9 is explicitly left open.
+- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7. **Not fully true.** AC1–AC4, AC7–AC12, AC15, AC17 hold (see the AC table below). AC6 does not hold: the Q9 VRAM matrix was never obtained (every restart failed health in both runs). AC5, AC13, AC14 and AC16 hold only partly: AC5's advertised `inet_down` and 60 s single-stream sample were never recorded; AC13's $5 cap is not in doubt but the "≥ 1 h after the last destroy" reading was never taken (research §7.5); AC14's ADR/recommended-values halves hold but its "Q1–Q3 and Q7–Q12 closed" half does not, because Q9 is explicitly left open; AC16's steps a/b are recorded but step c (the balance-while-exited reading) never ran, since its precondition (`exited`) was never met.
 - [x] ADR 0006 Accepted or amended; ADR 0005 amended only if download > 300 s. ADR 0006 is Accepted (bundle A) with an explicit G5 amendment; ADR 0005 is amended, because one of the two real samples (403.9 s) exceeded 300 s even though the other (289.3 s) did not.
 - [ ] Open-questions rows Q1–Q3, Q7–Q12 closed. **Eight of nine closed**: Q1, Q2, Q3, Q7, Q8, Q10, Q11, Q12. **Q9 is not closed** — every restart attempt in both runs failed to become healthy, so no VRAM measurement exists; it is recorded as genuinely open with root-cause context (research §7.2), which is the honest outcome but is not the "measured value or moot" R10 calls for. This is a known gap against R10's literal text, not papered over by marking Q9 closed.
 - [x] The gate thresholds reviewed by the controller and the outcome noted in Evidence.
 - [x] M10 result recorded in research §7 so spec 070 can cite it.
 - [x] Any recommended value that differs from an Accepted ADR is listed as "needs ADR amendment".
 - [x] `hack/spike/` deleted in the same pull request.
-- [x] `make specs-check` passes in CI.
+- [x] `make specs-check` passes in CI. Run and confirmed locally in this
+  session (not yet observed in an actual CI job for this change, since
+  that only happens once this lands on a PR).
 - [x] Status flipped to DONE and the folder renamed in the same PR; evidence section filled.
 
 ## Open questions
@@ -467,9 +470,12 @@ the numbers.
 - **ADR 0006** is now Accepted (bundle A), with the G5 threshold amendment
   recorded above and in the ADR itself.
 - **ADR 0005** is amended: one real sample (403.9 s) exceeded the 300 s
-  trigger, the other (289.3 s) did not. The S3 mirror is **not** promoted
-  from this alone (two samples, real host variance); that call is deferred
-  to spec 140's repeated runs.
+  trigger, the other (289.3 s) did not — the trigger, read literally,
+  fired. Unlike the Fallback B skip above, **this spec does not itself
+  decide** whether to promote the S3 mirror to the MVP default; that
+  decision is left explicitly pending the project owner's call (the ADR's
+  Status section says so), which may reasonably wait on spec 140's
+  repeated runs for more samples, but is not assumed here.
 - **M10 / ADR 0003 §7 flag.** In both runs, neither `pkill -x llama-server`
   nor a subsequent `kill -TERM 1` brought the instance to `actual_status:
   exited` within 120 s each. Only the script's own `DELETE` call ended
@@ -480,15 +486,20 @@ the numbers.
   tested. **ADR 0003 is not amended by this spec** — out of this spike's
   explicit scope — but the finding is recorded here and in research §7.4
   so spec 070 or a dedicated review picks it up deliberately.
-- **Q9 (VRAM matrix) stays open.** All eight restart attempts across both
-  runs (V1–V4 twice) failed to become healthy; A2's run used a 420 s
-  per-config timeout and still timed out at the full duration each time,
-  ruling out "just needs more time" within that budget. Two unconfirmed
-  root-cause candidates (the restart path's `--api-key-file` vs the boot
-  path's inline `--api-key`; the restart path not repeating `onstart.sh`'s
-  `unset LLAMA_ARG_HOST`) and new diagnostic logging added to `launch.sh`'s
-  restart cycle in this session are recorded in research §7.2 for spec 140
-  to retry with.
+- **Q9 (VRAM matrix) stays open.** Seven restart attempts across both runs
+  failed to become healthy: all four (V1–V4) in A1, and V1–V3 in A2 (A2's
+  V4 was skipped outright as the 40-minute hard cap approached, not
+  attempted and failed). A2's three attempts used a 420 s per-config
+  timeout and still timed out at the full duration each time, ruling out
+  "just needs more time" within that budget. Two unconfirmed root-cause
+  candidates (the restart path's `--api-key-file` vs the boot path's
+  inline `--api-key`; the restart path not repeating `onstart.sh`'s
+  `unset LLAMA_ARG_HOST`) are recorded in research §7.2. Diagnostic
+  logging for a future retry (env-var capture, key-file-exists check,
+  post-restart process-alive and log-tail capture, key always redacted)
+  was added to `launch.sh`'s restart cycle in commit `0643ea6`
+  (2026-11-02, before `hack/spike/` was deleted in this write-back); spec
+  140 is where that diagnostic build would actually run again.
 - **Cost.** A1 $0.3539 (`dph_total` $0.55/h), A2 $0.5380 (`dph_total`
   $0.8111/h) — combined $0.8919, well under the $5.00 cap (R5, AC13). A2's
   real price exceeds R6's literal $0.80 text but is within the $1.00
@@ -520,7 +531,7 @@ the numbers.
 | AC2 | Yes | research §7.2 Q1 |
 | AC3 | Yes | research §7.2 Q3, §7.4 M1/M8 |
 | AC4 | Yes | research §7.2 Q7, §7.4 M5 (5/5 both runs) |
-| AC5 | Yes | research §7.1, §7.2 Q8 |
+| AC5 | **Partly** — download seconds, fetch-only MB/s, fetcher name and aria2 install seconds all recorded; advertised `inet_down` was never logged (no offer-census event) and the dedicated 60 s single-stream sample was skipped in both runs | research §7.1, §7.2 Q8, §7.4 M9, §7.7 |
 | AC6 | **No** | research §7.2 Q9, §7.4 M7 — never obtained, recorded as open |
 | AC7 | Yes | research §7.2 Q10, §7.4 M4 |
 | AC8 | Yes | research §7.2 Q2, Q11 |
@@ -531,5 +542,5 @@ the numbers.
 | AC13 | **Partly** | research §7.5 — $5 cap not in doubt; the ≥1h-after-last-destroy reading was not taken |
 | AC14 | **Partly** — ADR 0006/recommended-values halves hold; the "Q1–Q3 and Q7–Q12 marked closed" half does not, Q9 is explicitly left open | this Evidence section; research §7.6, §7.7; `docs/open-questions.md` |
 | AC15 | Yes (prior task) | implementation step 4's local Docker test, run before any real spend |
-| AC16 | Yes | research §7.4 M10 — both steps, both runs; step c never ran (its precondition, `exited`, was never met) |
+| AC16 | **Partly** — steps a and b recorded (`exited` yes/no with seconds) in both runs; step c (15 min balance delta while `exited`, "GPU billing stopped" verdict) never ran, since its precondition (`exited`) was never met | research §7.4 M10 |
 | AC17 | Yes (prior task) | implementation step 3's stub check |

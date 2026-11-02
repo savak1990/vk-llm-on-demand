@@ -235,9 +235,15 @@ when `llamacpp:requests_processing` is non-zero or when
 these, so they do not keep the worker alive. The clock starts at script start,
 so a worker whose control plane vanished during the download also stops.
 On expiry `fail idle_exit 0` runs. An `exited` instance stops GPU billing;
-storage bills until the reconcile loop destroys it (research §1.5, ADR 0003 §7). CORE-030 M10
-measures which action turns an SSH-mode instance `exited` and whether GPU
-billing stops. The dead-man ends an instance after
+storage bills until the reconcile loop destroys it (research §1.5, ADR 0003 §7). **CORE-030 M10's
+real result (research §7.4, both real runs): neither `pkill -x
+llama-server` nor a subsequent `kill -TERM 1` brought `actual_status` to
+`exited` within 120 s each.** This spec's assumption that an in-container
+action reaches `exited` (and therefore stops billing) is unconfirmed by
+that data; ADR 0003 §7 is flagged for its own review as a result, and this
+spec's own dead-man/billing design should be read with that caveat until
+a future run (CORE-140, with CORE-030's diagnostics) says otherwise. The
+dead-man ends an instance after
 `lifecycle.idleShutdown.timeout + 10m` with no inference, regardless of
 controller state (CORE-050).
 
@@ -377,7 +383,7 @@ Applies only if CORE-030 fails bundle A (ADR 0006 alternative B).
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| Which action turns the container `exited` in SSH mode: script exit, `kill -TERM 1`, or neither? | FR-4.5; otherwise the dead-man frees no GPU billing | settled by CORE-030 M10 | do both, as the script does |
+| Which action turns the container `exited` in SSH mode: script exit, `kill -TERM 1`, or neither? | FR-4.5; otherwise the dead-man frees no GPU billing | CORE-030 M10 measured; **neither**, in 2/2 real runs (research §7.4) | do both, as the script does, but treat GPU-billing-stops-on-`exited` as unconfirmed until CORE-140 retries with CORE-030's diagnostics |
 | Does `onstart` run as root, under bash, with the `env` map exported? | `/models`, `apt-get`, `${!v}` | CORE-030 (Q1) | yes |
 | `--model` and `--alias` are in ADR 0002 but not in the research §2 flag table | R2 | AC8 | ADR 0002 line as written |
 | Does `/metrics` require the API key? | dead-man and `Metrics` | AC8 | send the key always |

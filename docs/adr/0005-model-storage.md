@@ -10,14 +10,17 @@ Two real runs measured the download stage (fetch plus sha256 check,
 25,913,185,920 bytes via `aria2c -x 16 -s 16`, no curl fallback needed):
 **403.9 s** on one host, **289.3 s** on another — fetch time alone was
 387.2 s and 259.9 s. One of the two samples (403.9 s / 387.2 s) exceeds the
-5-minute (300 s) trigger below; the other does not. With only two samples
-and real host-to-host variance already this wide, promoting the S3 mirror
-to the MVP default from one over-threshold sample is a bigger call than
-this spike's mandate covers. The promotion is **not** made here, and the
-trigger text below is **not** removed or silently satisfied — the observed
-range (289–404 s) is recorded, and whether to promote the mirror is left
-to spec 140's repeated real runs, which will have more samples to decide
-from.
+5-minute (300 s) trigger below; the other does not. **The trigger, read
+literally, fired.** This write-back records the observed range (289–404 s)
+rather than silently satisfying or silently removing the trigger text, but
+it does **not** itself promote the S3 mirror to the MVP default — that
+decision is left **pending the project owner's explicit call**, the same
+kind of recorded, informed override Fallback B got in ADR 0006, not a
+decision made here on the spike author's own authority. With only two
+samples and real host-to-host variance already this wide, the project
+owner may reasonably want more data (spec 140's repeated real runs) before
+deciding, but that is the owner's call to make, not a default this
+amendment assumes.
 
 ## Context
 
@@ -74,7 +77,8 @@ cleanup because destroying the instance removes everything.
   a one-paragraph amendment here. **Measured (2026-11-02, research §7.1):**
   403.9 s on one real host (over the trigger) and 289.3 s on another (under
   it). The trigger fired on one of two samples; see the Status amendment
-  above for why the mirror is not promoted from this alone.
+  above — the promotion decision is left pending the project owner's
+  explicit call, not made here.
 - Bandwidth is billed by Vast per byte; 26 GB inbound per provision at the
   snapshot's typical `inet_down_cost` is cents, recorded in the cost model.
 
