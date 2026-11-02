@@ -211,7 +211,8 @@ JSON
 # own price cap before any network call, then again with the real offer's price.
 preflight_budget_check() {
   local dph_total="$1" budget cost
-  budget="${SPIKE_BUDGET_LEFT_USD:-5.00}"
+  : "${SPIKE_BUDGET_LEFT_USD:?LAUNCH: SPIKE_BUDGET_LEFT_USD must be set}"
+  budget="$SPIKE_BUDGET_LEFT_USD"
   cost="$(awk -v d="$dph_total" 'BEGIN{printf "%.4f", d*40/60+1.00}')"
   if awk -v c="$cost" -v b="$budget" 'BEGIN{exit !(c > b)}'; then
     echo "LAUNCH: pre-flight refused: estimated cost \$$cost (dph_total \$$dph_total/h) exceeds budget \$$budget" >&2
@@ -374,7 +375,7 @@ open_tunnel() {
   local host="$1" port="$2" key="$3" known_hosts="$4"
   ssh -N -o ExitOnForwardFailure=yes -o BatchMode=yes -o ConnectTimeout=10 \
     -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known_hosts" \
-    -i "$key" -p "$port" -L 127.0.0.1:18080:127.0.0.1:8080 "root@$host" &
+    -i "$key" -p "$port" -L 127.0.0.1:18080:127.0.0.1:8080 "root@$host" 2>/dev/null &
   TUNNEL_PID=$!
   sleep 1
   if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
