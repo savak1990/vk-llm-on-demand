@@ -360,6 +360,15 @@ The census from the search table shows how many offers each candidate
   `bash -c "<the whole script>"` is itself one of this spike's open
   questions), `-f` would also match and signal that wrapper. `-x` matches
   only the exact process name, so it can never do that.
+- **Price cap raised to $1.00 for this run only.** The architecture's
+  default `provider.filter.safety.maxHourlyPriceUSD` is $0.80 (CLAUDE.md);
+  at run time the live L40S on-demand market had zero offers at or under
+  $0.80 (the cheapest was $0.8015/h), so the user explicitly authorized
+  raising `SEARCH_MAX_DPH_TOTAL` (and the matching `dph_total.lte` filter
+  sent to the API — the two are now the same value, read from one
+  constant) to $1.00 for this specific spike run. Per R14, this differs
+  from the Accepted default and is not itself a decision to change that
+  default; it needs its own review before becoming permanent.
 
 ### Pre-flight session (Task 8, read 2026-11-02, live, no spend)
 

@@ -23,7 +23,7 @@ usage() {
 
 readonly SWEEP_LABEL_PREFIX="vkllm:spike:"
 readonly MAX_LIST_PAGES=1000
-readonly SEARCH_MAX_DPH_TOTAL="0.80"
+readonly SEARCH_MAX_DPH_TOTAL="1.00"
 readonly WATCHDOG_SECONDS=2400
 readonly BOOT_ABORT_SECONDS=1500
 readonly SSH_POLL_INTERVAL=5
@@ -208,7 +208,7 @@ sweep() {
 # filter.go sends no "order" field; provider.Select sorts offers by
 # dph_total client-side, so this body omits it too.
 print_search_body() {
-  cat <<'JSON'
+  cat <<JSON
 {
   "gpu_name": {"eq": "L40S"},
   "num_gpus": {"eq": 1},
@@ -219,7 +219,7 @@ print_search_body() {
   "inet_down": {"gte": 500},
   "disk_bw": {"gte": 500},
   "cuda_max_good": {"gte": 12.8},
-  "dph_total": {"lte": 0.80},
+  "dph_total": {"lte": $SEARCH_MAX_DPH_TOTAL},
   "verified": {"eq": true},
   "rentable": {"eq": true},
   "type": "ondemand"
