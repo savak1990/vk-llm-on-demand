@@ -70,11 +70,11 @@ declare -A RESULTS
 # laptop timestamp in EVENT_T for the stage table. detail must be a jq-valid
 # JSON literal (use jq -cn to build one), or empty for null.
 record_event() {
-  local event="$1" host_t="${2:-}" detail="${3:-}"
-  EVENT_T["$event"]="$EPOCHREALTIME"
+  local event="$1" host_t="${2:-}" detail="${3:-}" t="${4:-$EPOCHREALTIME}"
+  EVENT_T["$event"]="$t"
   [[ -n "$host_t" ]] && HOST_EVENT_T["$event"]="$host_t"
   [[ -n "$JSONL_FILE" ]] || return 0
-  jq -nc --arg run "$LABEL" --arg event "$event" --argjson t "$EPOCHREALTIME" \
+  jq -nc --arg run "$LABEL" --arg event "$event" --argjson t "$t" \
     --argjson host_t "${host_t:-null}" --argjson detail "${detail:-null}" \
     '{run: $run, event: $event, t: $t, host_t: $host_t, detail: $detail}' \
     >>"$JSONL_FILE" 2>/dev/null || true
@@ -589,7 +589,7 @@ cleanup() {
 # name on a connection error).
 ssh_exec() {
   local cmd="$1"
-  ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+  ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
     -o UserKnownHostsFile="$RUN_TMP/known_hosts" -i "$SPIKE_SSH_KEY" -p "$SSH_PORT" \
     "root@$SSH_HOST" "$cmd" 2>/dev/null
 }
@@ -772,7 +772,7 @@ awk -v s="$start" -v e="$end" -v f="$first" -v c="$chunks" -v d="$done_seen" \
   -v r="$has_reasoning" -v fr="$finish_reason" -v pt="$prompt_tokens" \
   -v ct="$completion_tokens" -v pm="$timings_prompt_ms" "BEGIN{
     ttft = (f == \"-1\") ? -1 : f - s
-    printf \"ttft=%.3f total=%.3f chunks=%d done=%d has_reasoning=%d finish_reason=%s prompt_tokens=%s completion_tokens=%s timings_prompt_ms=%s\n\", ttft, e-s, c, d, r, fr, pt, ct, pm
+    printf \"start=%.6f ttft=%.3f total=%.3f chunks=%d done=%d has_reasoning=%d finish_reason=%s prompt_tokens=%s completion_tokens=%s timings_prompt_ms=%s\n\", s, ttft, e-s, c, d, r, fr, pt, ct, pm
   }"
 '
 
@@ -797,12 +797,13 @@ run_sse_sample() {
 # the M-functions. Unset/garbled fields default to empty, never abort.
 parse_sse_result() {
   local line="$1" kv k v
-  SAMPLE_TTFT="" SAMPLE_TOTAL="" SAMPLE_CHUNKS="" SAMPLE_DONE="" SAMPLE_HAS_REASONING=""
+  SAMPLE_START="" SAMPLE_TTFT="" SAMPLE_TOTAL="" SAMPLE_CHUNKS="" SAMPLE_DONE="" SAMPLE_HAS_REASONING=""
   SAMPLE_FINISH_REASON="" SAMPLE_PROMPT_TOKENS="" SAMPLE_COMPLETION_TOKENS="" SAMPLE_TIMINGS_PROMPT_MS=""
   for kv in $line; do
     k="${kv%%=*}"
     v="${kv#*=}"
     case "$k" in
+      start) SAMPLE_START="$v" ;;
       ttft) SAMPLE_TTFT="$v" ;;
       total) SAMPLE_TOTAL="$v" ;;
       chunks) SAMPLE_CHUNKS="$v" ;;
@@ -849,7 +850,7 @@ m1_port_scan() {
   fi
   if [[ -n "$INSTANCE_DIRECT_PORT_START" && -n "$INSTANCE_DIRECT_PORT_END" ]] &&
     [[ "$INSTANCE_DIRECT_PORT_START" =~ ^[0-9]+$ && "$INSTANCE_DIRECT_PORT_END" =~ ^[0-9]+$ ]] &&
-    ((INSTANCE_DIRECT_PORT_END - INSTANCE_DIRECT_PORT_START < 1024)); then
+    ((INSTANCE_DIRECT_PORT_END - INSTANCE_DIRECT_PORT_START < 128)); then
     local p
     for ((p = INSTANCE_DIRECT_PORT_START; p <= INSTANCE_DIRECT_PORT_END; p++)); do
       mapped_list+=("$p")
@@ -860,7 +861,7 @@ m1_port_scan() {
   open_list=()
   if [[ -n "$INSTANCE_PUBLIC_IP" && -n "$mapped_ports" ]] && command -v nmap >/dev/null; then
     local nmap_out
-    nmap_out="$(nmap -Pn -p "$mapped_ports" -oG - "$INSTANCE_PUBLIC_IP" 2>/dev/null)" || nmap_out=""
+    nmap_out="$(nmap -Pn --host-timeout 120s -p "$mapped_ports" -oG - "$INSTANCE_PUBLIC_IP" 2>/dev/null)" || nmap_out=""
     while IFS= read -r port; do
       [[ -n "$port" ]] && open_list+=("$port")
     done <<<"$(grep -oE '[0-9]+/open' <<<"$nmap_out" | cut -d/ -f1 || true)"
@@ -942,8 +943,8 @@ m3_streamed_chat() {
     "$CURL_HEADERS_FILE" "$body_file" 120)"
   parse_sse_result "$result"
 
-  if [[ -n "$SAMPLE_TTFT" && "$SAMPLE_TTFT" != "-1" ]]; then
-    record_event first_token
+  if [[ -n "${SAMPLE_START:-}" && -n "$SAMPLE_TTFT" && "$SAMPLE_TTFT" != "-1" ]]; then
+    record_event first_token "" "" "$(awk -v s="$SAMPLE_START" -v f="$SAMPLE_TTFT" 'BEGIN{print s+f}')"
   fi
 
   RESULTS[m3]="$(jq -cn --arg chunks "${SAMPLE_CHUNKS:-}" --arg term_done "${SAMPLE_DONE:-}" \
@@ -975,8 +976,18 @@ m4_latency_and_metrics() {
     parse_sse_result "$result"
     record_event "m4_tunnel_sample_$i" "" "$(jq -cn --arg r "$result" '$r')"
     [[ -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]] && tunnel_ttft+=("$SAMPLE_TTFT")
-    if [[ -n "${SAMPLE_COMPLETION_TOKENS:-}" && "$SAMPLE_COMPLETION_TOKENS" != "-1" && -n "${SAMPLE_TOTAL:-}" ]]; then
-      tunnel_tps+=("$(awk -v c="$SAMPLE_COMPLETION_TOKENS" -v t="$SAMPLE_TOTAL" 'BEGIN{if(t>0) print c/t}')")
+    # M3 normally supplies E10; if M3 failed, the first sample here is the
+    # earliest real inference token we have.
+    if [[ -z "${EVENT_T[first_token]:-}" && -n "${SAMPLE_START:-}" &&
+      -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]]; then
+      record_event first_token "" "" "$(awk -v s="$SAMPLE_START" -v f="$SAMPLE_TTFT" 'BEGIN{print s+f}')"
+    fi
+    if [[ -n "${SAMPLE_COMPLETION_TOKENS:-}" && "$SAMPLE_COMPLETION_TOKENS" != "-1" &&
+      -n "${SAMPLE_TOTAL:-}" && -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]]; then
+      # Decode tokens/s excludes prefill: completion_tokens over the
+      # post-first-token duration, not the whole request.
+      tunnel_tps+=("$(awk -v c="$SAMPLE_COMPLETION_TOKENS" -v t="$SAMPLE_TOTAL" -v f="$SAMPLE_TTFT" \
+        'BEGIN{d=t-f; if(d>0) print c/d}')")
     fi
     if [[ $i -eq 1 && -n "${SAMPLE_PROMPT_TOKENS:-}" && "$SAMPLE_PROMPT_TOKENS" != "-1" ]]; then
       CHARS_PER_TOKEN="$(awk -v chars="${#prompt}" -v tok="$SAMPLE_PROMPT_TOKENS" 'BEGIN{if(tok>0) printf "%.2f", chars/tok; else print 4}')"
@@ -990,8 +1001,10 @@ m4_latency_and_metrics() {
     parse_sse_result "$result"
     record_event "m4_host_sample_$i" "" "$(jq -cn --arg r "$result" '$r')"
     [[ -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]] && host_ttft+=("$SAMPLE_TTFT")
-    if [[ -n "${SAMPLE_COMPLETION_TOKENS:-}" && "$SAMPLE_COMPLETION_TOKENS" != "-1" && -n "${SAMPLE_TOTAL:-}" ]]; then
-      host_tps+=("$(awk -v c="$SAMPLE_COMPLETION_TOKENS" -v t="$SAMPLE_TOTAL" 'BEGIN{if(t>0) print c/t}')")
+    if [[ -n "${SAMPLE_COMPLETION_TOKENS:-}" && "$SAMPLE_COMPLETION_TOKENS" != "-1" &&
+      -n "${SAMPLE_TOTAL:-}" && -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]]; then
+      host_tps+=("$(awk -v c="$SAMPLE_COMPLETION_TOKENS" -v t="$SAMPLE_TOTAL" -v f="$SAMPLE_TTFT" \
+        'BEGIN{d=t-f; if(d>0) print c/d}')")
     fi
   done
 
@@ -1029,9 +1042,11 @@ m5_tool_calls() {
       tools: [{type: "function", function: {name: "get_weather",
         description: "Get current weather for a city",
         parameters: {type: "object", properties: {city: {type: "string"}}, required: ["city"]}}}],
-      tool_choice: "auto"
+      tool_choice: "auto", max_tokens: 1024
     }')"
-    tunnel_post "/v1/chat/completions" "$leg1_body" 1
+    # Thinking is left on (model default) here: a reasoning preamble can
+    # run past a short timeout and read as a model failure, not a timeout.
+    tunnel_post "/v1/chat/completions" "$leg1_body" 1 180
     local leg1_resp="$TUNNEL_BODY"
     local finish1 tool_name tool_id tool_args_city
     finish1="$(jq -r '.choices[0].finish_reason // empty' <<<"$leg1_resp" 2>/dev/null)" || finish1=""
@@ -1048,9 +1063,10 @@ m5_tool_calls() {
       leg2_body="$(jq -cn --arg city "$city" --argjson assistant "$assistant_msg" --arg tcid "$tool_id" '{
         model: "qwen3.6-35b-a3b",
         messages: [{role: "user", content: ("What is the weather in " + $city + "?")}, $assistant,
-          {role: "tool", tool_call_id: $tcid, content: "{\"temperature_c\":21,\"condition\":\"clear\"}"}]
+          {role: "tool", tool_call_id: $tcid, content: "{\"temperature_c\":21,\"condition\":\"clear\"}"}],
+        max_tokens: 1024
       }')"
-      tunnel_post "/v1/chat/completions" "$leg2_body" 1
+      tunnel_post "/v1/chat/completions" "$leg2_body" 1 180
       leg2_resp="$TUNNEL_BODY"
       finish2="$(jq -r '.choices[0].finish_reason // empty' <<<"$leg2_resp" 2>/dev/null)" || finish2=""
       content2="$(jq -r '.choices[0].message.content // empty' <<<"$leg2_resp" 2>/dev/null)" || content2=""
@@ -1111,78 +1127,104 @@ m7_qwen_matrix() {
   record_event m7_v1 "" "${v_results[-1]}"
 
   # V2: 65536/1, 58K-64K prompt with a needle sentence, prefill via /metrics delta.
-  reload_start="$EPOCHREALTIME"
-  restart_llama_server 65536 1
-  if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
-    reload_seconds="$(awk -v s="$reload_start" -v e="$EPOCHREALTIME" 'BEGIN{print e-s}')"
-    mem_after_load="$(nvidia_smi_mem)"
-    local needle="XK472-SPIKE" prompt prompt_seconds_before prompt_seconds_after resp
-    prompt="IMPORTANT: remember this secret code: ${needle}. $(gen_filler_prompt 60000) What is the secret code mentioned at the start of this message? Respond with only the code."
-    prompt_seconds_before="$(scrape_metric prompt_seconds_total)"
-    tunnel_post "/v1/chat/completions" "$(build_chat_body "$prompt" 32 false false)" 1 300
-    resp="$TUNNEL_BODY"
-    prompt_seconds_after="$(scrape_metric prompt_seconds_total)"
-    mem_after_prompt="$(nvidia_smi_mem)"
-    local prefill_seconds needle_answered prompt_tokens content
-    prefill_seconds="$(awk -v a="${prompt_seconds_before:-0}" -v b="${prompt_seconds_after:-0}" 'BEGIN{print b-a}')"
-    prompt_tokens="$(jq -r '.usage.prompt_tokens // empty' <<<"$resp" 2>/dev/null)" || prompt_tokens=""
-    content="$(jq -r '.choices[0].message.content // empty' <<<"$resp" 2>/dev/null)" || content=""
-    [[ "$content" == *"$needle"* ]] && needle_answered="yes" || needle_answered="no"
-    v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
-      --arg prompt_tokens "$prompt_tokens" --arg prefill "$prefill_seconds" \
-      --arg needle "$needle_answered" --arg reload "$reload_seconds" \
-      '{config: "V2", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt,
-        prompt_tokens: $prompt_tokens, prefill_seconds_metrics: $prefill,
-        needle_answered: $needle, reload_seconds: $reload}')")
+  if past_skip_deadline; then
+    v_results+=('{"config": "V2", "skipped": "32min skip-ahead reached"}')
   else
-    v_results+=('{"config": "V2", "error": "did not become healthy after restart"}')
+    reload_start="$EPOCHREALTIME"
+    restart_llama_server 65536 1
+    if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
+      reload_seconds="$(awk -v s="$reload_start" -v e="$EPOCHREALTIME" 'BEGIN{print e-s}')"
+      mem_after_load="$(nvidia_smi_mem)"
+      local needle="XK472-SPIKE" prompt prompt_seconds_before prompt_seconds_after resp
+      prompt="IMPORTANT: remember this secret code: ${needle}. $(gen_filler_prompt 60000) What is the secret code mentioned at the start of this message? Respond with only the code."
+      prompt_seconds_before="$(scrape_metric prompt_seconds_total)"
+      tunnel_post "/v1/chat/completions" "$(build_chat_body "$prompt" 32 false false)" 1 300
+      resp="$TUNNEL_BODY"
+      prompt_seconds_after="$(scrape_metric prompt_seconds_total)"
+      mem_after_prompt="$(nvidia_smi_mem)"
+      local prefill_seconds needle_answered prompt_tokens content
+      prefill_seconds="$(awk -v a="${prompt_seconds_before:-0}" -v b="${prompt_seconds_after:-0}" 'BEGIN{print b-a}')"
+      prompt_tokens="$(jq -r '.usage.prompt_tokens // empty' <<<"$resp" 2>/dev/null)" || prompt_tokens=""
+      content="$(jq -r '.choices[0].message.content // empty' <<<"$resp" 2>/dev/null)" || content=""
+      # AC6 needs 58,000-64,000 prompt_tokens; a 1K-token calibration
+      # extrapolated 60x can drift outside the band, so correct once.
+      if [[ -n "$prompt_tokens" ]] && ((prompt_tokens < 58000 || prompt_tokens > 64000)); then
+        CHARS_PER_TOKEN="$(awk -v chars="${#prompt}" -v tok="$prompt_tokens" 'BEGIN{if(tok>0) printf "%.2f", chars/tok; else print 4}')"
+        prompt="IMPORTANT: remember this secret code: ${needle}. $(gen_filler_prompt 60000) What is the secret code mentioned at the start of this message? Respond with only the code."
+        prompt_seconds_before="$(scrape_metric prompt_seconds_total)"
+        tunnel_post "/v1/chat/completions" "$(build_chat_body "$prompt" 32 false false)" 1 300
+        resp="$TUNNEL_BODY"
+        prompt_seconds_after="$(scrape_metric prompt_seconds_total)"
+        mem_after_prompt="$(nvidia_smi_mem)"
+        prefill_seconds="$(awk -v a="${prompt_seconds_before:-0}" -v b="${prompt_seconds_after:-0}" 'BEGIN{print b-a}')"
+        prompt_tokens="$(jq -r '.usage.prompt_tokens // empty' <<<"$resp" 2>/dev/null)" || prompt_tokens=""
+        content="$(jq -r '.choices[0].message.content // empty' <<<"$resp" 2>/dev/null)" || content=""
+      fi
+      [[ "$content" == *"$needle"* ]] && needle_answered="yes" || needle_answered="no"
+      v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
+        --arg prompt_tokens "$prompt_tokens" --arg prefill "$prefill_seconds" \
+        --arg needle "$needle_answered" --arg reload "$reload_seconds" \
+        '{config: "V2", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt,
+          prompt_tokens: $prompt_tokens, prefill_seconds_metrics: $prefill,
+          needle_answered: $needle, reload_seconds: $reload}')")
+    else
+      v_results+=('{"config": "V2", "error": "did not become healthy after restart"}')
+    fi
   fi
   record_event m7_v2 "" "${v_results[-1]}"
 
   # V3: 65536/2, two concurrent ~30K prompts.
-  restart_llama_server 65536 2
-  if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
-    mem_after_load="$(nvidia_smi_mem)"
-    local b1="$RUN_TMP/v3_body1.json" b2="$RUN_TMP/v3_body2.json"
-    build_chat_body "$(gen_filler_prompt 30000)" 16 false false >"$b1"
-    build_chat_body "$(gen_filler_prompt 30000)" 16 false false >"$b2"
-    ( tunnel_post "/v1/chat/completions" "$(cat "$b1")" 1 240 ) &
-    local p1=$!
-    ( tunnel_post "/v1/chat/completions" "$(cat "$b2")" 1 240 ) &
-    local p2=$!
-    wait "$p1" "$p2" 2>/dev/null || true
-    mem_after_prompt="$(nvidia_smi_mem)"
-    v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
-      '{config: "V3", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt}')")
+  if past_skip_deadline; then
+    v_results+=('{"config": "V3", "skipped": "32min skip-ahead reached"}')
   else
-    v_results+=('{"config": "V3", "error": "did not become healthy after restart"}')
+    restart_llama_server 65536 2
+    if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
+      mem_after_load="$(nvidia_smi_mem)"
+      local b1="$RUN_TMP/v3_body1.json" b2="$RUN_TMP/v3_body2.json"
+      build_chat_body "$(gen_filler_prompt 30000)" 16 false false >"$b1"
+      build_chat_body "$(gen_filler_prompt 30000)" 16 false false >"$b2"
+      ( tunnel_post "/v1/chat/completions" "$(cat "$b1")" 1 240 ) &
+      local p1=$!
+      ( tunnel_post "/v1/chat/completions" "$(cat "$b2")" 1 240 ) &
+      local p2=$!
+      wait "$p1" "$p2" 2>/dev/null || true
+      mem_after_prompt="$(nvidia_smi_mem)"
+      v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
+        '{config: "V3", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt}')")
+    else
+      v_results+=('{"config": "V3", "error": "did not become healthy after restart"}')
+    fi
   fi
   record_event m7_v3 "" "${v_results[-1]}"
 
   # V4: 131072/2, two concurrent ~60K prompts.
-  restart_llama_server 131072 2
-  if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
-    mem_after_load="$(nvidia_smi_mem)"
-    local b1="$RUN_TMP/v4_body1.json" b2="$RUN_TMP/v4_body2.json"
-    build_chat_body "$(gen_filler_prompt 60000)" 16 false false >"$b1"
-    build_chat_body "$(gen_filler_prompt 60000)" 16 false false >"$b2"
-    ( tunnel_post "/v1/chat/completions" "$(cat "$b1")" 1 300 ) &
-    local p1=$!
-    ( tunnel_post "/v1/chat/completions" "$(cat "$b2")" 1 300 ) &
-    local p2=$!
-    wait "$p1" "$p2" 2>/dev/null || true
-    mem_after_prompt="$(nvidia_smi_mem)"
-    v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
-      '{config: "V4", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt}')")
+  if past_skip_deadline; then
+    v_results+=('{"config": "V4", "skipped": "32min skip-ahead reached"}')
   else
-    v_results+=('{"config": "V4", "error": "did not become healthy after restart"}')
+    restart_llama_server 131072 2
+    if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
+      mem_after_load="$(nvidia_smi_mem)"
+      local b1="$RUN_TMP/v4_body1.json" b2="$RUN_TMP/v4_body2.json"
+      build_chat_body "$(gen_filler_prompt 60000)" 16 false false >"$b1"
+      build_chat_body "$(gen_filler_prompt 60000)" 16 false false >"$b2"
+      ( tunnel_post "/v1/chat/completions" "$(cat "$b1")" 1 300 ) &
+      local p1=$!
+      ( tunnel_post "/v1/chat/completions" "$(cat "$b2")" 1 300 ) &
+      local p2=$!
+      wait "$p1" "$p2" 2>/dev/null || true
+      mem_after_prompt="$(nvidia_smi_mem)"
+      v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
+        '{config: "V4", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt}')")
+    else
+      v_results+=('{"config": "V4", "error": "did not become healthy after restart"}')
+    fi
   fi
   record_event m7_v4 "" "${v_results[-1]}"
 
   RESULTS[m7]="$(printf '%s\n' "${v_results[@]}" | jq -sc .)"
 
   # Restore the production baseline so M8-M10 run against the ADR 0002
-  # config, not whatever the matrix left active.
+  # config, not whatever the matrix left active, even if V2-V4 were skipped.
   restart_llama_server 32768 1
   poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))" || true
   echo "LAUNCH: M7 matrix done, baseline restored" >&2
@@ -1217,7 +1259,7 @@ m8_bulk_and_stream() {
   start="$EPOCHREALTIME"
   bytes="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
     -o UserKnownHostsFile="$RUN_TMP/known_hosts" -i "$SPIKE_SSH_KEY" -p "$SSH_PORT" \
-    "root@$SSH_HOST" "head -c 1073741824 /dev/zero" 2>/dev/null | wc -c | tr -d ' ')" || bytes=0
+    "root@$SSH_HOST" "timeout 240 head -c 1073741824 /dev/zero" 2>/dev/null | wc -c | tr -d ' ')" || bytes=0
   end="$EPOCHREALTIME"
   mb_s="$(awk -v b="${bytes:-0}" -v s="$start" -v e="$end" 'BEGIN{if(e>s) print b/(e-s)/1000000; else print 0}')"
 
@@ -1426,9 +1468,20 @@ collect_host_events() {
 }
 
 run_measurements() {
-  fetch_instance_details || true
   CURL_HEADERS_FILE="$RUN_TMP/headers_auth.cfg"
   printf 'header = "Authorization: Bearer %s"\n' "$WORKER_API_KEY" >"$CURL_HEADERS_FILE"
+
+  # M3 runs first, before M1's port scan (which can run for a minute or
+  # more) and M2, so E10 (first_token) and the first_token/cold_start_total
+  # stages are not inflated by measurements unrelated to inference latency.
+  # The spec's M-table lists M1 first; this reorder is a deliberate,
+  # flagged deviation for the sake of the headline cold-start numbers.
+  if ! m3_streamed_chat; then
+    record_event m3_error
+    echo "LAUNCH: M3 failed, continuing" >&2
+  fi
+
+  fetch_instance_details || true
   upload_to_host <(printf '%s' "$WORKER_API_KEY") /root/spike_api_key.txt || true
   ssh_exec "chmod 600 /root/spike_api_key.txt" >/dev/null 2>&1 || true
   upload_to_host "$CURL_HEADERS_FILE" /root/spike_curl_headers.cfg || true
@@ -1443,10 +1496,6 @@ run_measurements() {
   if ! m2_health_models; then
     record_event m2_error
     echo "LAUNCH: M2 failed, continuing" >&2
-  fi
-  if ! m3_streamed_chat; then
-    record_event m3_error
-    echo "LAUNCH: M3 failed, continuing" >&2
   fi
   if ! m4_latency_and_metrics; then
     record_event m4_error
