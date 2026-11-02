@@ -752,10 +752,28 @@ restart_llama_server() {
     sleep 2
   done
 
+  # Nothing else records whether the key file this restart depends on
+  # is actually there, since its upload discards failures silently.
+  local key_check
+  key_check="$(ssh_exec "test -s /root/spike_api_key.txt && echo present || echo missing")" || key_check="check_failed"
+  record_event restart_key_file_check "" "$(jq -cn --arg c "$ctx" --arg p "$parallel" --arg k "$key_check" \
+    '{ctx: $c, parallel: $p, key_file: $k}')"
+
   ssh_exec "rm -f /root/llama.log; nohup /app/llama-server --host 127.0.0.1 --port 8080 \
     --model /models/model.gguf -c $ctx -np $parallel -ngl all -fa on --no-mmproj --metrics \
     --jinja --reasoning-format deepseek --api-key-file /root/spike_api_key.txt --timeout 600 \
     --alias qwen3.6-35b-a3b >/root/llama.log 2>&1 </dev/null & disown; echo restarted" >/dev/null 2>&1 || true
+
+  # Nothing else captures the new process's own stderr or whether it is
+  # even still alive a few seconds in; without this, "never came up" and
+  # "crashed instantly" are indistinguishable from the poll loop alone.
+  sleep 5
+  local running_after log_tail
+  running_after="$(ssh_exec "pgrep -x llama-server")" || running_after=""
+  log_tail="$(ssh_exec "tail -n 40 /root/llama.log 2>/dev/null")" || log_tail=""
+  record_event restart_attempt_diagnostics "" "$(jq -cn --arg c "$ctx" --arg p "$parallel" \
+    --arg running "$([[ -n "$running_after" ]] && echo yes || echo no)" --arg log "$log_tail" \
+    '{ctx: $c, parallel: $p, process_running_after_5s: $running, log_tail: $log}')"
 }
 
 # Confirms a "healthy" restart is really the new config, not an old
@@ -1195,7 +1213,9 @@ m7_qwen_matrix() {
   local baseline_dirty=0
 
   # V1: 32768/1, ~30K prompt, then an ~40K prompt expected to overflow.
-  if too_close_to_hard_cap 660; then
+  # 480 = two sequential 240s tunnel_post calls; scales with an overridden
+  # RESTART_HEALTH_TIMEOUT_SECONDS instead of assuming its 180s default.
+  if too_close_to_hard_cap $((RESTART_HEALTH_TIMEOUT_SECONDS + 480)); then
     local vcfg
     for vcfg in V1 V2 V3 V4; do
       v_results+=("$(jq -cn --arg c "$vcfg" '{config: $c, skipped: "too close to the 40min hard cap"}')")
@@ -1231,7 +1251,8 @@ m7_qwen_matrix() {
   record_event m7_v1 "" "${v_results[-1]}"
 
   # V2: 65536/1, 58K-64K prompt with a needle sentence, prefill via /metrics delta.
-  if past_skip_deadline || too_close_to_hard_cap 780; then
+  # 600 = two possible 300s attempts (initial plus one recalibration retry).
+  if past_skip_deadline || too_close_to_hard_cap $((RESTART_HEALTH_TIMEOUT_SECONDS + 600)); then
     v_results+=('{"config": "V2", "skipped": "32min skip-ahead or too close to the 40min hard cap"}')
   else
     baseline_dirty=1
@@ -1292,8 +1313,9 @@ m7_qwen_matrix() {
   fi
   record_event m7_v2 "" "${v_results[-1]}"
 
-  # V3: 65536/2, two concurrent ~30K prompts.
-  if past_skip_deadline || too_close_to_hard_cap 480; then
+  # V3: 65536/2, two concurrent ~30K prompts. 300 = one 240s tunnel_post
+  # round (concurrent, not sequential) plus margin.
+  if past_skip_deadline || too_close_to_hard_cap $((RESTART_HEALTH_TIMEOUT_SECONDS + 300)); then
     v_results+=('{"config": "V3", "skipped": "32min skip-ahead or too close to the 40min hard cap"}')
   else
     baseline_dirty=1
@@ -1328,8 +1350,9 @@ m7_qwen_matrix() {
   fi
   record_event m7_v3 "" "${v_results[-1]}"
 
-  # V4: 131072/2, two concurrent ~60K prompts.
-  if past_skip_deadline || too_close_to_hard_cap 480; then
+  # V4: 131072/2, two concurrent ~60K prompts. 300 = one 300s tunnel_post
+  # round (concurrent, not sequential) plus margin.
+  if past_skip_deadline || too_close_to_hard_cap $((RESTART_HEALTH_TIMEOUT_SECONDS + 300)); then
     v_results+=('{"config": "V4", "skipped": "32min skip-ahead or too close to the 40min hard cap"}')
   else
     baseline_dirty=1
