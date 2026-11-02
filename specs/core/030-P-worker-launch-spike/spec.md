@@ -351,3 +351,66 @@ The census from the search table shows how many offers each candidate
 - `launch.sh`'s laptop-side JSON parsing (the `--run` measurement code, M1-M10)
   uses `jq`, already a dependency of this script since Task 3/4; no new
   dependency was added.
+
+### Pre-flight session (Task 8, read 2026-11-02, live, no spend)
+
+- **Balance.** `GET /api/v0/users/current` (key via `-K -` on stdin, same
+  pattern as `vast_call`) returned `balance: 0`, `credit: 25.0`. The
+  endpoint's documented schema
+  (https://docs.vast.ai/api-reference/accounts/show-user) names only
+  `balance` ("the current balance of the user") and does not document
+  `credit`; research §1.5 also records a CORE-020 probe (2026-11-02) that
+  likewise read `balance: 0`. Whether that probe predates the $25 top-up
+  is not recorded, but it shows `balance: 0` is not new, one-off
+  behaviour for this account. The $25 of prepaid funds that are actually
+  at risk live in the undocumented `credit` field. Treating the
+  spendable figure conservatively as the higher number: **$25.00**.
+- **Backstop check (implementation step 5 / brief step 4).** $25.00 exceeds the $10 backstop
+  (research §1.5; this spec's Safety and cost controls table). **This
+  check does not pass.** Manual action on the Vast.ai dashboard is needed
+  to bring spendable funds to ≤ $10 before Task 9 runs; this session takes
+  no such action (live, read-only, no-spend task).
+- **Concern for the controller, not fixed in this task:** `launch.sh`'s
+  `read_balance()` (around line 674) reads the `.balance` field for the
+  before/after/+1h readings that R5, AC13 and M10 step c depend on. If
+  Task 9's spend draws down `.credit` while `.balance` stays pinned at 0,
+  every spend delta in that run reads as $0 and the $5 cap check (AC13)
+  would be blind to real spend. The controller should decide whether
+  `read_balance()` needs to read `.credit` (or both) before Task 9.
+- **`SPIKE_IMAGE` digest (ADR 0002 §1, build ≥ b12032).** Queried GHCR
+  directly: `docker manifest inspect ghcr.io/ggml-org/llama.cpp:server-cuda -v`
+  and `GET https://ghcr.io/v2/ggml-org/llama.cpp/manifests/server-cuda`
+  (anonymous pull token, `Accept: application/vnd.oci.image.index.v1+json`).
+  The tag resolves to a two-platform (amd64, arm64) OCI index, index digest
+  `sha256:0a9f6c7cfe5a6b90b6c048b7a86865bf55a88af34bada927482eab2ef5f25b4a`
+  (the `Docker-Content-Digest` response header for the tag). Both
+  platform manifests carry
+  `org.opencontainers.image.version: "b12033"` and
+  `org.opencontainers.image.created: "2026-11-02T06:12:11Z"`, i.e. built
+  on the day of this pre-flight read and ≥ b12032. Chosen value for `SPIKE_IMAGE`:
+  `ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:0a9f6c7cfe5a6b90b6c048b7a86865bf55a88af34bada927482eab2ef5f25b4a`.
+  (The amd64-only platform manifest digest,
+  `sha256:ce9c9f0d45794f78f1c99bcb02c32509a40ba3a513d9d3222aaf6f7a98737cad`,
+  same version/date, is recorded here too in case the index-digest form
+  does not pull cleanly on the Vast host.)
+- **`SPIKE_MODEL_SHA256`.** Ran the brief's exact command:
+  `curl -sIL "https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen_Qwen3.6-35B-A3B-Q5_K_M.gguf"`.
+  The redirect response carried
+  `x-linked-etag: "ec438d1326eb11d8bb94785c54739cd4b60b01ae32bd8532e232a046b19d296d"`
+  (64 hex characters, a valid sha256 shape) and
+  `x-linked-size: 25913185920`, matching the 25,913,185,920-byte size
+  already recorded in research §3. Per the brief, this value is used:
+  **`SPIKE_MODEL_SHA256 = ec438d1326eb11d8bb94785c54739cd4b60b01ae32bd8532e232a046b19d296d`**.
+  Cross-checked against the git LFS pointer file itself
+  (`GET …/raw/main/Qwen_Qwen3.6-35B-A3B-Q5_K_M.gguf`, which for an LFS
+  file returns the pointer, not the bytes): it reads
+  `oid sha256:ec438d1326eb11d8bb94785c54739cd4b60b01ae32bd8532e232a046b19d296d`
+  and `size 25913185920`, both matching the header exactly. Caveat: this
+  is still Hugging Face's own recorded LFS oid, not a hash computed from
+  downloaded bytes on this laptop or on the host; onstart's own
+  `sha256sum` after download (step 4 of the onstart payload) remains the
+  real verification and is expected to match.
+- **Open-questions row closed in part:** "Does Hugging Face publish the
+  sha256 of the chosen GGUF?" — yes, via `X-Linked-ETag` on the `resolve/`
+  redirect; this spike no longer needs to compute it on the host from
+  scratch, only to confirm the match.

@@ -195,3 +195,73 @@ Scanning and release conventions compared (read 2026-11-01):
 | Secret delivery | ConfigMap only, no Secrets | KMS ciphertext → SSM → External Secrets | ADR 0009 |
 
 Both repositories are public (verified via `gh repo view`, 2026-11-01).
+
+## 7. Spike results (CORE-030)
+
+Filled by the live run (Task 9 and later) of `hack/spike/launch.sh --run`.
+Task 8 (pre-flight, 2026-11-02) populated only the inputs recorded in
+`specs/core/030-P-worker-launch-spike/spec.md` Evidence (`SPIKE_IMAGE`
+digest, `SPIKE_MODEL_SHA256`, account balance/credit); every table below
+is empty until the run produces a `summary` JSONL line.
+
+### 7.1 Cold-start stages
+
+| Stage | Duration (s) | Tag | Source |
+|---|---|---|---|
+| search | | | |
+| create | | | |
+| boot | | | |
+| link | | | |
+| download | | | |
+| load | | | |
+| ready | | | |
+| first_token | | | |
+| **Cold start total** (E10 − E0) | | | |
+
+### 7.2 Open questions Q1–Q3, Q7–Q12
+
+| Q | Question | Answer | Tag | Source |
+|---|---|---|---|---|
+| Q1 | SSH mode works with `server-cuda` | | | |
+| Q2 | `onstart` runs in `args` mode | | | |
+| Q3 | SSH endpoint direct or proxied; channel throttling | | | |
+| Q7 | Qwen3.6 tool-call round trip | | | |
+| Q8 | HF download throughput | | | |
+| Q9 | VRAM at 32K, 64K, `-np 2` | | | |
+| Q10 | Decode tokens/s, warm TTFT | | | |
+| Q11 | Image built with SSL | | | |
+| Q12 | Image pull under 2 min | | | |
+
+### 7.3 ADR 0006 decision gate
+
+| Gate | Threshold | Pass/Fail | Detail |
+|---|---|---|---|
+| G1 SSH | `ssh_ok` within 5 min of `running` | | |
+| G2 onstart | events log exists, `server_start` logged | | |
+| G3 loopback | port 8080 bound only to `127.0.0.1` | | |
+| G4 readiness | `/health` 200, `/v1/models` lists the alias | | |
+| G5 latency | tunnel TTFT/tokens-per-s vs on-host | | |
+| G6 stability | 0 channel drops `ssh_ok`..end of M8 | | |
+
+### 7.4 M1–M10 measurements
+
+| # | Measurement | Result |
+|---|---|---|
+| M1 | Port scan (loopback-only verdict) | |
+| M2 | `/health`, `/v1/models` with/without key | |
+| M3 | Streamed chat completion shape | |
+| M4 | Tunnel vs on-host TTFT / tokens-per-s | |
+| M5 | Tool-call round trips (n/5) | |
+| M6 | `--help` SSL flags | |
+| M7 | Q9 VRAM matrix (V1–V4) | |
+| M8 | Bulk throughput, channel drops | |
+| M9 | 60 s single-stream HF download sample | |
+| M10 | Self-exit step (a/b/c), billing-stopped verdict | |
+
+### 7.5 Recommended values
+
+| Key | Recommended | Needs ADR amendment? |
+|---|---|---|
+| `provider.filter.minInetDownMBps` | | |
+| `onDemand.maxWait` | | |
+| `lifecycle.startupTimeout` | | |
