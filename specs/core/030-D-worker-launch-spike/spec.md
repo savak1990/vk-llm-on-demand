@@ -347,7 +347,7 @@ The census from the search table shows how many offers each candidate
 | Does `apt-get` reach a mirror quickly inside `server-cuda` on Vast? | aria2c vs curl choice in spec 070 | this spike, step 2 of onstart | **settled: yes**, both real runs (3.6 s, 8.6 s); aria2c used, curl fallback never exercised (research §7.1) |
 | Does `--host` win over `LLAMA_ARG_HOST` when both are set? | spec 070 may skip the `unset` | spec 070; this spike unsets and proves sockets only | always unset; loopback-only confirmed on `/proc/net/tcp` in both real runs (research §7.3 G3) |
 | How fast does the `balance` field reflect charges? | AC13 timing | this spike, readings at end and ≥ 1 h later | **settled** (research §7.5): `.balance` stayed pinned at 0 on this account, `.credit` moved; two real readings disagreed — ~32 min after A1's destroy ($0.4273, A1 only) and 63 min after the last destroy ($1.21402759574, full real delta) — and the later, more complete 63-minute reading is the one used, since it is the reading AC13 itself asks for |
-| Does an in-container action (script exit, `kill -TERM 1`) turn an SSH-mode instance `exited`, and does GPU billing stop? | the host self-stop and C-8 depend on it | M10 in this spike | **settled: no**, in both real runs — neither action reached `exited` within 120 s each (research §7.4 M10); ADR 0003 §7 flagged for review as a result |
+| Does an in-container action (script exit, `kill -TERM 1`) turn an SSH-mode instance `exited`, and does GPU billing stop? | the host self-stop and C-8 depend on it | M10 in this spike | **measured, not settled**: `actual_status` stayed `running` for 120 s after each action, in both real runs (research §7.4 M10). Whether the kill itself failed or Vast just doesn't reflect in-container death in `actual_status` was not distinguished — PID 1's identity under Vast's SSH launch mode was never confirmed; ADR 0003 §7 flagged for review as a result |
 | Can the on-demand contract's maximum duration (research §1.5) cap a spike instance? | a server-side stop independent of the container | not used; it is set by the host, not by us | host self-stop timer; never triggered in either real run (both destroyed by the script's own `DELETE`) |
 | Does `curl -sfIL` report the final `Content-Length` after Hugging Face redirects? | spec 070's curl fallback | onstart step 3 of this spike | **settled: yes**, both real runs matched the expected size exactly (research §7.1) |
 | Tool behaviour assumed, not in research: bash ≥ 5 `$EPOCHREALTIME`; Caddy `tls internal` self-signed | timing and fallback B | `launch.sh` fails at start without `$EPOCHREALTIME`; the B image build and first TLS connection | as stated |
@@ -468,7 +468,9 @@ the numbers.
   and skip fallback B — a sub-second latency miss with no throughput cost
   did not justify a custom TLS-proxy image.
 - **ADR 0006** is now Accepted (bundle A), with the G5 threshold amendment
-  recorded above and in the ADR itself.
+  — TTFT delta ≤ 1.0 s and tokens/s ≥ 95 % of host, both real samples
+  passing (804 ms / 941 ms; 99.57 % / 100.66 %) — recorded in the ADR
+  itself and in research §7.6.
 - **ADR 0005** is amended: one real sample (403.9 s) exceeded the 300 s
   trigger, the other (289.3 s) did not — the trigger, read literally,
   fired. Unlike the Fallback B skip above, **this spec does not itself
@@ -476,16 +478,22 @@ the numbers.
   decision is left explicitly pending the project owner's call (the ADR's
   Status section says so), which may reasonably wait on spec 140's
   repeated runs for more samples, but is not assumed here.
-- **M10 / ADR 0003 §7 flag.** In both runs, neither `pkill -x llama-server`
-  nor a subsequent `kill -TERM 1` brought the instance to `actual_status:
-  exited` within 120 s each. Only the script's own `DELETE` call ended
-  either instance. [ADR 0003](../../../docs/adr/0003-gpu-lifecycle-management.md)
-  §7 states that an exited instance stops GPU billing even when the
-  control plane is down; this spike's data (2/2 real samples) suggests the
-  in-container half of reaching `exited` does not hold within the window
-  tested. **ADR 0003 is not amended by this spec** — out of this spike's
-  explicit scope — but the finding is recorded here and in research §7.4
-  so spec 070 or a dedicated review picks it up deliberately.
+- **M10 / ADR 0003 §7 flag.** In both runs, `actual_status` stayed
+  `running` for 120 s after `pkill -x llama-server` and 120 s after a
+  subsequent `kill -TERM 1`; only the script's own `DELETE` call ended
+  either instance. The `kill -TERM 1` result was discarded (`|| true`), so
+  whether PID 1 actually exited — or what process PID 1 even was under
+  Vast's SSH launch mode — was never checked.
+  [ADR 0003](../../../docs/adr/0003-gpu-lifecycle-management.md) §7 states
+  that an exited instance stops GPU billing even when the control plane is
+  down; this spike's data (2/2 real samples) is consistent with either
+  "the in-container kill didn't work" or "Vast doesn't reflect in-container
+  process death in `actual_status` regardless" — which one is true was not
+  distinguished here. **ADR 0003 is not amended by this spec** — out of
+  this spike's explicit scope — but the finding is recorded here and in
+  research §7.4 so spec 070 or a dedicated review picks it up
+  deliberately, starting from confirming what PID 1 is under Vast's SSH
+  launch mode.
 - **Q9 (VRAM matrix) stays open.** Seven restart attempts across both runs
   failed to become healthy: all four (V1–V4) in A1, and V1–V3 in A2 (A2's
   V4 was skipped outright as the 40-minute hard cap approached, not
@@ -527,7 +535,10 @@ the numbers.
   resolved**: it reads `.credit` before falling back to `.balance`, so the
   before/after readings in both runs' `summary` lines reflect real
   spendable funds, not the `.balance` field that stays pinned at 0 on this
-  account.
+  account. The same `.balance`-only bug exists in the shipped
+  `internal/provider/vastai/client.go`'s `Balance()` (production code, not
+  touched by this branch) — flagged here and in research §1.5 for its own
+  follow-up fix, not resolved by this spike's throwaway script.
 
 ### AC1–AC17
 
@@ -547,6 +558,6 @@ the numbers.
 | AC12 | Yes | both runs' `--sweep` and direct `GET` confirmation, above |
 | AC13 | **Yes** | research §7.5 — real balance read 63 min after the last destroy; final delta $1.21402759574, under the $5.00 cap |
 | AC14 | **Partly** — ADR 0006/recommended-values halves hold; the "Q1–Q3 and Q7–Q12 marked closed" half does not, Q9 is explicitly left open | this Evidence section; research §7.6, §7.7; `docs/open-questions.md` |
-| AC15 | Yes (prior task) | implementation step 4's local Docker test, run before any real spend |
+| AC15 | Yes (prior task) | implementation step 4's local Docker test, run before any real spend: `docker run --init` (tini as PID 1), `SPIKE_SELF_STOP_SECONDS=60` — `self_stop_fired` logged 60.001 s after start (within the ±5 s window), container exit code 143 (SIGTERM), exit within the 90 s window. This `--init`/tini result is local-Docker-only and does not carry over to Vast's real SSH-mode container, where PID 1's identity was never confirmed (research §7.4, M10 flag) |
 | AC16 | **Partly** — steps a and b recorded (`exited` yes/no with seconds) in both runs; step c (15 min balance delta while `exited`, "GPU billing stopped" verdict) never ran, since its precondition (`exited`) was never met | research §7.4 M10 |
-| AC17 | Yes (prior task) | implementation step 3's stub check |
+| AC17 | Yes (prior task) | implementation step 3's stub check: after the create call timed out (~60 s against the stub), log line `cleanup: no id, sweeping label vkllm:spike:<ts>`, script exit code 2 |

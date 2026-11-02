@@ -71,7 +71,9 @@ Date of research: 2026-11-01. Re-verify V items older than six months before rel
 | GPU time is billed per second while the instance is active/connected; **not charged while Loading**; bandwidth billed per byte in any state; no minimum charge stated | V | https://docs.vast.ai/guides/reference/faq/billing |
 | Prepaid credit model; at $0 balance "instances, storage volumes, and data will be scheduled for deletion" | V | same |
 | `GET /api/v0/users/current` has a `balance` field | V | https://docs.vast.ai/api-reference/accounts/show-user |
-| CORE-020 probe: `GET /api/v0/users/current` returned the expected shape with a populated `billing_threshold` and zero current balance | S | our API probe, 2026-11-02 |
+| CORE-020 probe: `GET /api/v0/users/current` returned the expected shape with a populated `billing_threshold` and zero current balance (the `.balance` field — see next row) | S | our API probe, 2026-11-02 |
+| The `.balance` field documented above stays pinned at **0** on this real prepaid account across both the no-spend pre-flight session and the real-spend runs; the account's actual spendable funds live in the undocumented `.credit` field, which does move with spend. CORE-030's `read_balance()` reads `.credit` first, falling back to `.balance`, and recorded three real readings this way: $25.0000 (before run 1) → $24.5727 (~32 min after run 1's destroy) → $23.78597240426 (63 min after run 2's destroy) — a real delta of $1.21402759574 — while `.balance` would have read 0 throughout (research §7.5) | S | spike + CORE-020 probe, 2026-11-02 |
+| **Shipped production bug, flagged here, not fixed in this branch:** `internal/provider/vastai/client.go`'s `Balance()` (around line 528) decodes only `json:"balance"`, the same field that stays pinned at 0 on this account — so the real control plane's balance tracking would read $0 in production on an account shaped like this one. This needs its own follow-up fix; `client.go` is out of scope for this branch | S | code read, 2026-11-02 |
 | `GET /api/v0/charges` **exists**: the probe got HTTP 401 with body `{"success":false,"msg":"Authorization Error. Your key lacks the billing_read permission group which is required for this action."}` — a permission gate, not a 404. The endpoint's existence is now confirmed; it remains unused, as the budget design does not depend on it (CORE-100 ledger handles the real spend estimate) | S | our API probe, 2026-11-02 |
 | `PUT /api/v0/instances/recycle/{id}` recreates the container from a freshly pulled image; on-demand contracts have a maximum duration and expired instances "may be deleted 48 hours after expiration" | V | https://docs.vast.ai/guides/instances/choosing/instance-types |
 
@@ -150,7 +152,7 @@ Only the 10 full-attention layers keep a KV cache. Per token: 10 layers × 2 (K,
 | 65,536 | ≈ 1.25 GiB |
 | 262,144 | ≈ 5 GiB |
 
-DeltaNet recurrent state is fixed per slot: 30 layers × 32 heads × 128 × 128 × 4 bytes ≈ 60 MiB (assumes f32 state — U), plus ≈ 3 MiB conv state. Weights Q5_K_M ≈ 24.1 GiB; compute buffers ≈ 0.5–2 GiB (U). Total at 64K context ≈ **26–28 GiB**, inside a 48 GB L40S with room for a second slot. CORE-030 measures the real number from `nvidia-smi`.
+DeltaNet recurrent state is fixed per slot: 30 layers × 32 heads × 128 × 128 × 4 bytes ≈ 60 MiB (assumes f32 state — U), plus ≈ 3 MiB conv state. Weights Q5_K_M ≈ 24.1 GiB; compute buffers ≈ 0.5–2 GiB (U). Total at 64K context ≈ **26–28 GiB**, inside a 48 GB L40S with room for a second slot. CORE-030 attempted to measure the real number from `nvidia-smi` but every restart failed health before a reading could be taken (§7.2 Q9); spec 140 is the next place to try.
 
 ## 4. OpenAI-compatible clients
 
@@ -335,12 +337,23 @@ direct `GET` (`{"instances": null}`) and `--sweep` (0 instances).
 
 **Flag for a future session, not fixed here:** [ADR 0003](adr/0003-gpu-lifecycle-management.md)
 §7 states that "an exited instance stops GPU billing even when the control
-plane is down." This spike's M10 data (2/2 real samples) suggests the
-in-container half of that assumption — that killing the server process and
-then PID 1 is sufficient to reach `exited` — does not hold, at least within
-120 s per step on this provider. ADR 0003 is **not amended by this spec**
-(out of this spike's explicit scope); this is recorded here so spec 070 or
-a dedicated review picks it up deliberately.
+plane is down." `launch.sh`'s M10 step b sent `kill -TERM 1` and discarded the
+result (`>/dev/null 2>&1 || true`); it never checked whether PID 1 actually
+exited, or confirmed what process PID 1 even was under Vast's SSH launch
+mode. `actual_status` staying `running` for 120 s after each step, in both
+real runs, is equally consistent with "the in-container kill didn't work"
+and with "Vast doesn't reflect in-container process death in
+`actual_status` regardless" — this spike did not distinguish between the
+two. A PID-namespace init process ignores signals it has no handler for by
+default, so PID 1's unconfirmed identity matters here: the step-4 local
+Docker test (spec 030 AC15) used `docker run --init`, making `tini` PID 1
+there and confirming PID 1 does die on SIGTERM in *that* setup, but that
+result does not carry over to Vast's real SSH-mode container. ADR 0003 is
+**not amended by this spec** (out of this spike's explicit scope); the
+follow-up a future session or spec 070 should do first is confirming what
+PID 1 actually is under Vast's SSH launch mode — not assuming the
+in-container kill worked — then re-testing whether that action reaches
+`exited`.
 
 ### 7.5 Cost and safety
 
@@ -412,16 +425,18 @@ not cleanly resolve to an "Accepted" branch on its own.
 (bundle A, SSH launch mode)**, with an **explicit amendment to the G5
 latency threshold**: the 300 ms cap was not met in either real sample
 (804–941 ms measured, with no throughput cost), so G5's threshold is
-amended rather than silently treated as passed or left pending. See the
-ADR itself for the amendment text.
+amended rather than silently treated as passed or left pending. The
+amended threshold, stated concretely in the ADR: **TTFT delta ≤ 1.0 s and
+tokens/s ≥ 95 % of host** — both real samples meet it (804 ms / 941 ms;
+99.57 % / 100.66 %).
 
 ### 7.7 Recommended values
 
 | Key | Current Accepted default | Recommended | Needs ADR amendment? |
 |---|---|---|---|
 | `provider.filter.minInetDownMBps` | 500 (ADR 0005 §2 / `docs/architecture.md`) | **≥ 1100 (A1) / ≥ 750 (A2).** Neither run's `search_end` event recorded the chosen offer's actual advertised `inet_down` (no offer-census event was logged), but both runs' search used the production filter `inet_down {gte: 500}`, so the advertised value was at least 500 in both cases. Applying the rule with that floor (`r = measured MB/s ÷ 500`, `value = (25,913 MB ÷ 180 s) ÷ r`, rounded up to 50): A1 (fetch-only 66.93 MB/s) → r = 0.1339 → value ≥ 1100; A2 (fetch-only 99.70 MB/s) → r = 0.1994 → value ≥ 750. Both are **lower bounds** — the true advertised `inet_down` could be higher than 500, which would push the recommended value higher still, not lower. Caveat: this all assumes `inet_down`'s documented unit is MB/s, which Q4 (`docs/open-questions.md`) still leaves open as MB/s vs Mbps; if it turns out to be Mbps, these specific numbers need re-deriving. Taking the MB/s assumption at face value, two real hosts that passed a `≥500` filter delivered only 67–100 MB/s fetch-only — this reproduces, in 2 of 2 runs, exactly the risk ADR 0005 already names ("a host advertises bandwidth it does not deliver"). | **Yes** — both lower-bound figures exceed the 500 default |
-| `onDemand.maxWait` | 480 s (ADR 0007 §4) | **540 s** (the rule's clamp ceiling) — 1.25 × cold start rounds up to the nearest 30 s to 900 s (A1) and 540 s (A2); both clamp to the [300, 540] s ceiling, so the two runs agree on 540 s despite their very different cold-start totals | **Yes** — 540 s exceeds the 480 s Accepted default. Caveat: the rule's stated input is "a run that passed the gate" (§7.3); neither run cleanly did (G5 failed both). Recorded as the best available number from two independent samples that both saturate the clamp ceiling regardless of the exact cold-start figure; spec 140 should confirm once a run meets the amended G5 threshold |
-| `lifecycle.startupTimeout` | 15 min (ADR 0003 §Consequences / `docs/architecture.md`) | **Inconclusive by this spike's own rule.** 2 × (E9 − E2) rounds to 24 min (A1) and 15 min (A2) — real host variance, both within the [10, 30] min clamp. A1's figure would exceed the current 15 min default if adopted | **Not recommended as a change here** — the rule's "passed the gate" precondition was not met in either run, and the two samples disagree by 9 minutes; spec 140 should compute this from a qualifying run rather than applying either number now |
+| `onDemand.maxWait` | 480 s (ADR 0007 §4) | **540 s** (the rule's clamp ceiling) — 1.25 × cold start rounds up to the nearest 30 s to 900 s (A1) and 540 s (A2); both clamp to the [300, 540] s ceiling, so the two runs agree on 540 s despite their very different cold-start totals | **Yes** — 540 s exceeds the 480 s Accepted default. Caveat: the rule's stated input is "a run that passed the gate" (§7.3); neither run passed the original 300 ms G5, though both meet the amended threshold adopted after the fact (ADR 0006: TTFT delta ≤ 1.0 s, tokens/s ≥ 95 % of host). Recorded as the best available number from two independent samples that both saturate the clamp ceiling regardless of the exact cold-start figure; spec 140 should confirm with more samples |
+| `lifecycle.startupTimeout` | 15 min (ADR 0003 §Consequences / `docs/architecture.md`) | **Inconclusive by this spike's own rule.** 2 × (E9 − E2) rounds to 24 min (A1) and 15 min (A2) — real host variance, both within the [10, 30] min clamp. A1's figure would exceed the current 15 min default if adopted | **Not recommended as a change here** — the two samples disagree by 9 minutes, which is the stronger reason to wait; neither run passed the original 300 ms G5, though both meet the amended threshold adopted after the fact (ADR 0006). Spec 140 should compute this from more runs rather than applying either number now |
 
 The census from the search table (spec design) would show how many offers
 each candidate `inet_down` threshold leaves; this spike did not run that

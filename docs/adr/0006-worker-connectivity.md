@@ -21,8 +21,15 @@ accept bundle A anyway rather than build fallback B for a sub-second
 latency difference with no throughput cost; building a custom image with
 Caddy and TLS was judged not worth it for that gap. This is an **explicit,
 informed amendment of the G5 threshold**, not a silent pass: a future
-reader should not assume 300 ms was met. Fallback B remains pre-approved
-below if a future measurement shows a materially worse tunnel.
+reader should not assume 300 ms was met.
+
+**The amended G5 threshold, stated concretely: TTFT delta ≤ 1.0 s and
+tokens/s ≥ 95 % of host.** This turns "sub-second latency difference with
+no throughput cost" — the owner's own rationale above — into a testable
+number; it is not an independently engineered figure. Both real samples
+meet it (804 ms / 941 ms ≤ 1.0 s; 99.57 % / 100.66 % ≥ 95 %). Fallback B
+remains pre-approved below: a future run measuring a TTFT delta over 1.0 s,
+or tokens/s under 95 % of host, re-opens it.
 
 Requesting Vast's `ssh_direct` runtype, in the one run that tried it, did
 not change the SSH routing observed for that host — the script's own
