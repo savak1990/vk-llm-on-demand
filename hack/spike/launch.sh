@@ -33,7 +33,8 @@ readonly M10_STEP_TIMEOUT_SECONDS=120
 readonly M10_STATUS_POLL_INTERVAL=5
 readonly M10_WATCHDOG_EXTENSION_SECONDS=3300
 readonly M10_IDLE_SECONDS=60
-readonly RESTART_HEALTH_TIMEOUT_SECONDS=480
+readonly RESTART_HEALTH_TIMEOUT_SECONDS=180
+readonly M10_RESERVE_SECONDS=300
 
 # --run state: read by cleanup() when a signal or an early exit fires it,
 # so always declared even when empty.
@@ -47,6 +48,8 @@ WORKER_API_KEY=""
 RUN_TMP=""
 SSH_HOST=""
 SSH_PORT=""
+SSH_TARGET=""
+declare -a SSH_OPTS
 OFFER_ID=""
 OFFER_DPH_TOTAL=""
 HARD_CAP=""
@@ -363,6 +366,10 @@ start_watchdog() {
   local main_pid=$$
   (sleep "$WATCHDOG_SECONDS"
     echo "LAUNCH: watchdog: hard cap reached, sending TERM" >&2
+    # Bash only runs the TERM trap once the current foreground command
+    # returns, which a silently dead ssh connection can block for hours;
+    # killing the child too makes that command return right away.
+    pkill -TERM -P "$main_pid" 2>/dev/null
     kill -TERM "$main_pid" 2>/dev/null) &
   WATCHDOG_PID=$!
 }
@@ -402,13 +409,24 @@ poll_until_running() {
   done
 }
 
+# Common options for every ssh call: batch mode, a short connect timeout,
+# host-key pinning, and a keepalive so a silently dead connection is
+# noticed in ~30s instead of blocking on OS-level TCP keepalive (hours).
+set_ssh_opts() {
+  local host="$1" port="$2" key="$3" known_hosts="$4"
+  SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+    -o ServerAliveInterval=10 -o ServerAliveCountMax=3 \
+    -o UserKnownHostsFile="$known_hosts" -i "$key" -p "$port")
+  SSH_TARGET="root@$host"
+}
+
 # Retries `ssh ... true` every 5s until it succeeds; only the overall
 # watchdog bounds this.
 poll_ssh_ready() {
   local host="$1" port="$2" key="$3" known_hosts="$4"
+  set_ssh_opts "$host" "$port" "$key" "$known_hosts"
   while true; do
-    if ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-      -o UserKnownHostsFile="$known_hosts" -i "$key" -p "$port" "root@$host" true 2>/dev/null; then
+    if ssh "${SSH_OPTS[@]}" "$SSH_TARGET" true 2>/dev/null; then
       echo "LAUNCH: event=ssh_ok t=$EPOCHREALTIME"
       record_event ssh_ok
       return 0
@@ -422,9 +440,9 @@ poll_ssh_ready() {
 # this never binds one locally either.
 open_tunnel() {
   local host="$1" port="$2" key="$3" known_hosts="$4"
-  ssh -N -o ExitOnForwardFailure=yes -o BatchMode=yes -o ConnectTimeout=10 \
-    -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="$known_hosts" \
-    -i "$key" -p "$port" -L 127.0.0.1:18080:127.0.0.1:8080 "root@$host" 2>/dev/null &
+  set_ssh_opts "$host" "$port" "$key" "$known_hosts"
+  ssh -N -o ExitOnForwardFailure=yes "${SSH_OPTS[@]}" \
+    -L 127.0.0.1:18080:127.0.0.1:8080 "$SSH_TARGET" 2>/dev/null &
   TUNNEL_PID=$!
   sleep 1
   if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
@@ -501,6 +519,7 @@ poll_health() {
 poll_health_bounded() {
   local deadline="$1"
   while true; do
+    ensure_tunnel
     tunnel_get "/health" 0
     [[ "$TUNNEL_STATUS" == "200" ]] && return 0
     (("${EPOCHREALTIME%.*}" >= deadline)) && return 1
@@ -589,18 +608,14 @@ cleanup() {
 # name on a connection error).
 ssh_exec() {
   local cmd="$1"
-  ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile="$RUN_TMP/known_hosts" -i "$SPIKE_SSH_KEY" -p "$SSH_PORT" \
-    "root@$SSH_HOST" "$cmd" 2>/dev/null
+  ssh -n "${SSH_OPTS[@]}" "$SSH_TARGET" "$cmd" 2>/dev/null
 }
 
 # Copies a local file's bytes to a path on the host via an exec'd `cat`, the
 # simplest thing that works without adding an scp dependency (ladder rung 6).
 upload_to_host() {
   local local_path="$1" remote_path="$2"
-  ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile="$RUN_TMP/known_hosts" -i "$SPIKE_SSH_KEY" -p "$SSH_PORT" \
-    "root@$SSH_HOST" "cat > $remote_path" <"$local_path" 2>/dev/null
+  ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "cat > $remote_path" <"$local_path" 2>/dev/null
 }
 
 # True once 32 min have passed since create_end; M5-M9 are skipped past this
@@ -608,6 +623,21 @@ upload_to_host() {
 past_skip_deadline() {
   [[ -n "$CREATE_END_EPOCH" ]] || return 1
   (("${EPOCHREALTIME%.*}" - CREATE_END_EPOCH >= SKIP_AHEAD_SECONDS))
+}
+
+# Seconds left before the 40-minute hard-cap watchdog fires, from now.
+seconds_until_hard_cap() {
+  awk -v c="${CREATE_END_EPOCH:-0}" -v w="$WATCHDOG_SECONDS" -v now="${EPOCHREALTIME%.*}" \
+    'BEGIN{print (c + w) - now}'
+}
+
+# The 32-minute skip-ahead only gates the START of M5-M9, so a step
+# already running can still overrun it; this checks whether starting a
+# new $1-second step would leave M10 its own reserve before the hard cap.
+too_close_to_hard_cap() {
+  local needed="$1" left
+  left="$(seconds_until_hard_cap)"
+  awk -v l="$left" -v n="$needed" -v r="$M10_RESERVE_SECONDS" 'BEGIN{exit !(l < n + r)}'
 }
 
 # Runs $1 unless the 32-minute deadline has passed, in which case it records
@@ -625,9 +655,9 @@ run_if_time_remains() {
   "$fn" || record_event "${mname}_error"
 }
 
-# Re-arms the hard-cap watchdog to create_end+55min. Called only once M10
-# has confirmed the instance is `exited`, matching the one documented
-# exception to the 40-minute cap (spec Safety controls, R4).
+# Re-arms the hard-cap watchdog to create_end+55min. Only called once M10
+# confirms the instance is `exited`: billing has already stopped by then,
+# so the extra wall-clock time to read the balance twice costs nothing.
 extend_watchdog_for_m10() {
   local main_pid=$$ remaining
   remaining=$((CREATE_END_EPOCH + M10_WATCHDOG_EXTENSION_SECONDS - ${EPOCHREALTIME%.*}))
@@ -635,6 +665,7 @@ extend_watchdog_for_m10() {
   [[ -n "$WATCHDOG_PID" ]] && kill "$WATCHDOG_PID" 2>/dev/null
   (sleep "$remaining"
     echo "LAUNCH: watchdog: M10 extension hard cap (55 min) reached, sending TERM" >&2
+    pkill -TERM -P "$main_pid" 2>/dev/null
     kill -TERM "$main_pid" 2>/dev/null) &
   WATCHDOG_PID=$!
 }
@@ -673,7 +704,7 @@ fetch_instance_details() {
 # tunnel. Returns empty (not an error) when the line is absent.
 scrape_metric() {
   local name="$1" line
-  tunnel_get "/metrics" 0
+  tunnel_get "/metrics" 1
   line="$(grep -E "^llamacpp:${name}[[:space:]]" <<<"$TUNNEL_BODY" | tail -1)" || line=""
   awk '{print $2}' <<<"$line"
 }
@@ -699,27 +730,50 @@ gen_filler_prompt() {
   { yes 'token filler word sequence number text block ' 2>/dev/null | tr -d '\n' | head -c "$chars"; } || true
 }
 
-# Kills the running server (its own ssh call, never combined with the next
-# step: pkill -f matches its own parent `sh -c "..."`, whose argv contains
-# the literal string "llama-server", so a start command in the same call
-# risks dying before it runs). Then starts a fresh one with the given
-# context/parallelism, authenticated via the uploaded key file, never argv.
+# pkill is its own ssh call, never combined with the start command: it
+# also matches its own parent shell's argv (which contains "llama-server"
+# too), so a command chained after it in the same call could die unrun.
 restart_llama_server() {
-  local ctx="$1" parallel="$2"
+  local ctx="$1" parallel="$2" deadline still_running
   ssh_exec "pkill -f llama-server" >/dev/null 2>&1 || true
-  sleep 2
+
+  # A ~25GB model occupies VRAM and port 8080 until the old process is
+  # actually gone; wait for that to be true instead of guessing with a
+  # fixed sleep, so the new server can't collide with a still-dying old one.
+  deadline=$(("${EPOCHREALTIME%.*}" + 30))
+  while true; do
+    still_running="$(ssh_exec "pgrep -x llama-server")" || still_running=""
+    [[ -z "$still_running" ]] && break
+    (("${EPOCHREALTIME%.*}" >= deadline)) && break
+    sleep 2
+  done
+
   ssh_exec "rm -f /root/llama.log; nohup /app/llama-server --host 127.0.0.1 --port 8080 \
     --model /models/model.gguf -c $ctx -np $parallel -ngl all -fa on --no-mmproj --metrics \
     --jinja --reasoning-format deepseek --api-key-file /root/spike_api_key.txt --timeout 600 \
     --alias qwen3.6-35b-a3b >/root/llama.log 2>&1 </dev/null & disown; echo restarted" >/dev/null 2>&1 || true
 }
 
+# Confirms a "healthy" restart is really the new config, not an old
+# process that never died still answering with its old context size.
+# Returns "confirmed", "mismatch: ...", or "unknown" if /props lacks n_ctx.
+confirm_restart_config() {
+  local expected_ctx="$1" props actual_ctx
+  tunnel_get "/props" 1
+  props="$TUNNEL_BODY"
+  actual_ctx="$(jq -r '.default_generation_settings.n_ctx // .n_ctx // empty' <<<"$props" 2>/dev/null)" || actual_ctx=""
+  if [[ -z "$actual_ctx" ]]; then
+    echo "unknown"
+  elif [[ "$actual_ctx" == "$expected_ctx" ]]; then
+    echo "confirmed"
+  else
+    echo "mismatch: got $actual_ctx, expected $expected_ctx"
+  fi
+}
+
 # One streamed chat-completion sample, timed on whichever clock runs it:
-# identical source executed locally (bash -c, laptop clock, through the
-# tunnel) or over ssh (bash -s, host clock, straight to loopback) so a
-# tunnel-vs-on-host comparison is never contaminated by ssh's own channel
-# overhead. Reads SAMPLE_URL/HEADERS/BODY/TIMEOUT from the environment.
-# Prints one "key=value ..." line; never JSON, so it needs no jq on the host.
+# identical source run locally or over ssh, so a tunnel-vs-host comparison
+# is never skewed by ssh's own channel overhead.
 readonly SSE_SAMPLE_SCRIPT='
 export LC_NUMERIC=C
 set -uo pipefail
@@ -771,8 +825,8 @@ end=$EPOCHREALTIME
 awk -v s="$start" -v e="$end" -v f="$first" -v c="$chunks" -v d="$done_seen" \
   -v r="$has_reasoning" -v fr="$finish_reason" -v pt="$prompt_tokens" \
   -v ct="$completion_tokens" -v pm="$timings_prompt_ms" "BEGIN{
-    ttft = (f == \"-1\") ? -1 : f - s
-    printf \"start=%.6f ttft=%.3f total=%.3f chunks=%d done=%d has_reasoning=%d finish_reason=%s prompt_tokens=%s completion_tokens=%s timings_prompt_ms=%s\n\", s, ttft, e-s, c, d, r, fr, pt, ct, pm
+    ttft_str = (f == \"-1\") ? \"-1\" : sprintf(\"%.3f\", f - s)
+    printf \"start=%.6f ttft=%s total=%.3f chunks=%d done=%d has_reasoning=%d finish_reason=%s prompt_tokens=%s completion_tokens=%s timings_prompt_ms=%s\n\", s, ttft_str, e-s, c, d, r, fr, pt, ct, pm
   }"
 '
 
@@ -785,9 +839,7 @@ run_sse_sample() {
     out="$(SAMPLE_URL="$url" SAMPLE_HEADERS="$headers" SAMPLE_BODY="$body" \
       SAMPLE_TIMEOUT="$timeout" bash -c "$SSE_SAMPLE_SCRIPT" 2>/dev/null)" || out=""
   else
-    out="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-      -o UserKnownHostsFile="$RUN_TMP/known_hosts" -i "$SPIKE_SSH_KEY" -p "$SSH_PORT" \
-      "root@$SSH_HOST" "SAMPLE_URL='$url' SAMPLE_HEADERS='$headers' SAMPLE_BODY='$body' \
+    out="$(ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "SAMPLE_URL='$url' SAMPLE_HEADERS='$headers' SAMPLE_BODY='$body' \
       SAMPLE_TIMEOUT='$timeout' bash -s" <<<"$SSE_SAMPLE_SCRIPT" 2>/dev/null)" || out=""
   fi
   echo "$out"
@@ -817,10 +869,9 @@ parse_sse_result() {
   done
 }
 
-# M1: listening sockets from the host's own view (/proc/net/tcp[6], hex
-# local_address, state 0A = LISTEN), plus an external nmap -Pn scan of only
-# this instance's own mapped ports. Never logs the public IP or nmap's raw
-# output (both can name the host); only the derived port/state pairs.
+# M1: listening sockets from /proc/net/tcp[6] over ssh, plus an external
+# nmap scan of only this instance's own mapped ports. Never logs the
+# public IP or nmap's raw output; only the derived port/state pairs.
 m1_port_scan() {
   local tcp_out line hexaddr hexport ip port state listening_json mapped_ports open_ports verdict
   local -a listen_entries=() mapped_list=() open_list=()
@@ -858,9 +909,11 @@ m1_port_scan() {
   fi
   mapped_ports="$(printf '%s\n' "${mapped_list[@]:-}" | sort -un | paste -sd, -)"
 
+  local nmap_attempted=0
   open_list=()
   if [[ -n "$INSTANCE_PUBLIC_IP" && -n "$mapped_ports" ]] && command -v nmap >/dev/null; then
     local nmap_out
+    nmap_attempted=1
     nmap_out="$(nmap -Pn --host-timeout 120s -p "$mapped_ports" -oG - "$INSTANCE_PUBLIC_IP" 2>/dev/null)" || nmap_out=""
     while IFS= read -r port; do
       [[ -n "$port" ]] && open_list+=("$port")
@@ -868,14 +921,39 @@ m1_port_scan() {
   fi
   open_ports="$(printf '%s\n' "${open_list[@]:-}" | jq -Rnc '[inputs | select(length > 0) | tonumber]')"
 
-  verdict="pass"
-  jq -e '.[] | select(.ip != "127.0.0.1" and .port == 8080)' <<<"$listening_json" >/dev/null 2>&1 && verdict="fail: port 8080 bound beyond loopback"
-  local ssh_mapped_port
+  # A wrong "pass" here costs real money (it skips a safer fallback), so
+  # it requires positive evidence both ways, not just an absent finding:
+  # a confirmed loopback-only 8080 and a scan that actually ran.
+  local has_8080_loopback=0 has_8080_exposed=0
+  jq -e '.[] | select(.ip == "127.0.0.1" and .port == 8080)' <<<"$listening_json" >/dev/null 2>&1 && has_8080_loopback=1
+  jq -e '.[] | select(.ip != "127.0.0.1" and .port == 8080)' <<<"$listening_json" >/dev/null 2>&1 && has_8080_exposed=1
+
+  # The SSH port is expected open: the mapped-port heuristic from the
+  # ports map, plus (in direct mode only, where the scan target is the
+  # same endpoint we connected through) the exact port we connected on.
+  local ssh_mapped_port expected_ssh_ports
   ssh_mapped_port="$(jq -r '.["22/tcp"][0].HostPort // empty' <<<"$INSTANCE_PORTS_JSON" 2>/dev/null)" || ssh_mapped_port=""
-  if [[ "$verdict" == "pass" ]]; then
+  expected_ssh_ports="$ssh_mapped_port"
+  [[ "$SSH_LINK_MODE" == "direct" ]] && expected_ssh_ports="$expected_ssh_ports $SSH_PORT"
+
+  if ((has_8080_exposed == 1)); then
+    verdict="fail: port 8080 bound beyond loopback"
+  elif ((nmap_attempted == 0)); then
+    verdict="inconclusive: nmap did not run"
+  elif ((has_8080_loopback == 0)); then
+    verdict="inconclusive: no confirmed evidence port 8080 is bound to loopback"
+  else
     local extra
-    extra="$(jq --arg ssh "$ssh_mapped_port" '[.[] | select((. | tostring) != $ssh)] | length' <<<"$open_ports" 2>/dev/null)" || extra=0
-    [[ "$extra" != "0" ]] && verdict="fail: open mapped port besides SSH"
+    extra="$(jq --arg ssh "$expected_ssh_ports" \
+      '[.[] | select((tostring) as $p | ($ssh | split(" ")) as $list | ($list | index($p)) == null)] | length' \
+      <<<"$open_ports" 2>/dev/null)" || extra=""
+    if [[ -z "$extra" ]]; then
+      verdict="inconclusive: could not evaluate nmap results"
+    elif [[ "$extra" != "0" ]]; then
+      verdict="fail: open mapped port besides SSH"
+    else
+      verdict="pass"
+    fi
   fi
 
   record_event m1_listening_sockets "" "$listening_json"
@@ -904,7 +982,7 @@ m2_health_models() {
 }
 
 # Builds a /v1/chat/completions body; thinking is left at the model
-# default unless explicitly disabled (ADR 0002 §6).
+# default unless explicitly disabled.
 build_chat_body() {
   local prompt="$1" max_tokens="$2" enable_thinking="$3" stream="$4"
   if [[ "$enable_thinking" == "false" ]]; then
@@ -942,25 +1020,28 @@ m3_streamed_chat() {
   result="$(run_sse_sample local "http://127.0.0.1:18080/v1/chat/completions" \
     "$CURL_HEADERS_FILE" "$body_file" 120)"
   parse_sse_result "$result"
+  record_event m3_raw_result "" "$(jq -cn --arg r "$result" '$r')"
 
+  local first_token_t=""
   if [[ -n "${SAMPLE_START:-}" && -n "$SAMPLE_TTFT" && "$SAMPLE_TTFT" != "-1" ]]; then
-    record_event first_token "" "" "$(awk -v s="$SAMPLE_START" -v f="$SAMPLE_TTFT" 'BEGIN{print s+f}')"
+    first_token_t="$(awk -v s="$SAMPLE_START" -v f="$SAMPLE_TTFT" 'BEGIN{printf "%.6f", s+f}')"
+    record_event first_token "" "" "$first_token_t"
   fi
 
   RESULTS[m3]="$(jq -cn --arg chunks "${SAMPLE_CHUNKS:-}" --arg term_done "${SAMPLE_DONE:-}" \
     --arg has_reasoning "${SAMPLE_HAS_REASONING:-}" --arg ttft "${SAMPLE_TTFT:-}" \
-    --arg finish_reason "${SAMPLE_FINISH_REASON:-}" \
+    --arg finish_reason "${SAMPLE_FINISH_REASON:-}" --arg start "${SAMPLE_START:-}" \
+    --arg first_token_t "$first_token_t" \
     '{chunks: $chunks, terminal_done: $term_done, has_reasoning_content: $has_reasoning,
-      ttft_seconds: $ttft, finish_reason: $finish_reason}')"
+      ttft_seconds: $ttft, finish_reason: $finish_reason, start_t: $start,
+      first_token_t: $first_token_t}')"
   record_event m3_streamed_chat "" "${RESULTS[m3]}"
   echo "LAUNCH: M3 chunks=${SAMPLE_CHUNKS:-} done=${SAMPLE_DONE:-} reasoning=${SAMPLE_HAS_REASONING:-}" >&2
 }
 
-# M4 (Q10): 5 streamed ~1000-token requests through the tunnel, the same 5
-# on the host via ssh+curl to loopback, thinking off. Medians of each side
-# are what ADR 0006's G5 latency gate compares. Also calibrates
-# CHARS_PER_TOKEN from the first response's usage.prompt_tokens, for the
-# Q9 matrix's deterministic filler later.
+# M4: 5 streamed ~1000-token requests through the tunnel, the same 5 on
+# the host via ssh+curl to loopback, thinking off, to compare tunnel vs.
+# on-host latency; also calibrates CHARS_PER_TOKEN for later filler prompts.
 m4_latency_and_metrics() {
   ensure_tunnel
   local prompt body_file result i
@@ -980,7 +1061,7 @@ m4_latency_and_metrics() {
     # earliest real inference token we have.
     if [[ -z "${EVENT_T[first_token]:-}" && -n "${SAMPLE_START:-}" &&
       -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]]; then
-      record_event first_token "" "" "$(awk -v s="$SAMPLE_START" -v f="$SAMPLE_TTFT" 'BEGIN{print s+f}')"
+      record_event first_token "" "" "$(awk -v s="$SAMPLE_START" -v f="$SAMPLE_TTFT" 'BEGIN{printf "%.6f", s+f}')"
     fi
     if [[ -n "${SAMPLE_COMPLETION_TOKENS:-}" && "$SAMPLE_COMPLETION_TOKENS" != "-1" &&
       -n "${SAMPLE_TOTAL:-}" && -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]]; then
@@ -1026,10 +1107,9 @@ m4_latency_and_metrics() {
   echo "LAUNCH: M4 tunnel_ttft_median=$(median_of "${tunnel_ttft[@]:-}") host_ttft_median=$(median_of "${host_ttft[@]:-}")" >&2
 }
 
-# M5 (Q7): 5 two-leg tool-call round trips through the tunnel. Leg 1 must
+# M5: 5 two-leg tool-call round trips through the tunnel. Leg 1 must
 # return finish_reason=tool_calls naming get_weather with a city argument;
-# leg 2 feeds back a canned result and must return finish_reason=stop with
-# text content. Non-streaming: the response is one JSON object either way.
+# leg 2 feeds back a canned result and must return finish_reason=stop.
 m5_tool_calls() {
   ensure_tunnel
   local cities=(Berlin Tokyo Lima Nairobi Oslo)
@@ -1085,7 +1165,7 @@ m5_tool_calls() {
   echo "LAUNCH: M5 pass_count=$pass_count/5" >&2
 }
 
-# M6 (Q11): whether the image was built with SSL support.
+# M6: whether the image was built with SSL support.
 m6_help_flag() {
   local help_out has_ssl="no"
   help_out="$(ssh_exec '/app/llama-server --help 2>&1')" || help_out=""
@@ -1095,78 +1175,110 @@ m6_help_flag() {
   echo "LAUNCH: M6 --ssl-key-file present: $has_ssl" >&2
 }
 
-# M7 (Q9): restarts llama-server with four context/parallelism configs,
+# M7: restarts llama-server with four context/parallelism configs,
 # recording VRAM before/after the largest prompt per config. V1 also
-# probes the context overflow; V2 adds a needle-in-haystack recall check
-# and records prefill/reload seconds; V3/V4 fire two concurrent prompts.
+# probes a context overflow; V2 adds a needle-in-haystack recall check.
 m7_qwen_matrix() {
   ensure_tunnel
   local mem_after_load mem_after_prompt reload_start reload_seconds
   local -a v_results=()
+  # Tracks whether a restart actually moved the server off the V1/baseline
+  # config (32768/1), so the end-of-matrix restore can be skipped when
+  # V2-V4 never ran and there's nothing to restore.
+  local baseline_dirty=0
 
   # V1: 32768/1, ~30K prompt, then an ~40K prompt expected to overflow.
+  if too_close_to_hard_cap 660; then
+    local vcfg
+    for vcfg in V1 V2 V3 V4; do
+      v_results+=("$(jq -cn --arg c "$vcfg" '{config: $c, skipped: "too close to the 40min hard cap"}')")
+      record_event "m7_${vcfg,,}" "" "${v_results[-1]}"
+    done
+    RESULTS[m7]="$(printf '%s\n' "${v_results[@]}" | jq -sc .)"
+    return
+  fi
   reload_start="$EPOCHREALTIME"
   restart_llama_server 32768 1
   if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
     reload_seconds="$(awk -v s="$reload_start" -v e="$EPOCHREALTIME" 'BEGIN{print e-s}')"
     mem_after_load="$(nvidia_smi_mem)"
-    local body_file="$RUN_TMP/v1_body.json" result overflow_status
+    local config_confirmed
+    config_confirmed="$(confirm_restart_config 32768)"
+    local body_file="$RUN_TMP/v1_body.json" result overflow_status prompt_status
     build_chat_body "$(gen_filler_prompt 30000)" 16 false false >"$body_file"
     tunnel_post "/v1/chat/completions" "$(cat "$body_file")" 1 240
+    prompt_status="$TUNNEL_STATUS"
     mem_after_prompt="$(nvidia_smi_mem)"
     build_chat_body "$(gen_filler_prompt 40000)" 16 false false >"$body_file"
     tunnel_post "/v1/chat/completions" "$(cat "$body_file")" 1 240
     overflow_status="$TUNNEL_STATUS"
     v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
-      --arg reload "$reload_seconds" --arg overflow "$overflow_status" \
+      --arg reload "$reload_seconds" --arg prompt_status "$prompt_status" --arg overflow "$overflow_status" \
+      --arg confirmed "$config_confirmed" \
       '{config: "V1", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt,
-        reload_seconds: $reload, overflow_status: $overflow}')")
+        reload_seconds: $reload, prompt_status: $prompt_status, overflow_status: $overflow,
+        config_confirmed: $confirmed}')")
   else
     v_results+=('{"config": "V1", "error": "did not become healthy after restart"}')
   fi
   record_event m7_v1 "" "${v_results[-1]}"
 
   # V2: 65536/1, 58K-64K prompt with a needle sentence, prefill via /metrics delta.
-  if past_skip_deadline; then
-    v_results+=('{"config": "V2", "skipped": "32min skip-ahead reached"}')
+  if past_skip_deadline || too_close_to_hard_cap 780; then
+    v_results+=('{"config": "V2", "skipped": "32min skip-ahead or too close to the 40min hard cap"}')
   else
+    baseline_dirty=1
     reload_start="$EPOCHREALTIME"
     restart_llama_server 65536 1
     if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
       reload_seconds="$(awk -v s="$reload_start" -v e="$EPOCHREALTIME" 'BEGIN{print e-s}')"
       mem_after_load="$(nvidia_smi_mem)"
-      local needle="XK472-SPIKE" prompt prompt_seconds_before prompt_seconds_after resp
+      local config_confirmed
+      config_confirmed="$(confirm_restart_config 65536)"
+      local needle="XK472-SPIKE" prompt prompt_seconds_before prompt_seconds_after resp prompt_status
       prompt="IMPORTANT: remember this secret code: ${needle}. $(gen_filler_prompt 60000) What is the secret code mentioned at the start of this message? Respond with only the code."
       prompt_seconds_before="$(scrape_metric prompt_seconds_total)"
       tunnel_post "/v1/chat/completions" "$(build_chat_body "$prompt" 32 false false)" 1 300
       resp="$TUNNEL_BODY"
+      prompt_status="$TUNNEL_STATUS"
       prompt_seconds_after="$(scrape_metric prompt_seconds_total)"
       mem_after_prompt="$(nvidia_smi_mem)"
       local prefill_seconds needle_answered prompt_tokens content
-      prefill_seconds="$(awk -v a="${prompt_seconds_before:-0}" -v b="${prompt_seconds_after:-0}" 'BEGIN{print b-a}')"
+      if [[ -n "$prompt_seconds_before" && -n "$prompt_seconds_after" ]]; then
+        prefill_seconds="$(awk -v a="$prompt_seconds_before" -v b="$prompt_seconds_after" 'BEGIN{print b-a}')"
+      else
+        prefill_seconds=""
+      fi
       prompt_tokens="$(jq -r '.usage.prompt_tokens // empty' <<<"$resp" 2>/dev/null)" || prompt_tokens=""
       content="$(jq -r '.choices[0].message.content // empty' <<<"$resp" 2>/dev/null)" || content=""
-      # AC6 needs 58,000-64,000 prompt_tokens; a 1K-token calibration
-      # extrapolated 60x can drift outside the band, so correct once.
+      # A 1K-token calibration extrapolated 60x can land outside the
+      # intended 58K-64K prompt_tokens band, so correct once if it does.
       if [[ -n "$prompt_tokens" ]] && ((prompt_tokens < 58000 || prompt_tokens > 64000)); then
         CHARS_PER_TOKEN="$(awk -v chars="${#prompt}" -v tok="$prompt_tokens" 'BEGIN{if(tok>0) printf "%.2f", chars/tok; else print 4}')"
         prompt="IMPORTANT: remember this secret code: ${needle}. $(gen_filler_prompt 60000) What is the secret code mentioned at the start of this message? Respond with only the code."
         prompt_seconds_before="$(scrape_metric prompt_seconds_total)"
         tunnel_post "/v1/chat/completions" "$(build_chat_body "$prompt" 32 false false)" 1 300
         resp="$TUNNEL_BODY"
+        prompt_status="$TUNNEL_STATUS"
         prompt_seconds_after="$(scrape_metric prompt_seconds_total)"
         mem_after_prompt="$(nvidia_smi_mem)"
-        prefill_seconds="$(awk -v a="${prompt_seconds_before:-0}" -v b="${prompt_seconds_after:-0}" 'BEGIN{print b-a}')"
+        if [[ -n "$prompt_seconds_before" && -n "$prompt_seconds_after" ]]; then
+          prefill_seconds="$(awk -v a="$prompt_seconds_before" -v b="$prompt_seconds_after" 'BEGIN{print b-a}')"
+        else
+          prefill_seconds=""
+        fi
         prompt_tokens="$(jq -r '.usage.prompt_tokens // empty' <<<"$resp" 2>/dev/null)" || prompt_tokens=""
         content="$(jq -r '.choices[0].message.content // empty' <<<"$resp" 2>/dev/null)" || content=""
       fi
       [[ "$content" == *"$needle"* ]] && needle_answered="yes" || needle_answered="no"
       v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
         --arg prompt_tokens "$prompt_tokens" --arg prefill "$prefill_seconds" \
-        --arg needle "$needle_answered" --arg reload "$reload_seconds" \
+        --arg needle "$needle_answered" --arg reload "$reload_seconds" --arg prompt_status "$prompt_status" \
+        --arg confirmed "$config_confirmed" \
         '{config: "V2", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt,
           prompt_tokens: $prompt_tokens, prefill_seconds_metrics: $prefill,
-          needle_answered: $needle, reload_seconds: $reload}')")
+          needle_answered: $needle, reload_seconds: $reload, prompt_status: $prompt_status,
+          config_confirmed: $confirmed}')")
     else
       v_results+=('{"config": "V2", "error": "did not become healthy after restart"}')
     fi
@@ -1174,23 +1286,35 @@ m7_qwen_matrix() {
   record_event m7_v2 "" "${v_results[-1]}"
 
   # V3: 65536/2, two concurrent ~30K prompts.
-  if past_skip_deadline; then
-    v_results+=('{"config": "V3", "skipped": "32min skip-ahead reached"}')
+  if past_skip_deadline || too_close_to_hard_cap 480; then
+    v_results+=('{"config": "V3", "skipped": "32min skip-ahead or too close to the 40min hard cap"}')
   else
+    baseline_dirty=1
     restart_llama_server 65536 2
     if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
       mem_after_load="$(nvidia_smi_mem)"
+      local config_confirmed
+      config_confirmed="$(confirm_restart_config 65536)"
       local b1="$RUN_TMP/v3_body1.json" b2="$RUN_TMP/v3_body2.json"
+      local status_f1="$RUN_TMP/v3_status1" status_f2="$RUN_TMP/v3_status2"
       build_chat_body "$(gen_filler_prompt 30000)" 16 false false >"$b1"
       build_chat_body "$(gen_filler_prompt 30000)" 16 false false >"$b2"
-      ( tunnel_post "/v1/chat/completions" "$(cat "$b1")" 1 240 ) &
+      # Each leg runs in its own subshell, so TUNNEL_STATUS set there never
+      # reaches this shell; write it to a file instead so a failed leg's
+      # memory reading isn't silently misattributed to a successful one.
+      ( tunnel_post "/v1/chat/completions" "$(cat "$b1")" 1 240; echo "$TUNNEL_STATUS" >"$status_f1" ) &
       local p1=$!
-      ( tunnel_post "/v1/chat/completions" "$(cat "$b2")" 1 240 ) &
+      ( tunnel_post "/v1/chat/completions" "$(cat "$b2")" 1 240; echo "$TUNNEL_STATUS" >"$status_f2" ) &
       local p2=$!
       wait "$p1" "$p2" 2>/dev/null || true
       mem_after_prompt="$(nvidia_smi_mem)"
+      local status1 status2
+      status1="$(cat "$status_f1" 2>/dev/null)" || status1=""
+      status2="$(cat "$status_f2" 2>/dev/null)" || status2=""
       v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
-        '{config: "V3", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt}')")
+        --arg s1 "$status1" --arg s2 "$status2" --arg confirmed "$config_confirmed" \
+        '{config: "V3", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt,
+          prompt1_status: $s1, prompt2_status: $s2, config_confirmed: $confirmed}')")
     else
       v_results+=('{"config": "V3", "error": "did not become healthy after restart"}')
     fi
@@ -1198,23 +1322,32 @@ m7_qwen_matrix() {
   record_event m7_v3 "" "${v_results[-1]}"
 
   # V4: 131072/2, two concurrent ~60K prompts.
-  if past_skip_deadline; then
-    v_results+=('{"config": "V4", "skipped": "32min skip-ahead reached"}')
+  if past_skip_deadline || too_close_to_hard_cap 480; then
+    v_results+=('{"config": "V4", "skipped": "32min skip-ahead or too close to the 40min hard cap"}')
   else
+    baseline_dirty=1
     restart_llama_server 131072 2
     if poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))"; then
       mem_after_load="$(nvidia_smi_mem)"
+      local config_confirmed
+      config_confirmed="$(confirm_restart_config 131072)"
       local b1="$RUN_TMP/v4_body1.json" b2="$RUN_TMP/v4_body2.json"
+      local status_f1="$RUN_TMP/v4_status1" status_f2="$RUN_TMP/v4_status2"
       build_chat_body "$(gen_filler_prompt 60000)" 16 false false >"$b1"
       build_chat_body "$(gen_filler_prompt 60000)" 16 false false >"$b2"
-      ( tunnel_post "/v1/chat/completions" "$(cat "$b1")" 1 300 ) &
+      ( tunnel_post "/v1/chat/completions" "$(cat "$b1")" 1 300; echo "$TUNNEL_STATUS" >"$status_f1" ) &
       local p1=$!
-      ( tunnel_post "/v1/chat/completions" "$(cat "$b2")" 1 300 ) &
+      ( tunnel_post "/v1/chat/completions" "$(cat "$b2")" 1 300; echo "$TUNNEL_STATUS" >"$status_f2" ) &
       local p2=$!
       wait "$p1" "$p2" 2>/dev/null || true
       mem_after_prompt="$(nvidia_smi_mem)"
+      local status1 status2
+      status1="$(cat "$status_f1" 2>/dev/null)" || status1=""
+      status2="$(cat "$status_f2" 2>/dev/null)" || status2=""
       v_results+=("$(jq -cn --arg mem_load "$mem_after_load" --arg mem_prompt "$mem_after_prompt" \
-        '{config: "V4", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt}')")
+        --arg s1 "$status1" --arg s2 "$status2" --arg confirmed "$config_confirmed" \
+        '{config: "V4", mem_mib_after_load: $mem_load, mem_mib_after_prompt: $mem_prompt,
+          prompt1_status: $s1, prompt2_status: $s2, config_confirmed: $confirmed}')")
     else
       v_results+=('{"config": "V4", "error": "did not become healthy after restart"}')
     fi
@@ -1223,16 +1356,24 @@ m7_qwen_matrix() {
 
   RESULTS[m7]="$(printf '%s\n' "${v_results[@]}" | jq -sc .)"
 
-  # Restore the production baseline so M8-M10 run against the ADR 0002
-  # config, not whatever the matrix left active, even if V2-V4 were skipped.
-  restart_llama_server 32768 1
-  poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))" || true
-  echo "LAUNCH: M7 matrix done, baseline restored" >&2
+  # Restore the production config so M8-M10 don't run against whatever
+  # the matrix left active. Skipped when V2-V4 never ran (V1 already left
+  # the server at this exact config) or there's no runway for another restart.
+  if ((baseline_dirty == 0)); then
+    echo "LAUNCH: M7 matrix done, V2-V4 did not run, baseline already current" >&2
+  elif too_close_to_hard_cap "$RESTART_HEALTH_TIMEOUT_SECONDS"; then
+    echo "LAUNCH: M7 matrix done, skipping baseline restore: too close to the 40min hard cap" >&2
+    record_event m7_restore_skipped
+  else
+    restart_llama_server 32768 1
+    poll_health_bounded "$(("${EPOCHREALTIME%.*}" + RESTART_HEALTH_TIMEOUT_SECONDS))" || true
+    echo "LAUNCH: M7 matrix done, baseline restored" >&2
+  fi
 }
 
 # Re-checks the long-lived tunnel and reopens it if it died, counting the
-# drop. Called at the top of each tunnel-using measurement (G6's "0 drops
-# between ssh_ok and the end of M8" is judged from CHANNEL_DROPS at M8's end).
+# drop. Called at the top of each tunnel-using measurement so the drop
+# count reflects the whole run, not just the moments we happened to look.
 ensure_tunnel() {
   if [[ -n "$TUNNEL_PID" ]] && kill -0 "$TUNNEL_PID" 2>/dev/null; then
     return 0
@@ -1243,61 +1384,85 @@ ensure_tunnel() {
   open_tunnel "$SSH_HOST" "$SSH_PORT" "$SPIKE_SSH_KEY" "$RUN_TMP/known_hosts" || true
 }
 
-# M8 (Q3 extras): one max_tokens:4096 stream through the tunnel, a 1 GiB
-# bulk transfer over a plain ssh exec channel (not the tunnel) for MB/s,
-# and the channel-drop count accumulated since ssh_ok.
+# M8: one max_tokens:4096 stream through the tunnel, a 1 GiB bulk
+# transfer over a plain ssh exec channel (not the tunnel) for MB/s, and
+# the channel-drop count accumulated since ssh_ok.
 m8_bulk_and_stream() {
   ensure_tunnel
-  local body_file="$RUN_TMP/m8_body.json" result
-  build_chat_body "$(gen_filler_prompt 200)" 4096 false true >"$body_file"
-  result="$(run_sse_sample local "http://127.0.0.1:18080/v1/chat/completions" \
-    "$CURL_HEADERS_FILE" "$body_file" 300)"
-  parse_sse_result "$result"
-  record_event m8_stream_4096 "" "$(jq -cn --arg r "$result" '$r')"
+  local mb_s="" bulk_skipped=""
 
-  local start end bytes mb_s
-  start="$EPOCHREALTIME"
-  bytes="$(ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-    -o UserKnownHostsFile="$RUN_TMP/known_hosts" -i "$SPIKE_SSH_KEY" -p "$SSH_PORT" \
-    "root@$SSH_HOST" "timeout 240 head -c 1073741824 /dev/zero" 2>/dev/null | wc -c | tr -d ' ')" || bytes=0
-  end="$EPOCHREALTIME"
-  mb_s="$(awk -v b="${bytes:-0}" -v s="$start" -v e="$end" 'BEGIN{if(e>s) print b/(e-s)/1000000; else print 0}')"
+  if too_close_to_hard_cap 300; then
+    record_event m8_stream_4096_skipped
+    echo "LAUNCH: M8 stream skipped: too close to the 40min hard cap" >&2
+  else
+    local body_file="$RUN_TMP/m8_body.json" result
+    build_chat_body "$(gen_filler_prompt 200)" 4096 false true >"$body_file"
+    result="$(run_sse_sample local "http://127.0.0.1:18080/v1/chat/completions" \
+      "$CURL_HEADERS_FILE" "$body_file" 300)"
+    parse_sse_result "$result"
+    record_event m8_stream_4096 "" "$(jq -cn --arg r "$result" '$r')"
+  fi
+
+  # Checked again here, separately from the stream above: the stream can
+  # itself eat several minutes, and the bulk transfer is the single
+  # longest remaining step before M10 needs its turn.
+  if too_close_to_hard_cap 240; then
+    bulk_skipped="too close to the 40min hard cap"
+    record_event m8_bulk_transfer_skipped
+    echo "LAUNCH: M8 bulk transfer skipped: too close to the 40min hard cap" >&2
+  else
+    local start end bytes
+    start="$EPOCHREALTIME"
+    # timeout always exits non-zero on a link too slow to move 1GiB in 240s
+    # (exactly the slow/proxied case this measures); "; true" keeps that
+    # expected exit from discarding the partial byte count wc -c already saw.
+    bytes="$(ssh "${SSH_OPTS[@]}" "$SSH_TARGET" \
+      "timeout 240 head -c 1073741824 /dev/zero; true" 2>/dev/null | wc -c | tr -d ' ')" || bytes=0
+    end="$EPOCHREALTIME"
+    mb_s="$(awk -v b="${bytes:-0}" -v s="$start" -v e="$end" 'BEGIN{if(e>s) print b/(e-s)/1000000; else print 0}')"
+  fi
 
   RESULTS[m8]="$(jq -cn --arg chunks "${SAMPLE_CHUNKS:-}" --arg total "${SAMPLE_TOTAL:-}" \
-    --arg prompt_ms "${SAMPLE_TIMINGS_PROMPT_MS:-}" --arg bulk_mb_s "$mb_s" --argjson drops "$CHANNEL_DROPS" \
+    --arg prompt_ms "${SAMPLE_TIMINGS_PROMPT_MS:-}" --arg bulk_mb_s "$mb_s" --arg bulk_skipped "$bulk_skipped" \
+    --argjson drops "$CHANNEL_DROPS" \
     '{stream_4096_chunks: $chunks, stream_4096_total_s: $total, timings_prompt_ms: $prompt_ms,
-      bulk_transfer_mb_s: $bulk_mb_s, channel_drops_through_m8: $drops}')"
+      bulk_transfer_mb_s: $bulk_mb_s, bulk_transfer_skipped: $bulk_skipped, channel_drops_through_m8: $drops}')"
   record_event m8_bulk_and_stream "" "${RESULTS[m8]}"
   echo "LAUNCH: M8 bulk_mb_s=$mb_s channel_drops=$CHANNEL_DROPS" >&2
 }
 
-# M9 (Q8 extra): 60s single-stream download of the pinned model URL, on the
-# host. The URL is read from onstart.sh rather than duplicated here.
+# M9: 60s single-stream download of the pinned model URL, on the host.
+# The URL is read from onstart.sh rather than duplicated here.
 m9_download_speed() {
   local model_url speed_bps speed_mb_s
+  if too_close_to_hard_cap 90; then
+    RESULTS[m9]='{"skipped": "too close to the 40min hard cap"}'
+    record_event m9_download_speed "" "${RESULTS[m9]}"
+    return
+  fi
   model_url="$(grep -oE 'https://huggingface\.co/[^"]+' "$ONSTART_FILE" | head -1)" || model_url=""
   if [[ -z "$model_url" ]]; then
     RESULTS[m9]='{"error": "model URL not found in onstart.sh"}'
     record_event m9_download_speed "" "${RESULTS[m9]}"
     return
   fi
-  speed_bps="$(ssh_exec "curl -o /dev/null -sS --max-time 60 -w '%{speed_download}' '$model_url'")" || speed_bps=""
+  # curl --max-time 60 against a multi-GB file always exits 28 (timeout)
+  # by design, after already printing -w's output; "; true" keeps that
+  # expected nonzero exit from discarding the speed curl already measured.
+  speed_bps="$(ssh_exec "curl -o /dev/null -sS --max-time 60 -w '%{speed_download}' '$model_url'; true")" || speed_bps=""
   speed_mb_s="$(awk -v b="${speed_bps:-0}" 'BEGIN{printf "%.2f", b/1000000}')"
   RESULTS[m9]="$(jq -cn --arg mb_s "$speed_mb_s" '{download_speed_mb_s: $mb_s}')"
   record_event m9_download_speed "" "${RESULTS[m9]}"
   echo "LAUNCH: M9 download_speed_mb_s=$speed_mb_s" >&2
 }
 
-# M10: self-exit, always last. pkill and kill -TERM 1 are each issued as
-# their own, standalone ssh call: pkill -f matches its own parent
-# `sh -c "pkill -f llama-server"` (whose argv contains the search pattern),
-# so nothing may follow it in the same remote command. Balance is read at
-# exited+5min and the smaller of exited+20min / the 55-minute cap, so R4's
-# documented hard-cap extension is never exceeded even if exited comes late.
+# M10: self-exit, always last. pkill and kill -TERM 1 are each their own
+# standalone ssh call, with nothing chained after them (see
+# restart_llama_server's comment on why that matters).
 m10_self_exit() {
   local last_request_t idle_target
   last_request_t="${EVENT_T[m8_bulk_and_stream]:-${EVENT_T[m8_stream_4096]:-$EPOCHREALTIME}}"
-  idle_target="$(awk -v t="$last_request_t" -v i="$M10_IDLE_SECONDS" 'BEGIN{print t+i}')"
+  idle_target="$(awk -v t="$last_request_t" -v i="$M10_IDLE_SECONDS" 'BEGIN{printf "%.6f", t+i}')"
   while true; do
     awk -v now="$EPOCHREALTIME" -v t="$idle_target" 'BEGIN{exit (now>=t)}' || break
     sleep 2
@@ -1368,10 +1533,13 @@ m10_self_exit() {
   local exited_t="$EPOCHREALTIME"
   extend_watchdog_for_m10
 
+  # target2 is capped below the re-armed watchdog's own deadline so the
+  # second balance read can never race the hard-cap TERM that would kill
+  # the script before it gets there.
   local target1 target2 cap
-  target1="$(awk -v t="$exited_t" 'BEGIN{print t+300}')"
+  target1="$(awk -v t="$exited_t" 'BEGIN{printf "%.6f", t+300}')"
   cap="$(awk -v c="$CREATE_END_EPOCH" 'BEGIN{print c+3300-30}')"
-  target2="$(awk -v t="$exited_t" -v c="$cap" 'BEGIN{v=t+1200; print (v<c)?v:c}')"
+  target2="$(awk -v t="$exited_t" -v c="$cap" 'BEGIN{v=t+1200; printf "%.6f", (v<c)?v:c}')"
 
   while true; do
     awk -v now="$EPOCHREALTIME" -v t="$target1" 'BEGIN{exit (now>=t)}' || break
@@ -1471,11 +1639,8 @@ run_measurements() {
   CURL_HEADERS_FILE="$RUN_TMP/headers_auth.cfg"
   printf 'header = "Authorization: Bearer %s"\n' "$WORKER_API_KEY" >"$CURL_HEADERS_FILE"
 
-  # M3 runs first, before M1's port scan (which can run for a minute or
-  # more) and M2, so E10 (first_token) and the first_token/cold_start_total
-  # stages are not inflated by measurements unrelated to inference latency.
-  # The spec's M-table lists M1 first; this reorder is a deliberate,
-  # flagged deviation for the sake of the headline cold-start numbers.
+  # M3 runs before the port scan and M2 (a deliberate reorder) so the
+  # cold-start timing it supplies isn't inflated by unrelated measurements.
   if ! m3_streamed_chat; then
     record_event m3_error
     echo "LAUNCH: M3 failed, continuing" >&2
