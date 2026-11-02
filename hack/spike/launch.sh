@@ -94,7 +94,9 @@ vast_call() {
   if [[ -n "$body" ]]; then
     escaped="${body//\\/\\\\}"
     escaped="${escaped//\"/\\\"}"
-    config+=$'\n'"data = \"$escaped\""
+    # curl's own default content-type for -K "data" is form-urlencoded,
+    # not JSON; the real API 400s on a JSON body without this header.
+    config+=$'\n'"header = \"Content-Type: application/json\""$'\n'"data = \"$escaped\""
   fi
   resp="$(curl -sS --connect-timeout 10 --max-time "$max_time" -X "$method" \
     -K - -w '\n%{http_code}' "$url" <<EOF
