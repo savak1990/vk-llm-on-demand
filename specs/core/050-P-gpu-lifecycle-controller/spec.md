@@ -14,7 +14,7 @@ adrs: ["0011", "0010", "0012", "0003", "0001", "0002", "0004", "0005", "0006", "
 **Risk:** high — this package decides when money is spent and when a live instance is destroyed
 **Estimated effort:** three to four sessions (14–18 h), half of it the simulation harness and the tunnel
 **Recommended model:** strong — fencing, the admission mutex, the two-observation rule and the saga are cost-safety critical
-**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md), [CORE-040](../040-P-state-store/spec.md)
+**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md), [CORE-040](../040-D-state-store/spec.md)
 
 ## Outcome
 
