@@ -82,6 +82,7 @@ func (c *Client) url() string {
 func (c *Client) Load(ctx context.Context) (store.Document, store.Version, error) {
 	status, body, err := c.do(ctx, http.MethodGet, c.url(), nil)
 	if err != nil {
+		store.RecordOp("load", "error")
 		return store.Document{}, "", err
 	}
 	switch status {
@@ -134,6 +135,9 @@ func (c *Client) cacheMeta(m rawMetadata) {
 	c.metaMu.Unlock()
 }
 
+// Save echoes the labels/annotations cached by the most recent Load or
+// Save. This relies on store.Transition always calling Load before Save; a
+// direct Save with no prior Load on this Client sends empty metadata.
 func (c *Client) Save(ctx context.Context, d store.Document, v store.Version) (store.Version, error) {
 	if v == "" {
 		return "", fmt.Errorf("configmap: save with empty version is a programming error")

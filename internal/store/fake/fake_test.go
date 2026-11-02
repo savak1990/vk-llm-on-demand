@@ -46,3 +46,23 @@ func TestFakeInjectedFailure(t *testing.T) {
 		t.Fatalf("Save after ConflictNext(1): want ErrConflict, got %v", err)
 	}
 }
+
+func TestFakeInstallationMismatch(t *testing.T) {
+	f := New("bbbb")
+	d, err := store.NewDocument("aaaa")
+	if err != nil {
+		t.Fatalf("NewDocument: %v", err)
+	}
+	f.Put(d)
+	before := f.Raw()
+
+	if _, _, err := f.Load(context.Background()); !errors.Is(err, store.ErrInstallation) {
+		t.Fatalf("Load: want ErrInstallation, got %v", err)
+	}
+	if string(f.Raw()) != string(before) {
+		t.Fatal("Load must not have written anything")
+	}
+	if err := store.Ready(f)(); !errors.Is(err, store.ErrInstallation) {
+		t.Fatalf("Ready: want ErrInstallation, got %v", err)
+	}
+}

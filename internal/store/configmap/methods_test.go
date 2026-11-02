@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
@@ -36,14 +37,32 @@ func newTestClient(t *testing.T, srv *httptest.Server) *Client {
 }
 
 func TestLoadKeylessShellIsFresh(t *testing.T) {
+	var posts, puts int
+	var gotVersion string
+	var gotHasStateJSON bool
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("method = %s, want GET", r.Method)
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"kind": "ConfigMap", "metadata": map[string]any{"name": "vkllm-state", "resourceVersion": "7"},
+			})
+		case http.MethodPut:
+			puts++
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			gotVersion, _ = body["metadata"].(map[string]any)["resourceVersion"].(string)
+			_, gotHasStateJSON = body["data"].(map[string]any)["state.json"]
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"metadata": map[string]any{"name": "vkllm-state", "resourceVersion": "8"},
+			})
+		case http.MethodPost:
+			posts++
+			t.Errorf("unexpected POST: Load/Save must never create the ConfigMap")
+		default:
+			t.Errorf("unexpected method %s", r.Method)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"kind": "ConfigMap", "metadata": map[string]any{"name": "vkllm-state", "resourceVersion": "7"},
-		})
 	}))
 	defer srv.Close()
 	c := newTestClient(t, srv)
@@ -52,23 +71,47 @@ func TestLoadKeylessShellIsFresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !doc.IsFresh() || doc.Desired != store.DesiredStopped || doc.InstallationID != "4f2c1a9b0e77" {
+	if !doc.IsFresh() || doc.Desired != store.DesiredStopped || doc.InstallationID != "4f2c1a9b0e77" || doc.Instance != nil || string(doc.Cache) != "null" {
 		t.Fatalf("got %+v", doc)
 	}
 	if v != "7" {
 		t.Fatalf("Version = %q, want 7", v)
 	}
+
+	if _, err := c.Save(context.Background(), doc, v); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if puts != 1 || gotVersion != "7" || !gotHasStateJSON {
+		t.Fatalf("PUT resourceVersion = %q (puts=%d, hasStateJSON=%v), want 7", gotVersion, puts, gotHasStateJSON)
+	}
+	if posts != 0 {
+		t.Fatalf("POSTs = %d, want 0", posts)
+	}
 }
 
 func TestLoadMissing404(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var posts int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posts++
+			t.Errorf("unexpected POST: a 404 must never trigger a create")
+			return
+		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
 	c := newTestClient(t, srv)
 
-	if _, _, err := c.Load(context.Background()); !errors.Is(err, store.ErrStoreMissing) {
+	_, _, err := c.Load(context.Background())
+	if !errors.Is(err, store.ErrStoreMissing) {
 		t.Fatalf("Load: want ErrStoreMissing, got %v", err)
+	}
+	const wantMsg = "install via the chart or create an empty ConfigMap"
+	if !strings.Contains(err.Error(), wantMsg) {
+		t.Fatalf("Load error = %q, want it to contain %q", err.Error(), wantMsg)
+	}
+	if posts != 0 {
+		t.Fatalf("POSTs = %d, want 0", posts)
 	}
 }
 
@@ -112,6 +155,30 @@ func TestSave409Conflict(t *testing.T) {
 	d, _ := store.NewDocument("4f2c1a9b0e77")
 	if _, err := c.Save(context.Background(), d, "41"); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("Save: want ErrConflict, got %v", err)
+	}
+}
+
+func TestSaveTooLargeSendsNoRequest(t *testing.T) {
+	requests := 0
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		requests++
+		t.Errorf("unexpected request to server for an over-sized document")
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv)
+
+	d, _ := store.NewDocument("4f2c1a9b0e77")
+	huge := make([]store.DenyEntry, 0, 20000)
+	for i := 0; i < 20000; i++ {
+		huge = append(huge, store.DenyEntry{MachineID: int64(i)})
+	}
+	d.MachineDenylist = huge
+
+	if _, err := c.Save(context.Background(), d, "41"); !errors.Is(err, store.ErrTooLarge) {
+		t.Fatalf("Save: want ErrTooLarge, got %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want 0", requests)
 	}
 }
 
@@ -179,6 +246,51 @@ func TestCorruptData(t *testing.T) {
 
 	if _, _, err := c.Load(context.Background()); !errors.Is(err, store.ErrCorrupt) {
 		t.Fatalf("Load: want ErrCorrupt, got %v", err)
+	}
+}
+
+func TestTransitionStopsOnUndecodableLoad(t *testing.T) {
+	cases := []struct {
+		name      string
+		stateJSON string
+		wantErr   error
+	}{
+		{"corrupt", "not json", store.ErrCorrupt},
+		{"schema too new", `{"schemaVersion":3}`, store.ErrSchemaTooNew},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			puts := 0
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					puts++
+					t.Errorf("unexpected PUT: fn must not run when Load fails")
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"metadata": map[string]any{"resourceVersion": "7"},
+					"data":     map[string]string{"state.json": tc.stateJSON},
+				})
+			}))
+			defer srv.Close()
+			c := newTestClient(t, srv)
+
+			fnCalls := 0
+			_, err := store.Transition(context.Background(), c, func(*store.Document) error {
+				fnCalls++
+				return nil
+			})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Transition: want %v, got %v", tc.wantErr, err)
+			}
+			if fnCalls != 0 {
+				t.Fatalf("fn called %d times, want 0", fnCalls)
+			}
+			if puts != 0 {
+				t.Fatalf("PUTs = %d, want 0", puts)
+			}
+		})
 	}
 }
 

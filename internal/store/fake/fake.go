@@ -10,12 +10,13 @@ import (
 )
 
 type Fake struct {
-	mu        sync.Mutex
-	encoded   []byte
-	version   int
-	failNext  int
-	failErr   error
-	conflicts int
+	mu             sync.Mutex
+	encoded        []byte
+	version        int
+	failNext       int
+	failErr        error
+	conflicts      int
+	installationID string
 }
 
 func New(installationID string) *Fake {
@@ -27,7 +28,7 @@ func New(installationID string) *Fake {
 	if err != nil {
 		panic(err)
 	}
-	return &Fake{encoded: b, version: 1}
+	return &Fake{encoded: b, version: 1, installationID: installationID}
 }
 
 func (f *Fake) Load(_ context.Context) (store.Document, store.Version, error) {
@@ -40,6 +41,9 @@ func (f *Fake) Load(_ context.Context) (store.Document, store.Version, error) {
 	d, err := store.Decode(f.encoded)
 	if err != nil {
 		return store.Document{}, "", err
+	}
+	if d.InstallationID != f.installationID {
+		return store.Document{}, "", store.ErrInstallation
 	}
 	return d, store.Version(strconv.Itoa(f.version)), nil
 }

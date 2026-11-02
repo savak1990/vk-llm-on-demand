@@ -435,6 +435,11 @@ the runner's own loopback address at an ephemeral port.
 No RBAC surprise and no unexpected 409: everything on the real cluster
 behaved exactly as the Design and contracts section assumed.
 
+`internal/store` has no structured logging yet; the Observability
+section's failure log fields (`op`, `outcome`, `attempt`, `schema_version`,
+`bytes`) are wired in CORE-050, which constructs the store and wires it
+into `main`.
+
 **Not exercised live in this run:** the 401-token-refresh-and-retry path —
 no 401 occurred against the real cluster in this run; still verified only
 by Task 5's `httptest`-based unit tests, `TestTokenRefreshOn401` and

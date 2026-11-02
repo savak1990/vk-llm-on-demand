@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
 type Config struct {
@@ -51,6 +53,8 @@ type Client struct {
 	labels     map[string]string
 	annots     map[string]string
 }
+
+var _ store.Store = (*Client)(nil)
 
 func New(cfg Config) (*Client, error) {
 	c := &Client{cfg: cfg}
