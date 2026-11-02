@@ -3,8 +3,9 @@ package store
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
-	"math/rand"
+	"math/big"
 	"time"
 )
 
@@ -63,7 +64,11 @@ func Transition(ctx context.Context, s Store, fn func(*Document) error) (Documen
 			RecordOp("transition", "exhausted")
 			return Document{}, ErrRetriesExhausted
 		}
-		backoff := 10*time.Millisecond + time.Duration(rand.Int63n(int64(90*time.Millisecond)))
+		jitter, err := rand.Int(rand.Reader, big.NewInt(int64(90*time.Millisecond)))
+		if err != nil {
+			return Document{}, err
+		}
+		backoff := 10*time.Millisecond + time.Duration(jitter.Int64())
 		if err := wait(ctx, backoff); err != nil {
 			return Document{}, err
 		}

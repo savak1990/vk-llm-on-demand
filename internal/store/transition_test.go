@@ -85,10 +85,9 @@ func TestTransitionCtxCancel(t *testing.T) {
 	}
 }
 
-// TestTransitionStoreReset: fn must actually change the document (else the
-// no-op short-circuit returns before Save is ever attempted). attempt 1's
-// Save conflicts (fn's own Put bumped the version first); attempt 2 reloads
-// a lower generation and resets before fn runs again.
+// fn must change the document so Save (not the no-op path) runs: attempt 1's
+// Save conflicts because fn's own Put bumped the version first, then attempt
+// 2 reloads a lower generation than attempt 1 saw and resets before fn reruns.
 func TestTransitionStoreReset(t *testing.T) {
 	withInstantWait(t)
 	f := fake.New("4f2c1a9b0e77")
