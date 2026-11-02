@@ -325,7 +325,7 @@ The census from the search table shows how many offers each candidate
 ## Definition of done
 
 - [x] Run A1, and A2 or B where the gate required them, completed with summary lines. A1 and A2 both ran to a `summary` line (research §7.1–§7.5). B was **not** run, even though A2 also failed G5 and the gate's own decision rule literally says "otherwise run B": the project owner reviewed the real G5 numbers and explicitly chose to skip B (research §7.6), overriding that branch of the rule rather than the rule concluding B wasn't needed. Recorded, not hidden.
-- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7. **Not fully true.** AC1–AC4, AC7–AC12, AC15, AC17 hold (see the AC table below). AC6 does not hold: the Q9 VRAM matrix was never obtained (every restart failed health in both runs). AC5, AC13, AC14 and AC16 hold only partly: AC5's advertised `inet_down` and 60 s single-stream sample were never recorded; AC13's $5 cap is not in doubt but the "≥ 1 h after the last destroy" reading was never taken (research §7.5); AC14's ADR/recommended-values halves hold but its "Q1–Q3 and Q7–Q12 closed" half does not, because Q9 is explicitly left open; AC16's steps a/b are recorded but step c (the balance-while-exited reading) never ran, since its precondition (`exited`) was never met.
+- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7. **Not fully true.** AC1–AC4, AC7–AC13, AC15, AC17 hold (see the AC table below) — AC13 now holds in full, following Task 11's real ≥1h-after-last-destroy balance reading (research §7.5): final delta $1.21402759574, well under $5.00. AC6 does not hold: the Q9 VRAM matrix was never obtained (every restart failed health in both runs). AC5, AC14 and AC16 hold only partly: AC5's advertised `inet_down` and 60 s single-stream sample were never recorded; AC14's ADR/recommended-values halves hold but its "Q1–Q3 and Q7–Q12 closed" half does not, because Q9 is explicitly left open; AC16's steps a/b are recorded but step c (the balance-while-exited reading) never ran, since its precondition (`exited`) was never met.
 - [x] ADR 0006 Accepted or amended; ADR 0005 amended only if download > 300 s. ADR 0006 is Accepted (bundle A) with an explicit G5 amendment; ADR 0005 is amended, because one of the two real samples (403.9 s) exceeded 300 s even though the other (289.3 s) did not.
 - [ ] Open-questions rows Q1–Q3, Q7–Q12 closed. **Eight of nine closed**: Q1, Q2, Q3, Q7, Q8, Q10, Q11, Q12. **Q9 is not closed** — every restart attempt in both runs failed to become healthy, so no VRAM measurement exists; it is recorded as genuinely open with root-cause context (research §7.2), which is the honest outcome but is not the "measured value or moot" R10 calls for. This is a known gap against R10's literal text, not papered over by marking Q9 closed.
 - [x] The gate thresholds reviewed by the controller and the outcome noted in Evidence.
@@ -346,7 +346,7 @@ The census from the search table shows how many offers each candidate
 | Does Hugging Face publish the sha256 of the chosen GGUF? | `SPIKE_MODEL_SHA256` and spec 070's pin | operator before the run | compute on the host, record, spec 070 pins |
 | Does `apt-get` reach a mirror quickly inside `server-cuda` on Vast? | aria2c vs curl choice in spec 070 | this spike, step 2 of onstart | **settled: yes**, both real runs (3.6 s, 8.6 s); aria2c used, curl fallback never exercised (research §7.1) |
 | Does `--host` win over `LLAMA_ARG_HOST` when both are set? | spec 070 may skip the `unset` | spec 070; this spike unsets and proves sockets only | always unset; loopback-only confirmed on `/proc/net/tcp` in both real runs (research §7.3 G3) |
-| How fast does the `balance` field reflect charges? | AC13 timing | this spike, readings at end and ≥ 1 h later | not settled: `.balance` stayed pinned at 0 on this account, `.credit` moved (research §7.5); a real delta was observed over ~32 min, no ≥1h-later reading was taken |
+| How fast does the `balance` field reflect charges? | AC13 timing | this spike, readings at end and ≥ 1 h later | **settled** (research §7.5): `.balance` stayed pinned at 0 on this account, `.credit` moved; readings at ~32 min ($0.4273, A1 only) and 63 min after the last destroy ($1.21402759574, full real delta) disagreed, and per this row's own rule the larger/later delta is the one used |
 | Does an in-container action (script exit, `kill -TERM 1`) turn an SSH-mode instance `exited`, and does GPU billing stop? | the host self-stop and C-8 depend on it | M10 in this spike | **settled: no**, in both real runs — neither action reached `exited` within 120 s each (research §7.4 M10); ADR 0003 §7 flagged for review as a result |
 | Can the on-demand contract's maximum duration (research §1.5) cap a spike instance? | a server-side stop independent of the container | not used; it is set by the host, not by us | host self-stop timer; never triggered in either real run (both destroyed by the script's own `DELETE`) |
 | Does `curl -sfIL` report the final `Content-Length` after Hugging Face redirects? | spec 070's curl fallback | onstart step 3 of this spike | **settled: yes**, both real runs matched the expected size exactly (research §7.1) |
@@ -501,16 +501,22 @@ the numbers.
   (2026-11-02, before `hack/spike/` was deleted in this write-back); spec
   140 is where that diagnostic build would actually run again.
 - **Cost.** A1 $0.3539 (`dph_total` $0.55/h), A2 $0.5380 (`dph_total`
-  $0.8111/h) — combined $0.8919, well under the $5.00 cap (R5, AC13). A2's
-  real price exceeds R6's literal $0.80 text but is within the $1.00
-  ceiling this spec's Evidence already authorized for these runs. A real
-  balance delta (not just the estimate) was captured for A1: $25.0000 →
-  $24.5727 across the ~32 minutes between A1's destroy and A2's create,
-  i.e. $0.4273, about 21% above A1's own estimate — plausibly bandwidth,
-  billed separately by Vast. No balance reading was taken ≥ 1 h after A2's
-  destroy, so AC13's exact stated check was not performed; the cap is not
-  in doubt, but that specific reading is a recorded gap, not silently
-  checked off.
+  $0.8111/h) — estimated combined $0.8919. A2's real price exceeds R6's
+  literal $0.80 text but is within the $1.00 ceiling this spec's Evidence
+  already authorized for these runs. **AC13 is now fully evidenced**
+  (Task 11): three real balance readings — $25.0000 before A1; $24.5727
+  roughly 32 minutes after A1's destroy (a partial, A1-only delta of
+  $0.4273); and $23.78597240426 read **63 minutes after A2's (the last)
+  destroy**, exactly the reading AC13 asks for. **Final real delta:
+  $25.0000 − $23.78597240426 = $1.21402759574**, well under the $5.00 cap
+  (R5 holds). Per the open-questions row on balance timing ("use the
+  larger delta"), this final reading is used as authoritative — it is
+  both the later and the larger of the two deltas observed. It runs about
+  36% above the $0.8919 combined estimate, suggesting the script's simple
+  `dph_total × lifetime` model undercounts real billing (research §1.5
+  already names storage billing as a candidate; billing lag is another);
+  $1.21 is still far under the $5.00 cap either way, so R5 is not
+  affected by which explanation is right.
 - **Backstop deviation, recorded not fixed.** The account balance was
   **not** brought to ≤ $10 before these runs, a deviation from this spec's
   own Safety and cost controls table. The user was told accurately what
@@ -539,7 +545,7 @@ the numbers.
 | AC10 | Yes | research §7.3 G3, §7.4 M1 (A2 pass; A1 inconclusive but not failed) |
 | AC11 | Yes | research §7.3 G4, §7.4 M2 |
 | AC12 | Yes | both runs' `--sweep` and direct `GET` confirmation, above |
-| AC13 | **Partly** | research §7.5 — $5 cap not in doubt; the ≥1h-after-last-destroy reading was not taken |
+| AC13 | **Yes** | research §7.5 — real balance read 63 min after the last destroy; final delta $1.21402759574, under the $5.00 cap |
 | AC14 | **Partly** — ADR 0006/recommended-values halves hold; the "Q1–Q3 and Q7–Q12 marked closed" half does not, Q9 is explicitly left open | this Evidence section; research §7.6, §7.7; `docs/open-questions.md` |
 | AC15 | Yes (prior task) | implementation step 4's local Docker test, run before any real spend |
 | AC16 | **Partly** — steps a and b recorded (`exited` yes/no with seconds) in both runs; step c (15 min balance delta while `exited`, "GPU billing stopped" verdict) never ran, since its precondition (`exited`) was never met | research §7.4 M10 |

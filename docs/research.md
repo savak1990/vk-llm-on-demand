@@ -348,27 +348,38 @@ a dedicated review picks it up deliberately.
 |---|---|---|---|
 | `dph_total` | $0.55/h | $0.8111/h | — |
 | Lifetime since `create_end` | 2316.49 s | 2387.69 s | — |
-| Estimated cost (`dph_total × lifetime`) | $0.3539 | $0.5380 | **$0.8919** |
+| Estimated cost (`dph_total × lifetime`) | $0.3539 | $0.5380 | $0.8919 |
+| **Real measured delta** (balance, start → 63 min after last destroy) | — | — | **$1.21402759574** |
 
 Well under the $5.00 cap (R5, AC13). Both instances independently
 confirmed destroyed by direct `GET` and by `--sweep`.
 
-**AC13 is only partly evidenced.** The figures above are the script's own
-`dph_total × lifetime` estimate, not a provider-confirmed balance delta.
-The only two real balance readings captured are each run's own
-`balance_start` (read via `read_balance()`, which reads `.credit` before
-falling back to `.balance` — this already answers the "controller
-concern" the pre-flight Evidence raised in spec.md, about `.balance`
-staying pinned at 0 while `.credit` moves): **$25.0000** before A1, **$24.5727**
-before A2, roughly 32 minutes after A1's destroy. That is a real, measured
-delta of **$0.4273** for A1 — about 21 % above A1's own $0.3539 estimate,
-plausibly the extra bandwidth cost of the 25.9 GB download, which Vast
-bills separately from GPU time. No reading was taken **≥ 1 hour after
-A2's destroy**, so AC13's exact stated check ("balance read ≥ 1 h after
-the last destroy") was not performed in this session; the $0.4273 real
-data point and the $0.8919 combined estimate both sit far enough under the
-$5.00 cap that R5 is not in doubt, but the specific AC13 reading is a gap,
-recorded here rather than checked off from the estimate alone.
+**AC13, now fully evidenced.** Three real balance readings exist, all via
+`read_balance()` (reads `.credit` before falling back to `.balance` — this
+already answers the "controller concern" the pre-flight Evidence raised
+in spec.md, about `.balance` staying pinned at 0 while `.credit` moves):
+**$25.0000** before A1; **$24.5727** before A2 (roughly 32 minutes after
+A1's destroy, a real mid-session delta of $0.4273 for A1 alone); and
+**$23.78597240426** read 63 minutes after A2's (the last) destroy — the
+reading AC13 itself asks for ("balance read ≥ 1 h after the last
+destroy"). **Final delta: $25.0000 − $23.78597240426 = $1.21402759574**,
+well under the $5.00 cap. Per the open-questions row on balance timing
+("use the larger delta"), this final, most-complete reading is the
+authoritative one — it is both the later reading and the larger delta,
+superseding the earlier $0.4273 partial figure, which only ever covered
+A1's spend and an incomplete settling window.
+
+This real delta is about **36 % higher** than the two runs' own
+`estimated_cost_usd × lifetime` figures summed ($0.8919). The script's
+cost estimate is just `dph_total × lifetime_hours`; this measurement
+suggests that undercounts actual billing — plausibly the storage costs
+research §1.5 already names ("stopped instances keep paying storage"; the
+provision/pre-boot window and any destroy-to-confirmed-absence lag are
+billed time the simple `dph_total × lifetime` estimate does not capture),
+or billing-reporting lag, or some combination. Either way, $1.21 stays
+far under the $5.00 cap, so R5 holds regardless of which explanation is
+right; a future session should not assume the script's own cost estimate
+is a tight bound on real spend.
 
 The search used `dph_total {lte: 1.00}` for both runs, the user-authorized
 deviation from the architecture's $0.80 default already recorded in
