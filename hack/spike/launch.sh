@@ -366,11 +366,11 @@ start_watchdog() {
   local main_pid=$$
   (sleep "$WATCHDOG_SECONDS"
     echo "LAUNCH: watchdog: hard cap reached, sending TERM" >&2
-    # Bash only runs the TERM trap once the current foreground command
-    # returns, which a silently dead ssh connection can block for hours;
-    # killing the child too makes that command return right away.
-    pkill -TERM -P "$main_pid" 2>/dev/null
-    kill -TERM "$main_pid" 2>/dev/null) &
+    # TERM to the main script must be sent first: with errexit active, a
+    # child killed before the main process gets its own signal makes the
+    # script exit on the child's nonzero status, skipping the TERM trap.
+    kill -TERM "$main_pid" 2>/dev/null
+    pkill -TERM -P "$main_pid" 2>/dev/null) &
   WATCHDOG_PID=$!
 }
 
@@ -611,8 +611,8 @@ ssh_exec() {
   ssh -n "${SSH_OPTS[@]}" "$SSH_TARGET" "$cmd" 2>/dev/null
 }
 
-# Copies a local file's bytes to a path on the host via an exec'd `cat`, the
-# simplest thing that works without adding an scp dependency (ladder rung 6).
+# Copies a local file's bytes to a path on the host via an exec'd `cat`,
+# avoiding a dependency on scp being installed.
 upload_to_host() {
   local local_path="$1" remote_path="$2"
   ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "cat > $remote_path" <"$local_path" 2>/dev/null
@@ -665,8 +665,8 @@ extend_watchdog_for_m10() {
   [[ -n "$WATCHDOG_PID" ]] && kill "$WATCHDOG_PID" 2>/dev/null
   (sleep "$remaining"
     echo "LAUNCH: watchdog: M10 extension hard cap (55 min) reached, sending TERM" >&2
-    pkill -TERM -P "$main_pid" 2>/dev/null
-    kill -TERM "$main_pid" 2>/dev/null) &
+    kill -TERM "$main_pid" 2>/dev/null
+    pkill -TERM -P "$main_pid" 2>/dev/null) &
   WATCHDOG_PID=$!
 }
 
@@ -913,8 +913,11 @@ m1_port_scan() {
   open_list=()
   if [[ -n "$INSTANCE_PUBLIC_IP" && -n "$mapped_ports" ]] && command -v nmap >/dev/null; then
     local nmap_out
-    nmap_attempted=1
     nmap_out="$(nmap -Pn --host-timeout 120s -p "$mapped_ports" -oG - "$INSTANCE_PUBLIC_IP" 2>/dev/null)" || nmap_out=""
+    # "ran" means it actually produced a result line, not just that the
+    # command was invoked: an error or a host-timeout leaves nmap_out
+    # empty, which must not be read as "found nothing open".
+    grep -qE 'Ports:|Ignored State:' <<<"$nmap_out" && nmap_attempted=1
     while IFS= read -r port; do
       [[ -n "$port" ]] && open_list+=("$port")
     done <<<"$(grep -oE '[0-9]+/open' <<<"$nmap_out" | cut -d/ -f1 || true)"
@@ -939,7 +942,7 @@ m1_port_scan() {
   if ((has_8080_exposed == 1)); then
     verdict="fail: port 8080 bound beyond loopback"
   elif ((nmap_attempted == 0)); then
-    verdict="inconclusive: nmap did not run"
+    verdict="inconclusive: nmap did not produce output"
   elif ((has_8080_loopback == 0)); then
     verdict="inconclusive: no confirmed evidence port 8080 is bound to loopback"
   else
@@ -1009,7 +1012,7 @@ median_of() {
 
 # M3: one streamed completion with thinking left on (model default), ~1000
 # tokens, through the tunnel. Confirms chunking, the terminal [DONE] and
-# reasoning_content; also supplies E10 (first_token) for the stage table.
+# reasoning_content; also supplies the stage table's time-to-first-token.
 m3_streamed_chat() {
   ensure_tunnel
   local prompt body_file result
@@ -1057,8 +1060,8 @@ m4_latency_and_metrics() {
     parse_sse_result "$result"
     record_event "m4_tunnel_sample_$i" "" "$(jq -cn --arg r "$result" '$r')"
     [[ -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]] && tunnel_ttft+=("$SAMPLE_TTFT")
-    # M3 normally supplies E10; if M3 failed, the first sample here is the
-    # earliest real inference token we have.
+    # M3 normally supplies the first-token timestamp; if M3 failed, the
+    # first sample here is the earliest real inference token we have.
     if [[ -z "${EVENT_T[first_token]:-}" && -n "${SAMPLE_START:-}" &&
       -n "${SAMPLE_TTFT:-}" && "$SAMPLE_TTFT" != "-1" ]]; then
       record_event first_token "" "" "$(awk -v s="$SAMPLE_START" -v f="$SAMPLE_TTFT" 'BEGIN{printf "%.6f", s+f}')"
@@ -1596,9 +1599,9 @@ m10_self_exit() {
   echo "LAUNCH: M10 exit_step=$step verdict=$verdict" >&2
 }
 
-# Reads the onstart log over SSH and records the host-side events (E5-E7
-# and a few extras) with their own host clock, never the laptop's, per the
-# spec's "host-side stages are differences of host timestamps only."
+# Reads the onstart log over SSH and records the download/checksum/server
+# events with their own host clock, never the laptop's: the two clocks
+# can drift, so a duration must be computed from one clock or the other.
 collect_host_events() {
   local log_out line t rest ev args
   log_out="$(ssh_exec 'cat /root/spike-events.log 2>/dev/null; true')" || log_out=""
