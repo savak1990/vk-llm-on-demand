@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # Laptop-side driver for the CORE-030 worker-launch spike. --dry-run prints
 # the bodies launch.sh would send; --sweep lists, destroys and confirms
-# removal of vkllm:spike:* instances; --run drives search/create through
-# models_ok (E0-E9) behind a pre-flight budget check, a destroy trap and a
-# 40-minute hard-cap watchdog. M1-M10 and E10 (first_token) are later work.
+# removal of vkllm:spike:* instances; --run drives search/create through models_ok.
 
 if ((BASH_VERSINFO[0] < 5)); then
   echo "LAUNCH: bash >= 5 is required (found ${BASH_VERSION})." >&2
@@ -11,6 +9,7 @@ if ((BASH_VERSINFO[0] < 5)); then
 fi
 
 set -euo pipefail
+export LC_NUMERIC=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
@@ -30,9 +29,8 @@ readonly BOOT_ABORT_SECONDS=1500
 readonly SSH_POLL_INTERVAL=5
 readonly HEALTH_POLL_INTERVAL=2
 
-# --run state: set by run() before the trap is installed, read by cleanup()
-# when a signal or an early exit fires it. Declared here so a reference
-# before assignment is never the cause of a set -u failure.
+# --run state: read by cleanup() when a signal or an early exit fires it,
+# so always declared even when empty.
 INSTANCE_ID=""
 WATCHDOG_PID=""
 TUNNEL_PID=""
@@ -45,16 +43,11 @@ SSH_HOST=""
 SSH_PORT=""
 OFFER_ID=""
 OFFER_DPH_TOTAL=""
+HARD_CAP=""
 
-# vast_call issues one authenticated request and sets VAST_STATUS/VAST_BODY.
-# The key is read fresh from VAST_API_KEY_FILE; it and the body (if any)
-# travel only through the -K config curl reads on stdin, never argv and
-# never a file on disk, so neither shows up in `ps`, a log line or a temp
-# file (curl's --data-binary @<(process substitution) is rejected by curl
-# on this platform: it tries to fstat/seek a fifo, so the body is instead a
-# quoted "data" directive in the same -K stream as the header). A transport
-# failure or timeout sets VAST_STATUS=000 rather than killing the script
-# via set -e.
+# Key and body travel only through the -K config stream on stdin, never
+# argv or a file on disk (curl refuses --data-binary against a
+# process-substitution fifo here). 000 means the call failed; it never kills the script via set -e.
 vast_call() {
   local method="$1" url="$2" body="${3:-}" max_time="${4:-30}" key resp status_line
   local config escaped
@@ -80,11 +73,9 @@ EOF
   fi
 }
 
-# Pages GET /api/v1/instances (after_token/next_token) and prints the id of
-# every instance whose label starts with the given prefix, one per line.
-# sweep() passes SWEEP_LABEL_PREFIX; cleanup's no-id path passes one run's
-# exact label, which is also a valid (self-matching) prefix.
-# A full page with no next_token is refused: we cannot know it is the end.
+# Pages GET /api/v1/instances and prints the id of every instance whose
+# label starts with the given prefix (an exact label also matches as its
+# own prefix). A full page with no next_token is refused: we cannot know it is the end.
 list_sweep_matches() {
   local v1_base="$1" prefix="$2" after="" after_enc url next count pages=0
   while true; do
@@ -215,12 +206,9 @@ print_create_body() {
 JSON
 }
 
-# preflight_budget_check refuses a create whose worst-case 40-minute spend
-# plus the $1.00 bandwidth/storage allowance would exceed the budget left.
-# Called once before any network call with SEARCH_MAX_DPH_TOTAL (the
-# filter's own price cap), and again with the real offer's dph_total once
-# search has one. Needs no network call and, by design, no VAST_API_KEY_FILE
-# either, so it runs before anything else in --run.
+# Refuses a create whose worst-case 40-minute spend plus the $1 bandwidth
+# allowance would exceed the budget left. Called once with the filter's
+# own price cap before any network call, then again with the real offer's price.
 preflight_budget_check() {
   local dph_total="$1" budget cost
   budget="${SPIKE_BUDGET_LEFT_USD:-5.00}"
@@ -238,16 +226,24 @@ require_run_deps() {
   command -v jq >/dev/null || { echo "LAUNCH: jq is required for --run" >&2; exit 1; }
   SPIKE_SSH_KEY="${SPIKE_SSH_KEY:-$HOME/.ssh/vkllm_spike_ed25519}"
   [[ -r "$SPIKE_SSH_KEY" ]] || { echo "LAUNCH: cannot read SPIKE_SSH_KEY ($SPIKE_SSH_KEY)" >&2; exit 1; }
+  if [[ -z "${SPIKE_LOCAL_TEST:-}" ]]; then
+    : "${SPIKE_MODEL_SHA256:?LAUNCH: SPIKE_MODEL_SHA256 must be set (onstart fails without it)}"
+  fi
+  local onstart_bytes
+  onstart_bytes=$(wc -c <"$ONSTART_FILE" | tr -d ' ')
+  if ((onstart_bytes > ONSTART_MAX_CHARS)); then
+    echo "LAUNCH: onstart.sh is $onstart_bytes bytes, limit is $ONSTART_MAX_CHARS" >&2
+    exit 1
+  fi
 }
 
 gen_worker_api_key() {
   od -An -tx1 -N32 /dev/urandom | tr -d ' \n'
 }
 
-# build_run_create_body renders the real PUT body: the actual label, the
-# actual WORKER_API_KEY and the verbatim onstart script. Built with jq, not
-# a heredoc, so the onstart script's own quotes and newlines need no manual
-# escaping.
+# Renders the real PUT body: actual label, actual WORKER_API_KEY, the
+# verbatim onstart script. Built with jq, not a heredoc, so none of the
+# onstart script's own quotes or newlines need manual escaping.
 build_run_create_body() {
   local label="$1" api_key="$2"
   jq -nc \
@@ -272,10 +268,9 @@ build_run_create_body() {
     }'
 }
 
-# search_cheapest_offer POSTs the production filter and picks the cheapest
-# matching offer, mirroring provider.Select's sort (CORE-020 Go client).
-# Sets OFFER_ID and OFFER_DPH_TOTAL; returns 1 if the search found nothing
-# or the provider's own filter was somehow violated.
+# POSTs the production filter and picks the cheapest matching offer. Sets
+# OFFER_ID and OFFER_DPH_TOTAL; returns 1 if nothing came back or the
+# cheapest offer still violates the filter's own price cap.
 search_cheapest_offer() {
   local v0_base="$1" body cheapest
   body="$(print_search_body | jq -c .)"
@@ -320,30 +315,33 @@ create_instance() {
   echo "LAUNCH: event=create_end t=$EPOCHREALTIME instance_id=$INSTANCE_ID"
 }
 
-# start_watchdog sends TERM to the script 40 min after create_end,
-# regardless of state (hard cap, spec "Safety and cost controls"). main_pid
-# is captured explicitly rather than relying on $$'s subshell semantics.
+# Sends TERM to the script 40 min after create_end, regardless of state.
+# main_pid is captured explicitly rather than relying on $$'s own subshell
+# semantics.
 start_watchdog() {
   local main_pid=$$
-  (sleep "$WATCHDOG_SECONDS"; kill -TERM "$main_pid" 2>/dev/null) &
+  (sleep "$WATCHDOG_SECONDS"
+    echo "LAUNCH: watchdog: hard cap reached, sending TERM" >&2
+    kill -TERM "$main_pid" 2>/dev/null) &
   WATCHDOG_PID=$!
 }
 
-# poll_until_running polls actual_status every 5s until "running" or the
-# boot-abort deadline passes (25 min after create_end; spec "Safety and
-# cost controls"). On success it also sets SSH_HOST and SSH_PORT. The GET
-# response is wrapped in "instances" (verified against the real client).
+# Polls actual_status every 5s until "running", aborting if the deadline
+# passes first. On success also sets SSH_HOST/SSH_PORT from the response,
+# which wraps instance fields under "instances".
 poll_until_running() {
   local v0_base="$1" id="$2" deadline="$3" status now
   while true; do
     vast_call GET "$v0_base/instances/$id/" "" 15
     if [[ "$VAST_STATUS" == 2* ]]; then
-      status="$(jq -r '.instances.actual_status // empty' <<<"$VAST_BODY")"
+      status="$(jq -r '.instances.actual_status // empty' <<<"$VAST_BODY" 2>/dev/null)" || status=""
       if [[ "$status" == "running" ]]; then
-        SSH_HOST="$(jq -r '.instances.ssh_host // empty' <<<"$VAST_BODY")"
-        SSH_PORT="$(jq -r '.instances.ssh_port // empty' <<<"$VAST_BODY")"
-        echo "LAUNCH: event=running t=$EPOCHREALTIME ssh_host=<redacted>"
-        return 0
+        SSH_HOST="$(jq -r '.instances.ssh_host // empty' <<<"$VAST_BODY" 2>/dev/null)" || SSH_HOST=""
+        SSH_PORT="$(jq -r '.instances.ssh_port // empty' <<<"$VAST_BODY" 2>/dev/null)" || SSH_PORT=""
+        if [[ -n "$SSH_HOST" && -n "$SSH_PORT" ]]; then
+          echo "LAUNCH: event=running t=$EPOCHREALTIME ssh_host=<redacted>"
+          return 0
+        fi
       fi
     fi
     now="${EPOCHREALTIME%.*}"
@@ -355,8 +353,8 @@ poll_until_running() {
   done
 }
 
-# poll_ssh_ready retries `ssh ... true` every 5s until it succeeds (E4).
-# The spec defines no bound here beyond the overall watchdog hard cap.
+# Retries `ssh ... true` every 5s until it succeeds; only the overall
+# watchdog bounds this.
 poll_ssh_ready() {
   local host="$1" port="$2" key="$3" known_hosts="$4"
   while true; do
@@ -369,9 +367,9 @@ poll_ssh_ready() {
   done
 }
 
-# open_tunnel forwards the laptop's loopback 127.0.0.1:18080 to the
-# instance's own loopback 127.0.0.1:8080 over SSH. llama-server never binds
-# a public interface (ADR 0006 R7), and this never binds one locally either.
+# Forwards the laptop's own loopback 18080 to the instance's own loopback
+# 8080 over SSH. llama-server must never bind a public interface, and
+# this never binds one locally either.
 open_tunnel() {
   local host="$1" port="$2" key="$3" known_hosts="$4"
   ssh -N -o ExitOnForwardFailure=yes -o BatchMode=yes -o ConnectTimeout=10 \
@@ -386,9 +384,9 @@ open_tunnel() {
   fi
 }
 
-# tunnel_get issues one GET through the loopback tunnel. with_key sends the
-# worker's Authorization header via -K on stdin, the same pattern vast_call
-# uses, so the key never reaches argv.
+# Issues one GET through the loopback tunnel. with_key sends the worker's
+# Authorization header via -K on stdin, same pattern as vast_call, so the
+# key never reaches argv.
 tunnel_get() {
   local path="$1" with_key="$2" resp status_line config=""
   if [[ "$with_key" == "1" ]]; then
@@ -409,8 +407,7 @@ EOF
   fi
 }
 
-# poll_health polls /health every 2s until 200 (E8). Unauthenticated, per
-# AC11.
+# Polls /health every 2s until 200; unauthenticated.
 poll_health() {
   while true; do
     tunnel_get "/health" 0
@@ -422,7 +419,7 @@ poll_health() {
   done
 }
 
-# poll_models polls /v1/models until the alias is listed (E9).
+# Polls /v1/models until the model alias is listed.
 poll_models() {
   while true; do
     tunnel_get "/v1/models" 1
@@ -435,10 +432,9 @@ poll_models() {
   done
 }
 
-# cleanup is the trap handler for EXIT/INT/TERM/HUP, installed immediately
-# before the create call (R2). It is idempotent by disarming its own traps
-# first (a second Ctrl-C can't abort an in-progress destroy-verify) and
-# runs under set +e so one failing command never skips the verify loop.
+# Trap handler for EXIT/INT/TERM/HUP, installed right before the create
+# call. Disarms itself first so a second signal can't interrupt an
+# in-progress destroy-verify, and runs under set +e so one failing step can't skip it.
 cleanup() {
   local rc=$?
   trap - EXIT
@@ -448,6 +444,14 @@ cleanup() {
   [[ -n "$TUNNEL_PID" ]] && kill "$TUNNEL_PID" 2>/dev/null
   [[ -n "$WATCHDOG_PID" ]] && kill "$WATCHDOG_PID" 2>/dev/null
   [[ -n "$RUN_TMP" ]] && rm -rf "$RUN_TMP"
+
+  # $? at signal-handler time reflects the interrupted command, not
+  # whether this run itself succeeded, so a watchdog/TERM abort always
+  # reports its own exit code rather than trusting rc.
+  if [[ -n "$HARD_CAP" ]]; then
+    echo "LAUNCH: cleanup: hard-cap abort" >&2
+    rc=3
+  fi
 
   if [[ -n "$INSTANCE_ID" ]]; then
     echo "LAUNCH: cleanup: destroying instance $INSTANCE_ID" >&2
@@ -491,7 +495,8 @@ run() {
   WORKER_API_KEY="$(gen_worker_api_key)"
   RUN_TMP="$(mktemp -d)"
 
-  trap cleanup EXIT INT TERM HUP
+  trap cleanup EXIT INT HUP
+  trap 'HARD_CAP=1; cleanup' TERM
 
   create_instance "$V0_BASE" "$offer_id" "$LABEL" "$WORKER_API_KEY" || exit 2
 
