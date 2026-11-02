@@ -1,14 +1,20 @@
 ---
 id: "CORE-030"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-02"
 depends_on: ["CORE-020"]
 adrs: ["0006", "0002", "0005", "0003", "0007"]
 ---
 
 # 030 — Worker launch spike
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DONE, 2026-11-02. Two real runs (A1, A2) against one
+1×L40S Vast.ai instance each answered Q1–Q2 and Q7–Q8, Q10–Q12 fully; Q3
+partly (proxied confirmed, direct mode's effect stays unconfirmed); Q9
+stays genuinely open (see Evidence). ADR 0006 is Accepted (bundle A) with
+an amendment to its G5 latency threshold; ADR 0005 is amended with the
+observed download range. `hack/spike/` is deleted; `docs/research.md` §7
+and `docs/open-questions.md` carry the durable record.
 
 **Complexity:** M
 **Risk:** medium — real GPU spend on a rented host, bounded by a hard cap, a trap and a prepaid balance
@@ -74,6 +80,7 @@ keeps it, and spec 140 is the repeatable real-provider run (C-29).
 | `SPIKE_RUNTYPE` | `ssh` (default), `ssh_direct`, `args` | research §1.3 lists all three |
 | `SPIKE_BUDGET_LEFT_USD` | budget not yet spent | pre-flight refuses a run that could exceed it |
 | `SPIKE_SELF_STOP_SECONDS` | host self-stop delay, passed in `env` | default 2400; 60 in the local timer test |
+| `SPIKE_LOCAL_TEST` | skip `apt-get`, the download and the checksum; run `sleep infinity` in place of `llama-server` | set only for the Docker self-stop timer test, passed in `env`, never set for a real GPU run |
 | `SPIKE_API_BASE` | provider base URL | default `https://console.vast.ai/api/v0` (research §1.1); a local stub in the step 3 check |
 | `SPIKE_OFFER_ID` | skip search and use this offer | used by the step 3 check only |
 
@@ -317,34 +324,240 @@ The census from the search table shows how many offers each candidate
 
 ## Definition of done
 
-- [ ] Run A1, and A2 or B where the gate required them, completed with summary lines.
-- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7.
-- [ ] ADR 0006 Accepted or amended; ADR 0005 amended only if download > 300 s.
-- [ ] Open-questions rows Q1–Q3, Q7–Q12 closed.
-- [ ] The gate thresholds reviewed by the controller and the outcome noted in Evidence.
-- [ ] M10 result recorded in research §7 so spec 070 can cite it.
-- [ ] Any recommended value that differs from an Accepted ADR is listed as "needs ADR amendment".
-- [ ] `hack/spike/` deleted in the same pull request.
-- [ ] `make specs-check` passes in CI.
-- [ ] Status flipped to DONE and the folder renamed in the same PR; evidence section filled.
+- [x] Run A1, and A2 or B where the gate required them, completed with summary lines. A1 and A2 both ran to a `summary` line (research §7.1–§7.5). B was **not** run, even though A2 also failed G5 and the gate's own decision rule literally says "otherwise run B": the project owner reviewed the real G5 numbers and explicitly chose to skip B (research §7.6), overriding that branch of the rule rather than the rule concluding B wasn't needed. Recorded, not hidden.
+- [ ] AC1–AC17 hold, with numbers copied into Evidence and research §7. **Not fully true.** AC1–AC4, AC7–AC13, AC15, AC17 hold (see the AC table below) — AC13 now holds in full, following Task 11's real ≥1h-after-last-destroy balance reading (research §7.5): final delta $1.21402759574, well under $5.00. AC6 does not hold: the Q9 VRAM matrix was never obtained (every restart failed health in both runs). AC5, AC14 and AC16 hold only partly: AC5's advertised `inet_down` and 60 s single-stream sample were never recorded; AC14's ADR/recommended-values halves hold but its "Q1–Q3 and Q7–Q12 closed" half does not, because Q9 is explicitly left open; AC16's steps a/b are recorded but step c (the balance-while-exited reading) never ran, since its precondition (`exited`) was never met.
+- [x] ADR 0006 Accepted or amended; ADR 0005 amended only if download > 300 s. ADR 0006 is Accepted (bundle A) with an explicit G5 amendment; ADR 0005 is amended, because one of the two real samples (403.9 s) exceeded 300 s even though the other (289.3 s) did not.
+- [ ] Open-questions rows Q1–Q3, Q7–Q12 closed. **Seven of nine fully closed, one partly, one open**: Q1, Q2, Q7, Q8, Q10, Q11, Q12 fully closed; Q3 only partly (proxied confirmed; direct mode's effect stays open). **Q9 is not closed** — every restart attempt in both runs failed to become healthy, so no VRAM measurement exists; it is recorded as genuinely open with root-cause context (research §7.2), which is the honest outcome but is not the "measured value or moot" R10 calls for. This is a known gap against R10's literal text, not papered over by marking Q9 closed.
+- [x] The gate thresholds reviewed by the controller and the outcome noted in Evidence.
+- [x] M10 result recorded in research §7 so spec 070 can cite it.
+- [x] Any recommended value that differs from an Accepted ADR is listed as "needs ADR amendment".
+- [x] `hack/spike/` deleted in the same pull request.
+- [x] `make specs-check` passes in CI. Run and confirmed locally in this
+  session (not yet observed in an actual CI job for this change, since
+  that only happens once this lands on a PR).
+- [x] Status flipped to DONE and the folder renamed in the same PR; evidence section filled.
 
 ## Open questions
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| Which user name does Vast's SSH mode accept? | the tunnel dialer's config (spec 060) | this spike, from the first successful login | `root` |
-| Are `env` values readable back through `GET /api/v0/instances/{id}`? | `WORKER_API_KEY` exposure (ADR 0006 §4, spec 070) | this spike inspects the GET response (spec 070 assigns it here too) | treat as readable by the account holder |
+| Which user name does Vast's SSH mode accept? | the tunnel dialer's config (spec 060) | this spike, from the first successful login | **settled: `root`**, both real runs |
+| Are `env` values readable back through `GET /api/v0/instances/{id}`? | `WORKER_API_KEY` exposure (ADR 0006 §4, spec 070) | this spike inspects the GET response (spec 070 assigns it here too) | not directly checked in the real runs; still treat as readable by the account holder |
 | Does Hugging Face publish the sha256 of the chosen GGUF? | `SPIKE_MODEL_SHA256` and spec 070's pin | operator before the run | compute on the host, record, spec 070 pins |
-| Does `apt-get` reach a mirror quickly inside `server-cuda` on Vast? | aria2c vs curl choice in spec 070 | this spike, step 2 of onstart | single-stream curl |
-| Does `--host` win over `LLAMA_ARG_HOST` when both are set? | spec 070 may skip the `unset` | spec 070; this spike unsets and proves sockets only | always unset |
-| How fast does the `balance` field reflect charges? | AC13 timing | this spike, readings at end and ≥ 1 h later | use the larger delta |
-| Does an in-container action (script exit, `kill -TERM 1`) turn an SSH-mode instance `exited`, and does GPU billing stop? | the host self-stop and C-8 depend on it | M10 in this spike | host timer does both; balance ≤ $10 as second layer |
-| Can the on-demand contract's maximum duration (research §1.5) cap a spike instance? | a server-side stop independent of the container | not used; it is set by the host, not by us | host self-stop timer |
-| Does `curl -sfIL` report the final `Content-Length` after Hugging Face redirects? | spec 070's curl fallback | onstart step 3 of this spike | fetch without a size check, rely on sha256 |
+| Does `apt-get` reach a mirror quickly inside `server-cuda` on Vast? | aria2c vs curl choice in spec 070 | this spike, step 2 of onstart | **settled: yes**, both real runs (3.6 s, 8.6 s); aria2c used, curl fallback never exercised (research §7.1) |
+| Does `--host` win over `LLAMA_ARG_HOST` when both are set? | spec 070 may skip the `unset` | spec 070; this spike unsets and proves sockets only | always unset; loopback-only confirmed on `/proc/net/tcp` in both real runs (research §7.3 G3) |
+| How fast does the `balance` field reflect charges? | AC13 timing | this spike, readings at end and ≥ 1 h later | **settled** (research §7.5): `.balance` stayed pinned at 0 on this account, `.credit` moved; two real readings disagreed — ~32 min after A1's destroy ($0.4273, A1 only) and 63 min after the last destroy ($1.21402759574, full real delta) — and the later, more complete 63-minute reading is the one used, since it is the reading AC13 itself asks for |
+| Does an in-container action (script exit, `kill -TERM 1`) turn an SSH-mode instance `exited`, and does GPU billing stop? | the host self-stop and C-8 depend on it | M10 in this spike | **measured, not settled**: `actual_status` stayed `running` for 120 s after each action, in both real runs (research §7.4 M10). Whether the kill itself failed or Vast just doesn't reflect in-container death in `actual_status` was not distinguished — PID 1's identity under Vast's SSH launch mode was never confirmed; ADR 0003 §7 flagged for review as a result |
+| Can the on-demand contract's maximum duration (research §1.5) cap a spike instance? | a server-side stop independent of the container | not used; it is set by the host, not by us | host self-stop timer; never triggered in either real run (both destroyed by the script's own `DELETE`) |
+| Does `curl -sfIL` report the final `Content-Length` after Hugging Face redirects? | spec 070's curl fallback | onstart step 3 of this spike | **settled: yes**, both real runs matched the expected size exactly (research §7.1) |
 | Tool behaviour assumed, not in research: bash ≥ 5 `$EPOCHREALTIME`; Caddy `tls internal` self-signed | timing and fallback B | `launch.sh` fails at start without `$EPOCHREALTIME`; the B image build and first TLS connection | as stated |
 | Is there a maximum `label` length? | production labels may be longer than the spike's 22 characters | spec 020; this spike records only that its label round-trips | ≤ 22 characters proven |
 | Does one boot sample say anything about image cache frequency (Q12)? | cold-start budget | spec 140 adds samples | one sample, marked as such |
 
 ## Evidence
 
-None yet.
+- `launch.sh`'s laptop-side JSON parsing (the `--run` measurement code, M1-M10)
+  uses `jq`, already a dependency of this script since Task 3/4; no new
+  dependency was added.
+- M10's self-exit table says `pkill -f llama-server`; the implementation
+  uses `pkill -x llama-server` instead, at all three call sites
+  (`launch.sh`'s restart cycle and M10 step a, and `onstart.sh`'s self-stop
+  timer). `-f` matches a process's full command line, so if `onstart`
+  ever runs under a wrapper whose own argv happens to contain the text
+  "llama-server" (unverified — whether Vast invokes `onstart` as
+  `bash -c "<the whole script>"` is itself one of this spike's open
+  questions), `-f` would also match and signal that wrapper. `-x` matches
+  only the exact process name, so it can never do that.
+- **Price cap raised to $1.00 for this run only.** The architecture's
+  default `provider.filter.safety.maxHourlyPriceUSD` is $0.80 (CLAUDE.md);
+  at run time the live L40S on-demand market had zero offers at or under
+  $0.80 (the cheapest was $0.8015/h), so the user explicitly authorized
+  raising `SEARCH_MAX_DPH_TOTAL` (and the matching `dph_total.lte` filter
+  sent to the API — the two are now the same value, read from one
+  constant) to $1.00 for this specific spike run. Per R14, this differs
+  from the Accepted default and is not itself a decision to change that
+  default; it needs its own review before becoming permanent.
+
+### Pre-flight session (Task 8, read 2026-11-02, live, no spend)
+
+- **Balance.** `GET /api/v0/users/current` (key via `-K -` on stdin, same
+  pattern as `vast_call`) returned `balance: 0`, `credit: 25.0`. The
+  endpoint's documented schema
+  (https://docs.vast.ai/api-reference/accounts/show-user) names only
+  `balance` ("the current balance of the user") and does not document
+  `credit`; research §1.5 also records a CORE-020 probe (2026-11-02) that
+  likewise read `balance: 0`. Whether that probe predates the $25 top-up
+  is not recorded, but it shows `balance: 0` is not new, one-off
+  behaviour for this account. The $25 of prepaid funds that are actually
+  at risk live in the undocumented `credit` field. Treating the
+  spendable figure conservatively as the higher number: **$25.00**.
+- **Backstop check (implementation step 5 / brief step 4).** $25.00 exceeds the $10 backstop
+  (research §1.5; this spec's Safety and cost controls table). **This
+  check does not pass.** Manual action on the Vast.ai dashboard is needed
+  to bring spendable funds to ≤ $10 before Task 9 runs; this session takes
+  no such action (live, read-only, no-spend task).
+- **Concern for the controller, not fixed in this task:** `launch.sh`'s
+  `read_balance()` (around line 674) reads the `.balance` field for the
+  before/after/+1h readings that R5, AC13 and M10 step c depend on. If
+  Task 9's spend draws down `.credit` while `.balance` stays pinned at 0,
+  every spend delta in that run reads as $0 and the $5 cap check (AC13)
+  would be blind to real spend. The controller should decide whether
+  `read_balance()` needs to read `.credit` (or both) before Task 9.
+- **`SPIKE_IMAGE` digest (ADR 0002 §1, build ≥ b12032).** Queried GHCR
+  directly: `docker manifest inspect ghcr.io/ggml-org/llama.cpp:server-cuda -v`
+  and `GET https://ghcr.io/v2/ggml-org/llama.cpp/manifests/server-cuda`
+  (anonymous pull token, `Accept: application/vnd.oci.image.index.v1+json`).
+  The tag resolves to a two-platform (amd64, arm64) OCI index, index digest
+  `sha256:0a9f6c7cfe5a6b90b6c048b7a86865bf55a88af34bada927482eab2ef5f25b4a`
+  (the `Docker-Content-Digest` response header for the tag). Both
+  platform manifests carry
+  `org.opencontainers.image.version: "b12033"` and
+  `org.opencontainers.image.created: "2026-11-02T06:12:11Z"`, i.e. built
+  on the day of this pre-flight read and ≥ b12032. Chosen value for `SPIKE_IMAGE`:
+  `ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:0a9f6c7cfe5a6b90b6c048b7a86865bf55a88af34bada927482eab2ef5f25b4a`.
+  (The amd64-only platform manifest digest,
+  `sha256:ce9c9f0d45794f78f1c99bcb02c32509a40ba3a513d9d3222aaf6f7a98737cad`,
+  same version/date, is recorded here too in case the index-digest form
+  does not pull cleanly on the Vast host.)
+- **`SPIKE_MODEL_SHA256`.** Ran the brief's exact command:
+  `curl -sIL "https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen_Qwen3.6-35B-A3B-Q5_K_M.gguf"`.
+  The redirect response carried
+  `x-linked-etag: "ec438d1326eb11d8bb94785c54739cd4b60b01ae32bd8532e232a046b19d296d"`
+  (64 hex characters, a valid sha256 shape) and
+  `x-linked-size: 25913185920`, matching the 25,913,185,920-byte size
+  already recorded in research §3. Per the brief, this value is used:
+  **`SPIKE_MODEL_SHA256 = ec438d1326eb11d8bb94785c54739cd4b60b01ae32bd8532e232a046b19d296d`**.
+  Cross-checked against the git LFS pointer file itself
+  (`GET …/raw/main/Qwen_Qwen3.6-35B-A3B-Q5_K_M.gguf`, which for an LFS
+  file returns the pointer, not the bytes): it reads
+  `oid sha256:ec438d1326eb11d8bb94785c54739cd4b60b01ae32bd8532e232a046b19d296d`
+  and `size 25913185920`, both matching the header exactly. Caveat: this
+  is still Hugging Face's own recorded LFS oid, not a hash computed from
+  downloaded bytes on this laptop or on the host; onstart's own
+  `sha256sum` after download (step 4 of the onstart payload) remains the
+  real verification and is expected to match.
+- **Open-questions row closed in part:** "Does Hugging Face publish the
+  sha256 of the chosen GGUF?" — yes, via `X-Linked-ETag` on the `resolve/`
+  redirect; this spike no longer needs to compute it on the host from
+  scratch, only to confirm the match.
+
+### Real runs A1, A2 (Tasks 9–10, live, real spend, 2026-11-02)
+
+Full numbers, per-stage timings, the ADR 0006 gate table, all M1–M10
+measurements, the cost accounting and the recommended-value derivation
+live in [`docs/research.md` §7](../../../docs/research.md). This section
+is the pointer and the decisions that follow from it; it does not repeat
+the numbers.
+
+- Both runs' instances were independently confirmed destroyed by a direct
+  `GET /api/v0/instances/{id}` (`{"instances": null}`) and by
+  `launch.sh --sweep` (0 instances), not just trusted from the script's
+  own log.
+- **A1** (`ssh`): G1/G2/G4/G6 passed; G3 inconclusive (no confirming
+  external scan, but no evidence of exposure either); G5 failed (804 ms
+  TTFT delta against a 300 ms cap; tokens/s unaffected).
+- **A2** (`ssh_direct` requested): G1/G2/G4/G6 passed; G3 passed
+  conclusively; G5 failed (941 ms delta). Requesting `ssh_direct` did not
+  change the observed SSH routing for this host — both runs were
+  classified `proxy` by the script's own test — so direct mode's effect on
+  G5 remains unconfirmed, not disproved.
+- The gate's own decision rule ("A2 passes → Accepted with `ssh_direct`
+  pinned; otherwise run B") has no clean branch for "A2 also fails G5, no
+  genuinely-direct sample exists." The project owner reviewed this real
+  data and made the call: Accept bundle A anyway, amend the G5 threshold,
+  and skip fallback B — a sub-second latency miss with no throughput cost
+  did not justify a custom TLS-proxy image.
+- **ADR 0006** is now Accepted (bundle A), with the G5 threshold amendment
+  — TTFT delta ≤ 1.0 s and tokens/s ≥ 95 % of host, both real samples
+  passing (804 ms / 941 ms; 99.57 % / 100.66 %) — recorded in the ADR
+  itself and in research §7.6.
+- **ADR 0005** is amended: one real sample (403.9 s) exceeded the 300 s
+  trigger, the other (289.3 s) did not — the trigger, read literally,
+  fired. Unlike the Fallback B skip above, **this spec does not itself
+  decide** whether to promote the S3 mirror to the MVP default; that
+  decision is left explicitly pending the project owner's call (the ADR's
+  Status section says so), which may reasonably wait on spec 140's
+  repeated runs for more samples, but is not assumed here.
+- **M10 / ADR 0003 §7 flag.** In both runs, `actual_status` stayed
+  `running` for 120 s after `pkill -x llama-server` and 120 s after a
+  subsequent `kill -TERM 1`; only the script's own `DELETE` call ended
+  either instance. The `kill -TERM 1` result was discarded (`|| true`), so
+  whether PID 1 actually exited — or what process PID 1 even was under
+  Vast's SSH launch mode — was never checked.
+  [ADR 0003](../../../docs/adr/0003-gpu-lifecycle-management.md) §7 states
+  that an exited instance stops GPU billing even when the control plane is
+  down; this spike's data (2/2 real samples) is consistent with either
+  "the in-container kill didn't work" or "Vast doesn't reflect in-container
+  process death in `actual_status` regardless" — which one is true was not
+  distinguished here. **ADR 0003 is not amended by this spec** — out of
+  this spike's explicit scope — but the finding is recorded here and in
+  research §7.4 so spec 070 or a dedicated review picks it up
+  deliberately, starting from confirming what PID 1 is under Vast's SSH
+  launch mode.
+- **Q9 (VRAM matrix) stays open.** Seven restart attempts across both runs
+  failed to become healthy: all four (V1–V4) in A1, and V1–V3 in A2 (A2's
+  V4 was skipped outright as the 40-minute hard cap approached, not
+  attempted and failed). A2's three attempts used a 420 s per-config
+  timeout and still timed out at the full duration each time, ruling out
+  "just needs more time" within that budget. Two unconfirmed root-cause
+  candidates (the restart path's `--api-key-file` vs the boot path's
+  inline `--api-key`; the restart path not repeating `onstart.sh`'s
+  `unset LLAMA_ARG_HOST`) are recorded in research §7.2. Diagnostic
+  logging for a future retry (env-var capture, key-file-exists check,
+  post-restart process-alive and log-tail capture, key always redacted)
+  was added to `launch.sh`'s restart cycle in commit `0643ea6`
+  (2026-11-02, before `hack/spike/` was deleted in this write-back); spec
+  140 is where that diagnostic build would actually run again.
+- **Cost.** A1 $0.3539 (`dph_total` $0.55/h), A2 $0.5380 (`dph_total`
+  $0.8111/h) — estimated combined $0.8919. A2's real price exceeds R6's
+  literal $0.80 text but is within the $1.00 ceiling this spec's Evidence
+  already authorized for these runs. **AC13 is now fully evidenced**
+  (Task 11): three real balance readings — $25.0000 before A1; $24.5727
+  roughly 32 minutes after A1's destroy (a partial, A1-only delta of
+  $0.4273); and $23.78597240426 read **63 minutes after A2's (the last)
+  destroy**, exactly the reading AC13 asks for. **Final real delta:
+  $25.0000 − $23.78597240426 = $1.21402759574**, well under the $5.00 cap
+  (R5 holds). This later, more complete reading supersedes the earlier
+  $0.4273 partial figure — it is both the later and the larger of the
+  two real deltas observed. It runs about
+  36% above the $0.8919 combined estimate, suggesting the script's simple
+  `dph_total × lifetime` model undercounts real billing (research §1.5
+  already names storage billing as a candidate; billing lag is another);
+  $1.21 is still far under the $5.00 cap either way, so R5 is not
+  affected by which explanation is right.
+- **Backstop deviation, recorded not fixed.** The account balance was
+  **not** brought to ≤ $10 before these runs, a deviation from this spec's
+  own Safety and cost controls table. The user was told accurately what
+  the backstop covers (worst-case loss if every other safeguard fails at
+  once, not expected spend) and chose to keep it at $25. Actual spend
+  ($0.3539, $0.5380 per run) never came close to testing it.
+- **`read_balance()` concern (raised in the Task 8 Evidence above) is
+  resolved**: it reads `.credit` before falling back to `.balance`, so the
+  before/after readings in both runs' `summary` lines reflect real
+  spendable funds, not the `.balance` field that stays pinned at 0 on this
+  account. The same `.balance`-only bug exists in the shipped
+  `internal/provider/vastai/client.go`'s `Balance()` (production code, not
+  touched by this branch) — flagged here and in research §1.5 for its own
+  follow-up fix, not resolved by this spike's throwaway script.
+
+### AC1–AC17
+
+| AC | Holds? | Where |
+|---|---|---|
+| AC1 | Yes | research §7.1 (8 stages + cold start total, both runs) |
+| AC2 | Yes | research §7.2 Q1 |
+| AC3 | Yes | research §7.2 Q3, §7.4 M1/M8 |
+| AC4 | Yes | research §7.2 Q7, §7.4 M5 (5/5 both runs) |
+| AC5 | **Partly** — download seconds, fetch-only MB/s, fetcher name and aria2 install seconds all recorded; advertised `inet_down` was never logged (no offer-census event) and the dedicated 60 s single-stream sample was skipped in both runs | research §7.1, §7.2 Q8, §7.4 M9, §7.7 |
+| AC6 | **No** | research §7.2 Q9, §7.4 M7 — never obtained, recorded as open |
+| AC7 | Yes | research §7.2 Q10, §7.4 M4 |
+| AC8 | Yes | research §7.2 Q2, Q11 |
+| AC9 | Yes | research §7.1, §7.2 Q12 |
+| AC10 | Yes | research §7.3 G3, §7.4 M1 (A2 pass; A1 inconclusive but not failed) |
+| AC11 | Yes | research §7.3 G4, §7.4 M2 |
+| AC12 | Yes | both runs' `--sweep` and direct `GET` confirmation, above |
+| AC13 | **Yes** | research §7.5 — real balance read 63 min after the last destroy; final delta $1.21402759574, under the $5.00 cap |
+| AC14 | **Partly** — ADR 0006/recommended-values halves hold; the "Q1–Q3 and Q7–Q12 marked closed" half does not, Q9 is explicitly left open | this Evidence section; research §7.6, §7.7; `docs/open-questions.md` |
+| AC15 | Yes (prior task) | implementation step 4's local Docker test, run before any real spend: `docker run --init` (tini as PID 1), `SPIKE_SELF_STOP_SECONDS=60` — `self_stop_fired` logged 60.001 s after start (within the ±5 s window), container exit code 143 (SIGTERM), exit within the 90 s window. This `--init`/tini result is local-Docker-only and does not carry over to Vast's real SSH-mode container, where PID 1's identity was never confirmed (research §7.4, M10 flag) |
+| AC16 | **Partly** — steps a and b recorded (`exited` yes/no with seconds) in both runs; step c (15 min balance delta while `exited`, "GPU billing stopped" verdict) never ran, since its precondition (`exited`) was never met | research §7.4 M10 |
+| AC17 | Yes (prior task) | implementation step 3's stub check: after the create call timed out (~60 s against the stub), log line `cleanup: no id, sweeping label vkllm:spike:<ts>`, script exit code 2 |

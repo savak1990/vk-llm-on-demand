@@ -53,7 +53,8 @@ The GPU is started explicitly and stopped by a 30-minute rolling
 inactivity timeout or a manual stop (ADR 0010, 0011). The worker is a
 provider instance, not a cluster node (ADR 0001). The only durable state is
 one ConfigMap (ADR 0004). The controller reaches the worker through an
-SSH tunnel and hands the gateway a transport (ADR 0006, Proposed).
+SSH tunnel and hands the gateway a transport (ADR 0006, Accepted (bundle
+A, SSH), with an amended G5 latency threshold).
 
 ## 2. Components
 
@@ -337,7 +338,7 @@ workflow lives in this repository and needs one secret and one variable
 | [0003](adr/0003-gpu-lifecycle-management.md) | One binary; destroy, never stop; label identity; reconcile | Accepted, §5 amended by 0011 |
 | [0004](adr/0004-state-persistence.md) | One ConfigMap with optimistic concurrency | Accepted, fields amended by 0011 |
 | [0005](adr/0005-model-storage.md) | Download from Hugging Face per provision | Accepted; P2 cache in 0014 |
-| [0006](adr/0006-worker-connectivity.md) | Controller-owned SSH tunnel to loopback llama-server | Proposed (spec 030) |
+| [0006](adr/0006-worker-connectivity.md) | Controller-owned SSH tunnel to loopback llama-server | Accepted (bundle A, SSH), with an amended G5 latency threshold |
 | [0007](adr/0007-cold-start-api-strategy.md) | Bounded wait with heartbeats | Future on-demand mode only |
 | [0008](adr/0008-release-pipeline-and-chart.md) | vk-ahorro pipeline and chart conventions | Accepted, extended by 0013 |
 | [0009](adr/0009-secrets-and-api-keys.md) | Secrets by name; platform KMS → SSM → ESO | Proposed (spec 130) |

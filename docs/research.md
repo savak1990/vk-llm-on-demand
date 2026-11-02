@@ -43,7 +43,7 @@ Date of research: 2026-11-01. Re-verify V items older than six months before rel
 | `onstart_cmd` is a CLI flag name only; the API field is `onstart` | V | vast-cli |
 | SSH and Jupyter launch modes inject setup scripts and **replace the image's entrypoint**; Entrypoint (`args`) mode keeps it | V | https://docs.vast.ai/guides/instances/docker-environment |
 | Whether `onstart` executes in `args` mode | U | CORE-030 |
-| Whether Vast injects an SSH server into an image that lacks `openssh-server` (the docs say "if you run into obscure loading errors with SSH or Jupyter launch modes on a custom image, try the simpler Entrypoint launch mode and set up SSH yourself") | U | CORE-030 |
+| Vast's SSH launch mode builds a derived image on top of the one named in `create`: the `running` event's `status_msg` sequence shows a BuildKit run (`#0 building with "default" instance…`) that `apt-get install`s packages including `openssh-sftp-server`, before the final line `success, running <image>/ssh`. Confirmed in both CORE-030 spike runs (research §7.1, Q12). Settles the "injects a working SSH server" half of Q1; the official `server-cuda` image did not already carry one. | V | our spike run A1/A2, 2026-11-02 (research §7.1) |
 | SSH keys added at the account level are added to every new instance automatically | V | Vast console, "Manage Keys" page (user screenshot, 2026-11-01) |
 | Vast base images are "pre-cached on many machines"; loading is "normal for 30 seconds with cached images"; "fresh pulls may take 10–60 minutes". No guarantee that `ghcr.io/ggml-org/llama.cpp` is cached on a given host | V (statements) / U (our image) | https://docs.vast.ai/guides/instances/manage-instances |
 
@@ -71,7 +71,9 @@ Date of research: 2026-11-01. Re-verify V items older than six months before rel
 | GPU time is billed per second while the instance is active/connected; **not charged while Loading**; bandwidth billed per byte in any state; no minimum charge stated | V | https://docs.vast.ai/guides/reference/faq/billing |
 | Prepaid credit model; at $0 balance "instances, storage volumes, and data will be scheduled for deletion" | V | same |
 | `GET /api/v0/users/current` has a `balance` field | V | https://docs.vast.ai/api-reference/accounts/show-user |
-| CORE-020 probe: `GET /api/v0/users/current` returned the expected shape with a populated `billing_threshold` and zero current balance | S | our API probe, 2026-11-02 |
+| CORE-020 probe: `GET /api/v0/users/current` returned the expected shape with a populated `billing_threshold` and zero current balance (the `.balance` field — see next row) | S | our API probe, 2026-11-02 |
+| The `.balance` field documented above stays pinned at **0** on this real prepaid account across both the no-spend pre-flight session and the real-spend runs; the account's actual spendable funds live in the undocumented `.credit` field, which does move with spend. CORE-030's `read_balance()` reads `.credit` first, falling back to `.balance`, and recorded three real readings this way: $25.0000 (before run 1) → $24.5727 (~32 min after run 1's destroy) → $23.78597240426 (63 min after run 2's destroy) — a real delta of $1.21402759574 — while `.balance` would have read 0 throughout (research §7.5) | S | spike + CORE-020 probe, 2026-11-02 |
+| **Shipped production bug, flagged here, not fixed in this branch:** `internal/provider/vastai/client.go`'s `Balance()` (around line 528) decodes only `json:"balance"`, the same field that stays pinned at 0 on this account — so the real control plane's balance tracking would read $0 in production on an account shaped like this one. This needs its own follow-up fix; `client.go` is out of scope for this branch | S | code read, 2026-11-02 |
 | `GET /api/v0/charges` **exists**: the probe got HTTP 401 with body `{"success":false,"msg":"Authorization Error. Your key lacks the billing_read permission group which is required for this action."}` — a permission gate, not a 404. The endpoint's existence is now confirmed; it remains unused, as the budget design does not depend on it (CORE-100 ledger handles the real spend estimate) | S | our API probe, 2026-11-02 |
 | `PUT /api/v0/instances/recycle/{id}` recreates the container from a freshly pulled image; on-demand contracts have a maximum duration and expired instances "may be deleted 48 hours after expiration" | V | https://docs.vast.ai/guides/instances/choosing/instance-types |
 
@@ -150,7 +152,7 @@ Only the 10 full-attention layers keep a KV cache. Per token: 10 layers × 2 (K,
 | 65,536 | ≈ 1.25 GiB |
 | 262,144 | ≈ 5 GiB |
 
-DeltaNet recurrent state is fixed per slot: 30 layers × 32 heads × 128 × 128 × 4 bytes ≈ 60 MiB (assumes f32 state — U), plus ≈ 3 MiB conv state. Weights Q5_K_M ≈ 24.1 GiB; compute buffers ≈ 0.5–2 GiB (U). Total at 64K context ≈ **26–28 GiB**, inside a 48 GB L40S with room for a second slot. CORE-030 measures the real number from `nvidia-smi`.
+DeltaNet recurrent state is fixed per slot: 30 layers × 32 heads × 128 × 128 × 4 bytes ≈ 60 MiB (assumes f32 state — U), plus ≈ 3 MiB conv state. Weights Q5_K_M ≈ 24.1 GiB; compute buffers ≈ 0.5–2 GiB (U). Total at 64K context ≈ **26–28 GiB**, inside a 48 GB L40S with room for a second slot. CORE-030 attempted to measure the real number from `nvidia-smi` but every restart failed health before a reading could be taken (§7.2 Q9); spec 140 is the next place to try.
 
 ## 4. OpenAI-compatible clients
 
@@ -195,3 +197,249 @@ Scanning and release conventions compared (read 2026-11-01):
 | Secret delivery | ConfigMap only, no Secrets | KMS ciphertext → SSM → External Secrets | ADR 0009 |
 
 Both repositories are public (verified via `gh repo view`, 2026-11-01).
+
+## 7. Spike results (CORE-030)
+
+Two real runs on real 1×L40S Vast.ai instances, each independently
+verified destroyed (`GET /api/v0/instances/{id}` → `{"instances": null}`,
+confirmed again by `--sweep` → 0 instances):
+
+- **A1** (label `vkllm:spike:1793629767`, instance 58834177, requested
+  runtype `ssh`), run 2026-11-02.
+- **A2** (label `vkllm:spike:1793633988`, instance 58843281, requested
+  runtype `ssh_direct`), run 2026-11-02, about 32 minutes after A1's
+  instance was destroyed.
+
+Every figure below is read from the two runs' `summary` JSONL line or an
+earlier event in the same file; tagged **S** (our own observation, not a
+vendor-published fact), source "spike run A1/A2, 2026-11-02". No IP,
+hostname or key appears below (leak-checked before commit; instance ids
+are not in that prohibited list and are kept for traceability to the now-
+destroyed instances); the raw JSONL files live only in the laptop's
+`$TMPDIR` and were never committed.
+
+### 7.1 Cold-start stages
+
+| Stage | A1 (s) | A2 (s) | Definition | Tag |
+|---|---|---|---|---|
+| search | 0.58 | 0.74 | E1−E0 | S |
+| create | 0.92 | 1.16 | E2−E1 | S |
+| boot | 305.50 | 114.90 | E3−E2 | S |
+| link | 5.11 | 8.68 | E4−E3 | S |
+| download | 403.90 | 289.26 | E6−E5, host clock; **includes sha256 verification** per the event table's own definition (E6 = `sha_end`) | S |
+| load | 5.33 | 9.27 | E8−E7, host clock | S |
+| ready | 0.79 | 0.93 | E9−E8 | S |
+| first_token | 1.19 | 1.49 | E10−E9 | S |
+| **Cold start total** (E10 − E0) | **715.04** | **425.78** | laptop clock | S |
+
+The eight stage durations above do not sum exactly to the cold start
+total: `download`/`load` are host-clock differences while `search`
+through `link` and `ready`/`first_token` are laptop-clock differences, the
+two clocks are not synchronized, and the spec's own design says download
+can start before `ssh_ok` and that overlap is recorded, not corrected
+(spec 030's Event timeline section). The total is the authoritative number
+(laptop `first_token` minus laptop `search_start`); the per-stage rows are
+each individually accurate but not additive across the clock boundary.
+
+`boot` is driven almost entirely by a BuildKit image build Vast runs for
+SSH launch mode, not a plain `docker pull`: the `running` event's
+`status_msg` sequence shows layer pulls followed by `#0 building with
+"default" instance…`, an `apt-get install` (installing, among other
+packages, `openssh-sftp-server`), and a final `success, running
+<image>/ssh` line. A1's build also ran `noble-security` upgrades; A2's did
+not — real host-to-host variance in what was already cached. This settles
+the open "does Vast inject an SSH server into an image that lacks one"
+question (research §1.3): yes, via a derived-image build, in both runs.
+No IP or hostname appeared in either `status_msg` array (checked before
+writing this, including the public Ubuntu package-mirror hostnames those
+arrays contain, which are not instance-identifying). Ordered milestones
+seen before `running`, both runs: image layer pull/verify → BuildKit
+build start (`#0 building with "default" instance…`) → `apt-get`
+package install/upgrade → (A1 only) locale/package setup steps →
+`success, running <image>/ssh`.
+
+Within `download`, the fetch itself (`download_end − download_start`,
+host clock) and the sha256 check after it were:
+
+| | A1 | A2 |
+|---|---|---|
+| fetch-only seconds | 387.17 | 259.92 |
+| fetch-only throughput | 66.93 MB/s (63.83 MiB/s) | 99.70 MB/s (95.08 MiB/s) |
+| sha256 seconds (after fetch) | 16.73 | 29.34 |
+| `apt-get install aria2` seconds | 3.58 | 8.58 |
+| fetcher used | aria2c (`-x 16 -s 16`) | aria2c (`-x 16 -s 16`) |
+| `Content-Length` vs expected | 25,913,185,920 = 25,913,185,920 (match) | 25,913,185,920 = 25,913,185,920 (match) |
+
+Fetch-only throughput (not the sha-inclusive stage total) is the honest
+answer to Q8's "download throughput"; the stage total above is kept
+sha-inclusive only because that is literally how the spec's event table
+defines the `download` stage (`E6 − E5`, `E6` = `sha_end`). Both numbers
+are recorded so neither reading is lost.
+
+### 7.2 Open questions Q1–Q3, Q7–Q12
+
+| Q | Question | Answer | Tag | Source |
+|---|---|---|---|---|
+| Q1 | SSH mode works with `server-cuda` | **Yes.** `ssh_ok` reached without any manual step in both runs: 5.11 s after `running` in A1, 8.68 s in A2 (both via the account key, auto-added by Vast). | S | §7.1 |
+| Q2 | `onstart` runs in `args` mode | **Moot: A accepted.** Fallback B (Entrypoint/`args` mode) was never built; the project owner decided, after both A runs, that it was not worth the Caddy/TLS build for a sub-second latency gap (§7.3, §7.6). | — | §7.3, §7.6 |
+| Q3 | SSH endpoint direct or proxied; channel throttling | **Proxy, in both runs** — the script's own direct/proxy test (`ssh_host == public_ipaddr`) classified both A1 (requested `ssh`) and A2 (requested `ssh_direct`) as `proxy`; requesting `ssh_direct` did not change the observed SSH routing for this host, in this one sample. A genuinely direct connection was never actually observed in either run, so direct mode's effect on latency/throughput remains **unconfirmed**, not "tested and found no different". Channel drops: 0 in both runs, from `ssh_ok` through the end of M8. Bulk throughput over a plain SSH exec channel (`head -c 1G /dev/zero`, a separate session from the HTTP tunnel channel) was low in both: 2.17 MB/s (A1), 1.59 MB/s (A2) — well under the HF fetch-only throughput above (66.9–99.7 MB/s). The proxy appears to throttle sustained bulk transfer specifically, not interactive completions through the actual tunnel (M4's TTFT/tokens-per-s stayed close to on-host); see §7.4 M8 and ADR 0006's Risks section for the reading on this. One more concrete thing for spec 140: A2's scan found the container's own `22/tcp` port mapping open on the instance's public IP, suggesting a direct SSH path to the container may exist at that port even though the API's `ssh_host` pointed at the proxy — untried in this spike. | S | §7.4 M1, M8 |
+| Q7 | Qwen3.6 tool-call round trip | **Yes, 10/10.** 5/5 two-leg round trips passed in each run (leg 1 `finish_reason: tool_calls` with a well-formed `get_weather` call, leg 2 `finish_reason: stop`). | S | §7.4 M5 |
+| Q8 | HF download throughput | **66.9–99.7 MB/s measured (fetch-only), both via aria2c**, no curl fallback needed in either run (`apt-get install aria2` succeeded in 3.6 s / 8.6 s). See the fetch-only figures in §7.1; real host-to-host variance, not a single number. `apt-get` reached a mirror quickly in both runs, settling that research §1.3 open item in aria2c's favour (the default-curl fallback was never exercised). | S | §7.1 |
+| Q9 | VRAM at 32K, 64K, `-np 2` | **Open, not answered.** Every restart attempt (V1–V4) failed with "did not become healthy after restart": A1 timed out at the then-default 180 s per config; A2 (run with `SPIKE_RESTART_HEALTH_TIMEOUT_SECONDS=420`) timed out at the full 420 s in each of V1–V3 (not early — ruling out "just needs more time" within that budget), and V4 was skipped outright as the 40-minute hard cap approached. No `nvidia-smi` reading was ever taken post-restart. Two candidate root causes were identified by code review only (no further live test): (a) the restart path authenticates with `--api-key-file` while the original boot uses inline `--api-key`, and the key-file's exact format/failure handling was never confirmed; (b) `onstart.sh`'s `unset LLAMA_ARG_HOST` (needed because the image sets `LLAMA_ARG_HOST=0.0.0.0`) is not replicated on the restart path. Diagnostic logging (env-var capture, key-file-exists check, post-restart process-alive and log-tail capture, `WORKER_API_KEY` always redacted) was added to `launch.sh`'s restart cycle in commit `0643ea6` (2026-11-02, before `hack/spike/` was deleted in this write-back) so a *future* real run would be conclusive, but no such run happened before the script was removed. Spec 140 (repeated acceptance runs) is the natural place to retry with that diagnostic build. | S | §7.4 M7 |
+| Q10 | Decode tokens/s, warm TTFT | **Measured, both runs; tunnel TTFT is 0.8–0.94 s slower than on-host, tokens/s is not affected.** A1: tunnel TTFT median 0.889 s vs host 0.085 s (Δ 0.804 s); tokens/s 161.9 tunnel vs 162.6 host (99.57 %). A2: tunnel TTFT median 1.085 s vs host 0.144 s (Δ 0.941 s); tokens/s 143.5 tunnel vs 142.6 host (100.66 % — tunnel measured *faster* for throughput here). `/metrics`' `predicted_tokens_seconds` agreed closely with the sampled tokens/s in both runs (160.93 A1, 141.93 A2). | S | §7.4 M4 |
+| Q11 | Image built with SSL | **No**, both runs (`/app/llama-server --help` has no `--ssl-key-file`/`--ssl-cert-file`). Expected and irrelevant for bundle A. | S | §7.4 M6 |
+| Q12 | Image pull under 2 min | **1 of 2 samples under 2 min: 305.5 s (A1, over) vs 114.9 s (A2, under), highly variable.** Not reliably under 2 minutes. Neither sample is "a plain pull"; both are the BuildKit-driven derived-image build described in §7.1. One sample pair, as the spec anticipates; spec 140 adds more. | S | §7.1 |
+
+### 7.3 ADR 0006 decision gate
+
+| Gate | Threshold | A1 | A2 | Detail |
+|---|---|---|---|---|
+| G1 SSH | `ssh_ok` within 5 min of `running`, no manual step | **Pass** | **Pass** | 5.11 s / 8.68 s, both via the account key |
+| G2 onstart | events log exists, `server_start` logged | **Pass** | **Pass** | full event sequence present both times: `apt_start`→`apt_ok`→`content_length`→`download_start`→`download_end`→`sha_end`→`server_start`; sha256 matched the pinned value exactly both times |
+| G3 loopback | port 8080 bound only to `127.0.0.1`; scan shows no open mapped port except SSH | **Inconclusive** | **Pass** | A1: `/proc/net/tcp` confirmed loopback-only, but nmap produced no output at all (verdict `inconclusive: nmap did not produce output`) — no evidence of exposure, but also no confirming scan. A2: nmap found one open port (29203), which matches the instance's own SSH port mapping and nets to 0 "extra" open ports → pass |
+| G4 readiness | `/health` 200, `/v1/models` lists the alias through the tunnel | **Pass** | **Pass** | `/health` 200 without a key both times; `/v1/models` 200 with the worker key, 401 without it, both times |
+| G5 latency | tunnel TTFT − host TTFT ≤ 300 ms **and** tunnel tokens/s ≥ 95 % of host | **Fail** | **Fail** | latency half failed both runs (804 ms / 941 ms delta, cap 300 ms); throughput half passed both runs (99.57 % / 100.66 %). G5 needs both; one miss is a fail |
+| G6 stability | 0 channel drops, `ssh_ok` through end of M8 | **Pass** | **Pass** | `channel_drops_total: 0` both runs |
+
+**Reading this gate.** The gate's own decision rule ("G1/G2 fail → run B;
+only G5/G6 fail and A1 was proxied → run A2 with `ssh_direct`; A2 passes →
+Accepted with `ssh_direct` pinned; otherwise run B") was triggered exactly
+as written — A1 was proxied and failed G5, so A2 ran. But A2 did not
+cleanly pass either: it still failed G5, and it never achieved a genuinely
+direct connection to test the rule's "Accepted with `ssh_direct` pinned"
+branch (§7.2 Q3). The rule's branches do not have a clean exit for "A2 also
+fails G5, with no bundle-A sample found that passes it." The resolution
+taken (§7.6) is the project owner's explicit, informed decision to accept
+bundle A anyway and amend the G5 threshold, not a mechanical outcome of
+this table.
+
+### 7.4 M1–M10 measurements
+
+| # | Measurement | A1 | A2 |
+|---|---|---|---|
+| M1 | Port scan | loopback-only confirmed via `/proc/net/tcp` both times; external scan inconclusive (A1) / pass, one open port matching the SSH mapping (A2) | see G3 above |
+| M2 | `/health`, `/v1/models` with/without key | 200 / 200 (with key) / 401 (without) | 200 / 200 (with key) / 401 (without) |
+| M3 | Streamed chat completion shape | 410 chunks, terminal `[DONE]`, `reasoning_content` present (thinking on), `finish_reason: stop` | 392 chunks, terminal `[DONE]`, `reasoning_content` present, `finish_reason: stop` |
+| M4 | Tunnel vs on-host TTFT / tokens-per-s | see Q10 | see Q10 |
+| M5 | Tool-call round trips | 5/5 | 5/5 |
+| M6 | `--help` SSL flags | none found | none found |
+| M7 | Q9 VRAM matrix (V1–V4) | all 4 configs: restart did not become healthy (180 s timeout each) | V1–V3: restart did not become healthy (420 s timeout each, full duration); V4 skipped (hard-cap budget) |
+| M8 | Bulk throughput, channel drops, `max_tokens: 4096` stream | bulk 2.17 MB/s; drops 0; the 4096-token stream sample itself returned 0 chunks (`ttft: -1`, `finish_reason: none`) — llama-server was most likely still unresponsive right after the four failed M7 restores, so this sub-measurement is **not obtained**, not "fast" | bulk 1.59 MB/s; drops 0; the script logged `m8_stream_4096_skipped` and then, ~4 min later, recorded `stream_4096_chunks: 111` in the same summary field — the code path that reaches `m8_bulk_and_stream` after a skip reuses whatever value the variable last held, so this is a **definitely stale** value carried over from an earlier step, not a genuine post-restart stream measurement. The bulk figure, taken independently of llama-server's health over its own exec channel, is the only M8 number trusted here |
+| M9 | 60 s single-stream HF download sample | **not measured** — the script's 32-minute skip-ahead to M10 fired before M9 ran | **not measured**, same reason |
+| M10 | Self-exit step (a/b/c) | step a (`pkill -x llama-server`) and step b (`kill -TERM 1`): `actual_status` stayed `running` through 120 s of polling each, in both phases — **did not reach `exited`**. Step c (balance-while-exited) never ran, because its own precondition (`exited`) was never met | identical outcome: steps a and b both stayed `running` for 120 s each; step c never ran |
+
+Both runs agree: **neither of the two in-container actions this spike
+tested (`pkill -x llama-server` alone, then also `kill -TERM 1`) turned a
+real SSH-mode instance `exited` within the tested window.** Only the
+script's own external `DELETE` (never dependent on in-container state)
+actually ended both instances, independently confirmed both times via a
+direct `GET` (`{"instances": null}`) and `--sweep` (0 instances).
+
+**Flag for a future session, not fixed here:** [ADR 0003](adr/0003-gpu-lifecycle-management.md)
+§7 states that "an exited instance stops GPU billing even when the control
+plane is down." `launch.sh`'s M10 step b sent `kill -TERM 1` and discarded the
+result (`>/dev/null 2>&1 || true`); it never checked whether PID 1 actually
+exited, or confirmed what process PID 1 even was under Vast's SSH launch
+mode. `actual_status` staying `running` for 120 s after each step, in both
+real runs, is equally consistent with "the in-container kill didn't work"
+and with "Vast doesn't reflect in-container process death in
+`actual_status` regardless" — this spike did not distinguish between the
+two. A PID-namespace init process ignores signals it has no handler for by
+default, so PID 1's unconfirmed identity matters here: the step-4 local
+Docker test (spec 030 AC15) used `docker run --init`, making `tini` PID 1
+there and confirming PID 1 does die on SIGTERM in *that* setup, but that
+result does not carry over to Vast's real SSH-mode container. ADR 0003 is
+**not amended by this spec** (out of this spike's explicit scope); the
+follow-up a future session or spec 070 should do first is confirming what
+PID 1 actually is under Vast's SSH launch mode — not assuming the
+in-container kill worked — then re-testing whether that action reaches
+`exited`.
+
+### 7.5 Cost and safety
+
+| | A1 | A2 | Combined |
+|---|---|---|---|
+| `dph_total` | $0.55/h | $0.8111/h | — |
+| Lifetime since `create_end` | 2316.49 s | 2387.69 s | — |
+| Estimated cost (`dph_total × lifetime`) | $0.3539 | $0.5380 | $0.8919 |
+| **Real measured delta** (balance, start → 63 min after last destroy) | — | — | **$1.21402759574** |
+
+Well under the $5.00 cap (R5, AC13). Both instances independently
+confirmed destroyed by direct `GET` and by `--sweep`.
+
+**AC13, now fully evidenced.** Three real balance readings exist, all via
+`read_balance()` (reads `.credit` before falling back to `.balance` — this
+already answers the "controller concern" the pre-flight Evidence raised
+in spec.md, about `.balance` staying pinned at 0 while `.credit` moves):
+**$25.0000** before A1; **$24.5727** before A2 (roughly 32 minutes after
+A1's destroy, a real mid-session delta of $0.4273 for A1 alone); and
+**$23.78597240426** read 63 minutes after A2's (the last) destroy — the
+reading AC13 itself asks for ("balance read ≥ 1 h after the last
+destroy"). **Final delta: $25.0000 − $23.78597240426 = $1.21402759574**,
+well under the $5.00 cap. This later, more complete reading supersedes
+the earlier $0.4273 partial figure, which only ever covered A1's spend
+alone and an incomplete settling window — the ≥ 1 h-after-last-destroy
+reading is both the later and the larger of the two real deltas
+observed, and is the one AC13 itself asks for.
+
+This real delta is about **36 % higher** than the two runs' own
+`estimated_cost_usd × lifetime` figures summed ($0.8919). The script's
+cost estimate is just `dph_total × lifetime_hours`; this measurement
+suggests that undercounts actual billing — plausibly the storage costs
+research §1.5 already names ("stopped instances keep paying storage"; the
+provision/pre-boot window and any destroy-to-confirmed-absence lag are
+billed time the simple `dph_total × lifetime` estimate does not capture),
+or billing-reporting lag, or some combination. Either way, $1.21 stays
+far under the $5.00 cap, so R5 holds regardless of which explanation is
+right; a future session should not assume the script's own cost estimate
+is a tight bound on real spend.
+
+The search used `dph_total {lte: 1.00}` for both runs, the user-authorized
+deviation from the architecture's $0.80 default already recorded in
+`specs/core/030-D-worker-launch-spike/spec.md`'s Evidence section. A2's
+real price, $0.8111/h, is itself above the $0.80 figure in requirement R6's
+literal text but within the $1.00 ceiling that authorization raised for
+this run only.
+
+The account balance backstop was **not** reduced to ≤ $10 before these
+runs, a recorded deviation from this spec's own Safety and cost controls
+table (research §1.5; spec.md "Backstop" row): the user was told the
+backstop caps worst-case loss if every other safeguard fails simultaneously,
+not the expected spend, and chose to keep it at $25 anyway. Both runs'
+actual spend ($0.3539, $0.5380) shows the backstop was never close to being
+tested.
+
+### 7.6 ADR 0006 decision: Accepted (bundle A), with an amendment
+
+Fallback B (Entrypoint/`args` mode, Caddy, TLS) was **explicitly skipped**
+by the project owner after the gate review in §7.3. The rationale recorded
+here: both real samples show the tunnel adding under one second of extra
+TTFT (804 ms A1, 941 ms A2) with tokens-per-second essentially unaffected
+(≥ 99.6 % of on-host speed in both runs, and tunnel *faster* in A2) — a
+custom image with Caddy TLS was judged not worth building for a sub-second
+latency miss. This is a deliberate project-owner decision, not something
+the gate's own pass/fail logic produced; §7.3's table shows the gate did
+not cleanly resolve to an "Accepted" branch on its own.
+
+[ADR 0006](adr/0006-worker-connectivity.md) is flipped to **Accepted
+(bundle A, SSH launch mode)**, with an **explicit amendment to the G5
+latency threshold**: the 300 ms cap was not met in either real sample
+(804–941 ms measured, with no throughput cost), so G5's threshold is
+amended rather than silently treated as passed or left pending. The
+amended threshold, stated concretely in the ADR: **TTFT delta ≤ 1.0 s and
+tokens/s ≥ 95 % of host** — both real samples meet it (804 ms / 941 ms;
+99.57 % / 100.66 %).
+
+### 7.7 Recommended values
+
+| Key | Current Accepted default | Recommended | Needs ADR amendment? |
+|---|---|---|---|
+| `provider.filter.minInetDownMBps` | 500 (ADR 0005 §2 / `docs/architecture.md`) | **≥ 1100 (A1) / ≥ 750 (A2).** Neither run's `search_end` event recorded the chosen offer's actual advertised `inet_down` (no offer-census event was logged), but both runs' search used the production filter `inet_down {gte: 500}`, so the advertised value was at least 500 in both cases. Applying the rule with that floor (`r = measured MB/s ÷ 500`, `value = (25,913 MB ÷ 180 s) ÷ r`, rounded up to 50): A1 (fetch-only 66.93 MB/s) → r = 0.1339 → value ≥ 1100; A2 (fetch-only 99.70 MB/s) → r = 0.1994 → value ≥ 750. Both are **lower bounds** — the true advertised `inet_down` could be higher than 500, which would push the recommended value higher still, not lower. Caveat: this all assumes `inet_down`'s documented unit is MB/s, which Q4 (`docs/open-questions.md`) still leaves open as MB/s vs Mbps; if it turns out to be Mbps, these specific numbers need re-deriving. Taking the MB/s assumption at face value, two real hosts that passed a `≥500` filter delivered only 67–100 MB/s fetch-only — this reproduces, in 2 of 2 runs, exactly the risk ADR 0005 already names ("a host advertises bandwidth it does not deliver"). | **Yes** — both lower-bound figures exceed the 500 default |
+| `onDemand.maxWait` | 480 s (ADR 0007 §4) | **540 s** (the rule's clamp ceiling) — 1.25 × cold start rounds up to the nearest 30 s to 900 s (A1) and 540 s (A2); both clamp to the [300, 540] s ceiling, so the two runs agree on 540 s despite their very different cold-start totals | **Yes** — 540 s exceeds the 480 s Accepted default. Caveat: the rule's stated input is "a run that passed the gate" (§7.3); neither run passed the original 300 ms G5, though both meet the amended threshold adopted after the fact (ADR 0006: TTFT delta ≤ 1.0 s, tokens/s ≥ 95 % of host). Recorded as the best available number from two independent samples that both saturate the clamp ceiling regardless of the exact cold-start figure; spec 140 should confirm with more samples |
+| `lifecycle.startupTimeout` | 15 min (ADR 0003 §Consequences / `docs/architecture.md`) | **Inconclusive by this spike's own rule.** 2 × (E9 − E2) rounds to 24 min (A1) and 15 min (A2) — real host variance, both within the [10, 30] min clamp. A1's figure would exceed the current 15 min default if adopted | **Not recommended as a change here** — the two samples disagree by 9 minutes, which is the stronger reason to wait; neither run passed the original 300 ms G5, though both meet the amended threshold adopted after the fact (ADR 0006). Spec 140 should compute this from more runs rather than applying either number now |
+
+The census from the search table (spec design) would show how many offers
+each candidate `inet_down` threshold leaves; this spike did not run that
+census call (the production filter's `inet_down` clause was simply applied
+without a parallel unfiltered count), so that part of the rule's input is
+also unavailable from this data and is not fabricated here.

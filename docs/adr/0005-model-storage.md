@@ -3,9 +3,24 @@
 ## Status
 
 Accepted for the MVP (2026-11-01). The P2 persistent-volume cache with
-preferred-host scheduling is [ADR 0014](0014-persistent-volume-cache-and-preferred-host.md) (Proposed). Spec 030 measures the real download time;
-if it exceeds the budget in §Consequences the S3 mirror alternative is
-promoted without reopening this ADR's structure.
+preferred-host scheduling is [ADR 0014](0014-persistent-volume-cache-and-preferred-host.md) (Proposed).
+
+**Amendment, 2026-11-02 (spec [030](../../specs/core/030-D-worker-launch-spike/spec.md), research §7.1).**
+Two real runs measured the download stage (fetch plus sha256 check,
+25,913,185,920 bytes via `aria2c -x 16 -s 16`, no curl fallback needed):
+**403.9 s** on one host, **289.3 s** on another — fetch time alone was
+387.2 s and 259.9 s. One of the two samples (403.9 s / 387.2 s) exceeds the
+5-minute (300 s) trigger below; the other does not. **The trigger, read
+literally, fired.** This write-back records the observed range (289–404 s)
+rather than silently satisfying or silently removing the trigger text, but
+it does **not** itself promote the S3 mirror to the MVP default — that
+decision is left **pending the project owner's explicit call**, the same
+kind of recorded, informed override Fallback B got in ADR 0006, not a
+decision made here on the spike author's own authority. With only two
+samples and real host-to-host variance already this wide, the project
+owner may reasonably want more data (spec 140's repeated real runs) before
+deciding, but that is the owner's call to make, not a default this
+amendment assumes.
 
 ## Context
 
@@ -59,7 +74,11 @@ cleanup because destroying the instance removes everything.
   and `gateway.maxWait` (8 min, ADR 0007) are sized with this in mind.
 - If the measured download in spec 030 exceeds 5 minutes on hosts that pass
   the filters, the S3 mirror becomes the MVP default by a values change and
-  a one-paragraph amendment here.
+  a one-paragraph amendment here. **Measured (2026-11-02, research §7.1):**
+  403.9 s on one real host (over the trigger) and 289.3 s on another (under
+  it). The trigger fired on one of two samples; see the Status amendment
+  above — the promotion decision is left pending the project owner's
+  explicit call, not made here.
 - Bandwidth is billed by Vast per byte; 26 GB inbound per provision at the
   snapshot's typical `inet_down_cost` is cents, recorded in the cost model.
 

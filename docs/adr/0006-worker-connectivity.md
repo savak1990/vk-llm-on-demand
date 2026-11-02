@@ -2,10 +2,40 @@
 
 ## Status
 
-**Proposed** (2026-11-01). Becomes Accepted when spec 030 shows that the SSH
-launch mode works with the `server-cuda` image and that SSE streams through
-the tunnel at acceptable latency. Fallback B below is pre-approved if it
-does not.
+**Accepted (bundle A, SSH launch mode), with an amended G5 latency
+threshold, by project-owner decision**, 2026-11-02, after two real runs of
+spec [030](../../specs/core/030-D-worker-launch-spike/spec.md) against one
+1×L40S Vast.ai instance each (research §7). SSH launch mode works with the
+`server-cuda` image, with no manual step, in both runs (G1, G2, G4, G6 all
+passed; G3 passed conclusively in one run and was inconclusive — not
+failed — in the other, for lack of a confirming external scan).
+
+**Amendment to the G5 latency gate (defined in spec 030, not in this
+ADR) — this status's one caveat.** The 300 ms tunnel-vs-host TTFT cap that
+gate proposed was **not met in either real run**: the measured delta was
+804 ms (run 1) and 941 ms (run 2, slower still), against a cap of 300 ms.
+Streamed tokens-per-second was essentially unaffected both times (≥ 99.6 %
+of on-host speed; faster than on-host in one run). The project owner
+reviewed this real data and **decided**, not the gate logic itself, to
+accept bundle A anyway rather than build fallback B for a sub-second
+latency difference with no throughput cost; building a custom image with
+Caddy and TLS was judged not worth it for that gap. This is an **explicit,
+informed amendment of the G5 threshold**, not a silent pass: a future
+reader should not assume 300 ms was met.
+
+**The amended G5 threshold, stated concretely: TTFT delta ≤ 1.0 s and
+tokens/s ≥ 95 % of host.** This turns "sub-second latency difference with
+no throughput cost" — the owner's own rationale above — into a testable
+number; it is not an independently engineered figure. Both real samples
+meet it (804 ms / 941 ms ≤ 1.0 s; 99.57 % / 100.66 % ≥ 95 %). Fallback B
+remains pre-approved below: a future run measuring a TTFT delta over 1.0 s,
+or tokens/s under 95 % of host, re-opens it.
+
+Requesting Vast's `ssh_direct` runtype, in the one run that tried it, did
+not change the SSH routing observed for that host — the script's own
+direct/proxy test classified both runs as proxied. Whether a genuinely
+direct connection exists, or would change the G5 numbers, is **unconfirmed**
+by this evidence, not ruled out; see research §7.2 (Q3).
 
 ## Context
 
@@ -98,7 +128,9 @@ least new machinery.
 - Metrics from llama-server are pulled by the gateway over the tunnel and
   re-exported, not scraped by Prometheus directly.
 - Throughput for a streaming completion is bounded by the SSH channel;
-  spec 030 measures time-to-first-token and tokens-per-second through it.
+  spec 030 measured time-to-first-token and tokens-per-second through it
+  (research §7.2 Q10): tokens-per-second close to on-host speed, TTFT
+  roughly 0.8–0.94 s slower than on-host (804 ms, 941 ms).
 - The worker needs the public key only; the private key never leaves the
   cluster.
 
@@ -106,5 +138,15 @@ least new machinery.
 
 - Vast's SSH injection may not work in the `server-cuda` image, or may run
   through Vast's SSH proxy with different behaviour. Spec 030 is the gate;
-  B is the answer if it fails.
-- SSH proxy hosts could throttle long-lived channels. Measured in spec 030.
+  B is the answer if it fails. **Resolved for bundle A**: both real runs
+  were proxied (research §7.2 Q3), and the SSH injection itself worked via
+  a derived-image build both times (research §7.1).
+- SSH proxy hosts could throttle long-lived channels. **Measured in spec
+  030**: 0 channel drops in both runs, but a bulk transfer over a plain
+  SSH exec channel (a separate session, not the forwarded HTTP tunnel
+  channel) measured only 1.6–2.2 MB/s — well under the host's own HF
+  fetch-only throughput (66.9–99.7 MB/s) — while interactive streaming
+  through the actual tunnel (TTFT, tokens/s) was close to on-host speed.
+  The proxy appears to throttle sustained bulk transfer specifically, not
+  interactive completions; research §7.2 (Q3) and §7.4 (M8) have the
+  numbers.
