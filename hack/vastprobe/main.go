@@ -62,7 +62,7 @@ func main() {
 
 	for _, u := range []string{
 		base + "/users/current",
-		"https://console.vast.ai/api/v1/instances?limit=1",
+		"https://console.vast.ai/api/v1/instances/?limit=1",
 		base + "/charges",
 	} {
 		status, body, err := get(client, key, u)
