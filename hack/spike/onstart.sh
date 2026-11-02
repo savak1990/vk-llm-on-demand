@@ -11,7 +11,8 @@ log() { printf '%s %s\n' "$EPOCHREALTIME" "$*" >>/root/spike-events.log; }
 
 # Fires 40 min after onstart begins even if the laptop watchdog is gone;
 # first action so a later failure never leaves the host billing forever.
-( sleep "${SPIKE_SELF_STOP_SECONDS:-2400}"; log self_stop_fired; pkill -f llama-server; kill -TERM 1 ) &
+# -x (not -f): never matches a wrapper whose own argv also says "llama-server".
+( sleep "${SPIKE_SELF_STOP_SECONDS:-2400}"; log self_stop_fired; pkill -x llama-server; kill -TERM 1 ) &
 
 set -euo pipefail
 : "${WORKER_API_KEY:?}"

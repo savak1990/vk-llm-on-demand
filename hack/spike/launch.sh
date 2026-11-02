@@ -732,12 +732,12 @@ gen_filler_prompt() {
   { yes 'token filler word sequence number text block ' 2>/dev/null | tr -d '\n' | head -c "$chars"; } || true
 }
 
-# pkill is its own ssh call, never combined with the start command: it
-# also matches its own parent shell's argv (which contains "llama-server"
-# too), so a command chained after it in the same call could die unrun.
+# -x (exact process-name match), not -f: a wrapper shell whose own argv
+# happens to contain the text "llama-server" would also match -f, but
+# never matches the exact process name -x requires.
 restart_llama_server() {
   local ctx="$1" parallel="$2" deadline still_running
-  ssh_exec "pkill -f llama-server" >/dev/null 2>&1 || true
+  ssh_exec "pkill -x llama-server" >/dev/null 2>&1 || true
 
   # A ~25GB model occupies VRAM and port 8080 until the old process is
   # actually gone; wait for that to be true instead of guessing with a
@@ -1462,8 +1462,8 @@ m9_download_speed() {
 }
 
 # M10: self-exit, always last. pkill and kill -TERM 1 are each their own
-# standalone ssh call, with nothing chained after them (see
-# restart_llama_server's comment on why that matters).
+# standalone ssh call; see restart_llama_server's comment on why pkill
+# uses -x rather than -f.
 m10_self_exit() {
   local last_request_t idle_target
   last_request_t="${EVENT_T[m8_bulk_and_stream]:-${EVENT_T[m8_stream_4096]:-$EPOCHREALTIME}}"
@@ -1476,7 +1476,7 @@ m10_self_exit() {
   local step="" exited=0 poll_start now status
   local -a observed_statuses=()
 
-  ssh_exec "pkill -f llama-server" >/dev/null 2>&1 || true
+  ssh_exec "pkill -x llama-server" >/dev/null 2>&1 || true
   poll_start="${EPOCHREALTIME%.*}"
   while true; do
     vast_call GET "$V0_BASE/instances/$INSTANCE_ID/" "" 15

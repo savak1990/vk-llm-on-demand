@@ -351,6 +351,15 @@ The census from the search table shows how many offers each candidate
 - `launch.sh`'s laptop-side JSON parsing (the `--run` measurement code, M1-M10)
   uses `jq`, already a dependency of this script since Task 3/4; no new
   dependency was added.
+- M10's self-exit table says `pkill -f llama-server`; the implementation
+  uses `pkill -x llama-server` instead, at all three call sites
+  (`launch.sh`'s restart cycle and M10 step a, and `onstart.sh`'s self-stop
+  timer). `-f` matches a process's full command line, so if `onstart`
+  ever runs under a wrapper whose own argv happens to contain the text
+  "llama-server" (unverified — whether Vast invokes `onstart` as
+  `bash -c "<the whole script>"` is itself one of this spike's open
+  questions), `-f` would also match and signal that wrapper. `-x` matches
+  only the exact process name, so it can never do that.
 
 ### Pre-flight session (Task 8, read 2026-11-02, live, no spend)
 
