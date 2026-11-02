@@ -27,9 +27,9 @@ func kindConfig(t *testing.T) Config {
 	}
 }
 
-// TestKindRace covers AC12: two writers each run 1000 Transitions, final
-// generation 2000, real conflicts observed. ErrRetriesExhausted retries
-// the same attempt, so AC12 counts successful transitions, not tries.
+// TestKindRace runs two writers through 1000 successful Transitions each,
+// retrying ErrRetriesExhausted as the same attempt; checks generations
+// increase per writer, final generation 2000, conflicts counted.
 func TestKindRace(t *testing.T) {
 	cfg := kindConfig(t)
 	c1, err := New(cfg)
@@ -89,8 +89,9 @@ func TestKindRace(t *testing.T) {
 	}
 }
 
-// TestKindRBAC covers R18: the Role's own ServiceAccount token, not an
-// admin impersonation, must be rejected on every verb but get/update.
+// TestKindRBAC authenticates as the Role's own ServiceAccount token, not an
+// admin impersonating it, so the real authorization path is what rejects
+// every verb but get/update.
 func TestKindRBAC(t *testing.T) {
 	cfg := kindConfig(t)
 	c, err := New(cfg)
@@ -124,9 +125,9 @@ func TestKindRBAC(t *testing.T) {
 	}
 }
 
-// TestKindMissingAndRecreate covers AC13: a deleted ConfigMap fails Load
-// and Ready with ErrStoreMissing; recreating the empty shell restores the
-// fresh-document path.
+// TestKindMissingAndRecreate deletes the ConfigMap and checks Transition
+// and Ready both fail with ErrStoreMissing; recreating the empty shell
+// restores the fresh-document path.
 func TestKindMissingAndRecreate(t *testing.T) {
 	cfg := kindConfig(t)
 	c, err := New(cfg)

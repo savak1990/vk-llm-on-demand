@@ -4,5 +4,6 @@ package store
 
 import "github.com/prometheus/client_golang/prometheus/testutil"
 
-// ConflictsTotalValue exposes the conflicts counter for TestKindRace (AC12).
+// ConflictsTotalValue lets TestKindRace prove the conflict counter moved
+// during a real two-writer race.
 func ConflictsTotalValue() float64 { return testutil.ToFloat64(conflictsTotal) }
