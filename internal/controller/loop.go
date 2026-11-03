@@ -200,10 +200,9 @@ func isUnavailableReason(reason string) bool {
 	}
 }
 
-// gateReason is the Start/Tick/Gone admission gate for the states that can
-// begin a provision: budget, then the hourly attempts cap, then the
-// no_offer search backoff (a real denial), then the create backoff, which
-// only paces and is never a denial.
+// gateReason is the Start/Tick/Gone admission gate: budget, the hourly
+// attempts cap, the no_offer search backoff (a real denial), then the
+// create backoff, which only paces and is never a denial.
 func (c *Controller) gateReason(state State, ev Event, doc store.Document, now time.Time) string {
 	if ev.Reason != "" {
 		return ev.Reason
@@ -280,11 +279,9 @@ func (c *Controller) syncTimers(prev, next State, doc store.Document) {
 		if !inService(prev) {
 			c.armTimer(timerMetricsPull, now.Add(metricsPullInterval))
 		}
-		// Only Ready, never Serving: decide's no-match default echoes
-		// Serving straight back as next while InFlight>0 blocks T20, and
-		// re-arming an already-past IdleDeadline on every such pass would
-		// never stop being due — RequestEnd's own flush re-arms it once
-		// InFlight reaches 0.
+		// Only Ready, never Serving: an already-past IdleDeadline would
+		// re-arm forever while InFlight>0 blocks T20; RequestEnd's own
+		// flush re-arms it once InFlight reaches 0.
 		if next == Ready {
 			c.armIdle(doc)
 		}
@@ -389,7 +386,7 @@ func (c *Controller) armDestroyRetry() {
 	n := c.destroyRetryN
 	c.destroyRetryMu.Unlock()
 	backoff := 5 * time.Minute
-	if n < 5 {
+	if n < 6 {
 		backoff = min(backoff, 10*time.Second*time.Duration(int64(1)<<uint(n-1)))
 	}
 	c.armTimer(timerDestroyRetry, c.deps.Clock.Now().Add(backoff))
@@ -550,9 +547,9 @@ func (c *Controller) dispatchScrape(ctx context.Context) {
 	})
 }
 
-// handleEvent retries a real failure (a transient Store.Load, say) rather
-// than dropping the event: idle/drain have a Tick-based fallback if their
-// own timer was already cleared, but startup does not.
+// handleEvent retries a real failure only for EvDeadlineExpired/
+// EvIdleTimer: their own timer is gone with no other resend path, unlike
+// poll/reconcile, which resend themselves on the next tick regardless.
 func (c *Controller) handleEvent(ctx context.Context, ev Event) {
 	err := c.processEvent(ctx, ev)
 	if err == nil || errors.Is(err, errStale) || errors.Is(err, ErrGPUUnavailable) {
@@ -561,7 +558,9 @@ func (c *Controller) handleEvent(ctx context.Context, ev Event) {
 	if c.deps.Log != nil {
 		c.deps.Log.Error("controller: process event failed", "kind", ev.Kind, "err", err)
 	}
-	c.requeue(ev)
+	if ev.Kind == EvDeadlineExpired || ev.Kind == EvIdleTimer {
+		c.requeue(ev)
+	}
 }
 
 func (c *Controller) currentGen() int64 {

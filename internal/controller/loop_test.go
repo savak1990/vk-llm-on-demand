@@ -679,3 +679,41 @@ func TestRunStartupTimeoutDestroysStuckBooting(t *testing.T) {
 		t.Fatalf("destroyed after %v, before the 15m startup timeout", elapsed)
 	}
 }
+
+// A Store.Load failure right when the startup deadline fires must not
+// lose it: handleEvent requeues EvDeadlineExpired, and the retry still
+// destroys once the store recovers.
+func TestStartupDeadlineSurvivesOneFailedLoad(t *testing.T) {
+	c, prov, clk, _, _ := newTestController(t)
+	c.deps.Config.StartupTimeout = time.Minute
+	c.state = Loading
+	c.generation = 3
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3"})
+	createdAt := clk.Now().Add(-2 * time.Minute)
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Loading.String(), Label: "vkllm:iid:3", ProviderID: "9", CreatedAt: createdAt}
+		d.Ops = append(d.Ops, store.Op{Key: createOpKey(3), Outcome: "created"})
+	})
+	c.armTimer(timerStartup, clk.Now())
+	c.deps.Store.(interface{ FailNext(int, error) }).FailNext(1, errors.New("transient load failure"))
+
+	ctx := context.Background()
+	if !c.step(ctx) {
+		t.Fatal("step: startup timer did not fire")
+	}
+	if c.stateNow() != Loading {
+		t.Fatalf("state after the failed Load = %v, want Loading unchanged", c.stateNow())
+	}
+	if prov.Calls("destroy") != 0 {
+		t.Fatalf("Calls(destroy) = %d right after the failed attempt, want 0", prov.Calls("destroy"))
+	}
+
+	clk.BlockUntil(1)
+	clk.Advance(requeueDelay)
+	waitFor(t, "destroyed after the requeued retry", func() bool {
+		for c.step(ctx) {
+		}
+		return prov.Calls("destroy") > 0
+	})
+}

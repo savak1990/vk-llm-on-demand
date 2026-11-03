@@ -191,9 +191,8 @@ func New(d Deps) (*Controller, error) {
 func (c *Controller) postEvent(e Event) { c.events <- e }
 
 // spawn runs fn on its own goroutine, counted as in flight for fn's
-// whole lifetime — including whatever it posts back after a provider,
-// dialer or worker call returns — not just that call's own duration.
-// Every goroutine this package starts goes through it.
+// whole lifetime, not just a provider/dialer/worker call's own
+// duration; every goroutine this package starts goes through it.
 func (c *Controller) spawn(fn func()) {
 	c.inFlightEffects.Add(1)
 	go func() {
