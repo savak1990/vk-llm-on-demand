@@ -1,8 +1,8 @@
-// internal/controller/sim_test.go
 package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,61 +22,19 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
 
-// countingProvider wraps every Provider method so the harness can tell
-// when an effect goroutine is in flight (e.g. blocked inside
-// provider/fake's SetLatency) versus truly idle.
-type countingProvider struct {
-	inner    *fakeprovider.Fake
-	inflight *int64
-}
-
-func (p countingProvider) call() func() {
-	atomic.AddInt64(p.inflight, 1)
-	return func() { atomic.AddInt64(p.inflight, -1) }
-}
-func (p countingProvider) SearchOffers(ctx context.Context, f provider.OfferFilter) ([]provider.Offer, error) {
-	defer p.call()()
-	return p.inner.SearchOffers(ctx, f)
-}
-func (p countingProvider) CreateInstance(ctx context.Context, r provider.CreateRequest) (provider.InstanceID, error) {
-	defer p.call()()
-	return p.inner.CreateInstance(ctx, r)
-}
-func (p countingProvider) GetInstance(ctx context.Context, id provider.InstanceID) (provider.Instance, error) {
-	defer p.call()()
-	return p.inner.GetInstance(ctx, id)
-}
-func (p countingProvider) ListInstances(ctx context.Context, prefix string) ([]provider.Instance, error) {
-	defer p.call()()
-	return p.inner.ListInstances(ctx, prefix)
-}
-func (p countingProvider) DestroyInstance(ctx context.Context, id provider.InstanceID) error {
-	defer p.call()()
-	return p.inner.DestroyInstance(ctx, id)
-}
-func (p countingProvider) Balance(ctx context.Context) (provider.Money, error) {
-	defer p.call()()
-	return p.inner.Balance(ctx)
-}
-
-var _ provider.Provider = countingProvider{}
-
 // fakeDialerForHarness is a small in-memory tunnel.Dialer, built via the
 // exported tunnel.NewConn, following store/fake's style of a scripted
 // fake plus a call counter the ACs read with Calls().
 type fakeDialerForHarness struct {
-	inflight *int64
-	calls    int64
-	hostKey  string
+	calls   int64
+	hostKey string
 }
 
-func newFakeDialerForHarness(inflight *int64) *fakeDialerForHarness {
-	return &fakeDialerForHarness{inflight: inflight, hostKey: "sha256:fake"}
+func newFakeDialerForHarness() *fakeDialerForHarness {
+	return &fakeDialerForHarness{hostKey: "sha256:fake"}
 }
 
 func (d *fakeDialerForHarness) Dial(_ context.Context, _ tunnel.Instance) (*tunnel.Conn, error) {
-	atomic.AddInt64(d.inflight, 1)
-	defer atomic.AddInt64(d.inflight, -1)
 	atomic.AddInt64(&d.calls, 1)
 	return tunnel.NewConn(nil, func() error { return nil }, d.hostKey), nil
 }
@@ -86,16 +44,15 @@ func (d *fakeDialerForHarness) Calls() int { return int(atomic.LoadInt64(&d.call
 var _ tunnel.Dialer = (*fakeDialerForHarness)(nil)
 
 type harness struct {
-	t        *testing.T
-	ctl      *Controller
-	clk      *fakeclock.Clock
-	prov     *fakeprovider.Fake
-	store    *fakestore.Fake
-	dial     *fakeDialerForHarness
-	worker   *fakeWorker
-	budget   *fakeBudget
-	reg      *prometheus.Registry
-	inflight int64
+	t      *testing.T
+	ctl    *Controller
+	clk    *fakeclock.Clock
+	prov   *fakeprovider.Fake
+	store  *fakestore.Fake
+	dial   *fakeDialerForHarness
+	worker *fakeWorker
+	budget *fakeBudget
+	reg    *prometheus.Registry
 }
 
 // buildHarness assembles every dependency without starting the
@@ -113,12 +70,10 @@ func buildHarness(t *testing.T) *harness {
 	RegisterMetrics(reg)
 	store.RegisterMetrics(reg)
 
-	h := &harness{t: t, clk: clk, prov: prov, store: st, worker: worker, budget: budget, reg: reg}
-	h.dial = newFakeDialerForHarness(&h.inflight)
-	cp := countingProvider{inner: prov, inflight: &h.inflight}
+	h := &harness{t: t, clk: clk, prov: prov, store: st, dial: newFakeDialerForHarness(), worker: worker, budget: budget, reg: reg}
 
 	ctl, err := New(Deps{
-		Provider: cp, Store: st, Dialer: h.dial, Clock: clk,
+		Provider: prov, Store: st, Dialer: h.dial, Clock: clk,
 		Budget: budget, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
@@ -168,16 +123,15 @@ func newHarness(t *testing.T) *harness {
 }
 
 // Settle advances the fake clock to upTo, running every due timer and
-// queued event along the way, without advancing past an in-flight
-// effect's own future deadline before it registers one.
+// queued event along the way; c.inFlightEffects covers every goroutine
+// this package spawns for its whole life, not just one call's duration.
 func (h *harness) Settle(upTo time.Time) {
 	ctx := context.Background()
 	hardDeadline := time.Now().Add(10 * time.Second)
 	for {
-		// A timer whose re-arm lands on the same already-due instant (e.g.
-		// timerIdle while inFlight blocks the idle rule) never drains to
-		// false on a clock that won't move itself; 3 repeats of it proves that.
-		spinning := false
+		// A timer re-arming on the same already-due instant never drains
+		// to false on its own; 3 repeats of (kind, deadline) is a
+		// controller bug, not a legitimate wait — fail loudly on it.
 		var lastKind timerKind
 		var lastDue time.Time
 		var lastOK bool
@@ -189,8 +143,7 @@ func (h *harness) Settle(upTo time.Time) {
 				if lastOK && k == lastKind && at.Equal(lastDue) {
 					repeat++
 					if repeat >= 3 {
-						spinning = true
-						break
+						h.t.Fatalf("Settle: controller spinning on timer %v at %v with no clock progress", k, at)
 					}
 				} else {
 					repeat = 0
@@ -203,36 +156,22 @@ func (h *harness) Settle(upTo time.Time) {
 				break
 			}
 		}
-		if spinning {
-			if now := h.clk.Now(); now.Before(upTo) {
-				h.clk.Advance(upTo.Sub(now))
+
+		if h.ctl.inFlightEffects.Load() > 0 {
+			// A fired latency ticker re-arms before its goroutine wakes
+			// to Stop it and post its event, so NextDeadline can look
+			// live; give it a short real-time grace window to finish first.
+			for i := 0; i < 500 && h.ctl.inFlightEffects.Load() > 0; i++ {
+				time.Sleep(100 * time.Microsecond)
+			}
+			if h.ctl.inFlightEffects.Load() == 0 {
 				continue
 			}
-			return
-		}
-		if atomic.LoadInt64(&h.inflight) > 0 {
 			if _, ok := h.clk.NextDeadline(); !ok {
 				if time.Now().After(hardDeadline) {
 					h.t.Fatal("Settle: in-flight effect never registered a clock waiter")
 				}
 				time.Sleep(time.Millisecond)
-				continue
-			}
-		} else if h.ctl.reconciling.Load() {
-			// dispatchReconcile's goroutine still has store writes and a
-			// final postEvent(EvTick) to do after its last provider call
-			// returns, so inflight==0 alone doesn't mean the pass finished.
-			if time.Now().After(hardDeadline) {
-				h.t.Fatal("Settle: reconcile pass never finished")
-			}
-			time.Sleep(time.Millisecond)
-			continue
-		} else {
-			// Runs on every otherwise-idle iteration of a long fast-forward
-			// (e.g. AC3's 15s metricsPull ticks over 7200s), so it stays far
-			// shorter than the waits above, which only block while busy.
-			time.Sleep(100 * time.Microsecond)
-			if h.ctl.step(ctx) || h.ctl.reconciling.Load() {
 				continue
 			}
 		}
@@ -267,30 +206,85 @@ func counterDelta(c prometheus.Collector, before float64) float64 {
 	return testutil.ToFloat64(c) - before
 }
 
+// gaugeOneHot asserts the 8-state gauge has exactly one state set.
+func gaugeOneHot(t *testing.T, want string) {
+	t.Helper()
+	for _, s := range []string{"STOPPED", "ALLOCATING", "STARTING", "LOADING_MODEL", "READY", "DRAINING", "DELETING", "FAILED"} {
+		wantVal := 0.0
+		if s == want {
+			wantVal = 1.0
+		}
+		if got := testutil.ToFloat64(gpuState.WithLabelValues(s)); got != wantVal {
+			t.Errorf("gpuState{%q} = %v, want %v", s, got, wantVal)
+		}
+	}
+}
+
+// Happy cold start: two StatusOther observations before GetInstance's
+// own fallback promotes to Running+SSH (an explicit StatusRunning entry
+// never fills in SSHHost), landing every stage on the t=1/16/41 timeline.
 func TestAC1_HappyColdStart(t *testing.T) {
 	h := newHarness(t)
 	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
-	// Two StatusOther entries: once exhausted, GetInstance's own fallback
-	// promotes to Running and fills in SSHHost/Port, the only path that
-	// ever sets them — ending the sequence on StatusRunning itself leaves SSHHost empty.
 	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusOther, provider.StatusOther)
 	h.worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable, ProbeLoading, ProbeLoading, ProbeLoading, ProbeReady)
+	beforeOK := testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("ok"))
 
-	t0 := h.clk.Now().Add(time.Second)
+	t0 := h.clk.Now().Add(time.Second) // t=1
 	h.Settle(t0)
-	if _, err := h.ctl.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
+	snap, err := h.ctl.Start(context.Background())
+	if err != nil || snap.Public != "ALLOCATING" || snap.Desired != store.DesiredRunning {
+		t.Fatalf("Start = %+v, %v, want ALLOCATING/RUNNING, nil", snap, err)
 	}
 	h.ctl.ObserveFirstToken(1, 800*time.Millisecond)
-	h.Settle(t0.Add(41 * time.Second))
 
-	snap := h.ctl.Status()
+	h.Settle(t0)
+	if snap := h.ctl.Status(); snap.Public != "STARTING" {
+		t.Fatalf("Public at t=1 = %q, want STARTING", snap.Public)
+	}
+
+	h.Settle(t0.Add(15 * time.Second)) // t=16
+	if snap := h.ctl.Status(); snap.Public != "LOADING_MODEL" {
+		t.Fatalf("Public at t=16 = %q, want LOADING_MODEL", snap.Public)
+	}
+
+	h.Settle(t0.Add(40 * time.Second)) // t=41
+	snap = h.ctl.Status()
 	if snap.Public != "READY" || snap.Generation != 1 {
 		t.Fatalf("snapshot = %+v", snap)
 	}
-	if h.prov.Calls("search") != 1 || h.prov.Calls("create") != 1 {
-		t.Fatalf("search=%d create=%d, want 1/1", h.prov.Calls("search"), h.prov.Calls("create"))
+	if h.prov.Calls("search") != 1 || h.prov.Calls("create") != 1 || h.prov.Calls("get") != 3 ||
+		h.prov.Calls("list") != 1 || h.prov.Calls("destroy") != 0 {
+		t.Fatalf("search=%d create=%d get=%d list=%d destroy=%d, want 1/1/3/1/0",
+			h.prov.Calls("search"), h.prov.Calls("create"), h.prov.Calls("get"), h.prov.Calls("list"), h.prov.Calls("destroy"))
 	}
+	if h.dial.Calls() != 1 {
+		t.Fatalf("Calls(dial) = %d, want 1", h.dial.Calls())
+	}
+	if h.worker.probes() != 6 {
+		t.Fatalf("probes = %d, want 6", h.worker.probes())
+	}
+	gaugeOneHot(t, "READY")
+	if got := counterDelta(provisionAttemptsTotal.WithLabelValues("ok"), beforeOK); got != 1 {
+		t.Fatalf("provision_attempts_total{ok} delta = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(instanceHourlyPriceUSD); got != 0.60 {
+		t.Fatalf("instance_hourly_price_usd = %v, want 0.60", got)
+	}
+	wantReadyAt := t0.Add(40 * time.Second)
+	if snap.ReadyAt == nil || !snap.ReadyAt.Equal(wantReadyAt) {
+		t.Fatalf("ReadyAt = %v, want %v", snap.ReadyAt, wantReadyAt)
+	}
+	wantIdleDeadline := wantReadyAt.Add(1800 * time.Second)
+	if snap.IdleDeadline == nil || !snap.IdleDeadline.Equal(wantIdleDeadline) {
+		t.Fatalf("IdleDeadline = %v, want %v", snap.IdleDeadline, wantIdleDeadline)
+	}
+	if got := testutil.ToFloat64(gpuIdleDeadlineSeconds); got != float64(wantIdleDeadline.Unix()) {
+		t.Fatalf("gpu_idle_deadline_seconds = %v, want unix(%v)", got, wantIdleDeadline)
+	}
+	// Known shortfall: stageEnteredAt is never written in production (only
+	// first_token is observed via ObserveFirstToken), so the spec's
+	// per-stage boot/download/load durations and counts aren't assertable.
 }
 
 func TestAC2_FiftyConcurrentStarts(t *testing.T) {
@@ -314,9 +308,9 @@ func TestAC2_FiftyConcurrentStarts(t *testing.T) {
 	}
 }
 
-// AC3 idle destroy (FR-3.1): continuing AC1's cold start with no further
-// requests, the idle deadline (readyAt+1800s) must drain and destroy the
-// instance with no manual intervention, and leave the GPU stopped.
+// Idle destroy: continuing AC1's cold start with no further requests, the
+// idle deadline (readyAt+1800s) must drain and destroy the instance with
+// no manual intervention, and leave the GPU stopped.
 func TestAC3_IdleDestroy(t *testing.T) {
 	h := newHarness(t)
 	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
@@ -330,7 +324,7 @@ func TestAC3_IdleDestroy(t *testing.T) {
 	if _, err := h.ctl.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	h.Settle(t0.Add(45 * time.Second))
+	h.Settle(t0.Add(41 * time.Second))
 	readyAt := *h.ctl.Status().ReadyAt
 
 	h.Settle(readyAt.Add(1799 * time.Second))
@@ -365,9 +359,9 @@ func TestAC3_IdleDestroy(t *testing.T) {
 	}
 }
 
-// AC4 rolling deadline (FR-3.2, FR-3.3): inference activity between
-// readyAt and the original deadline must roll the idle deadline forward
-// from the last RequestEnd, not leave the original one in place.
+// Rolling deadline: inference activity between readyAt and the original
+// deadline must roll the idle deadline forward from the last RequestEnd,
+// not leave the original one in place.
 func TestAC4_RollingDeadline(t *testing.T) {
 	h := newHarness(t)
 	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
@@ -379,7 +373,7 @@ func TestAC4_RollingDeadline(t *testing.T) {
 	if _, err := h.ctl.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	h.Settle(t0.Add(45 * time.Second))
+	h.Settle(t0.Add(41 * time.Second))
 	readyAt := *h.ctl.Status().ReadyAt
 	gen := h.ctl.Status().Generation
 
@@ -427,9 +421,9 @@ func TestAC4_RollingDeadline(t *testing.T) {
 	}
 }
 
-// AC5 overlapping requests (FR-3.9): 10 concurrent admissions at once,
-// ended one at a time, must track inFlight precisely and only arm the
-// idle deadline off the last RequestEnd.
+// Overlapping requests: 10 concurrent admissions at once, ended one at a
+// time, must track inFlight precisely and only arm the idle deadline off
+// the last RequestEnd.
 func TestAC5_OverlappingRequests(t *testing.T) {
 	h := newHarness(t)
 	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
@@ -441,7 +435,7 @@ func TestAC5_OverlappingRequests(t *testing.T) {
 	if _, err := h.ctl.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	h.Settle(t0.Add(45 * time.Second))
+	h.Settle(t0.Add(41 * time.Second))
 	readyAt := *h.ctl.Status().ReadyAt
 	gen := h.ctl.Status().Generation
 
@@ -480,9 +474,9 @@ func TestAC5_OverlappingRequests(t *testing.T) {
 	}
 }
 
-// AC6 request at the exact deadline (FR-3.8): same-instant priority puts
-// the idle timer ahead of Admit, so an Admit exactly on the deadline
-// loses to the destroy, while one a tick earlier rolls it forward.
+// Request at the exact deadline: same-instant priority puts the idle
+// timer ahead of Admit, so an Admit exactly on the deadline loses to the
+// destroy, while one a tick earlier rolls the deadline forward.
 func TestAC6_RequestAtExactDeadline(t *testing.T) {
 	t.Run("admit at the deadline loses to the idle timer", func(t *testing.T) {
 		h := newHarness(t)
@@ -495,11 +489,21 @@ func TestAC6_RequestAtExactDeadline(t *testing.T) {
 		if _, err := h.ctl.Start(context.Background()); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		h.Settle(t0.Add(45 * time.Second))
+		h.Settle(t0.Add(41 * time.Second))
 		readyAt := *h.ctl.Status().ReadyAt
 		gen := h.ctl.Status().Generation
-
 		deadline := readyAt.Add(1800 * time.Second)
+
+		// One instant before the deadline the GPU is still fully servable:
+		// this is the window an Admit would win if it ran ahead of the timer.
+		h.Settle(deadline.Add(-time.Nanosecond))
+		if snap := h.ctl.Status(); snap.Public != "READY" {
+			t.Fatalf("Public one instant before the deadline = %q, want READY", snap.Public)
+		}
+
+		// At the deadline itself, idleRuleFires is already true
+		// (!Now.Before(deadline)), so the loop's own processing of it — not
+		// a caller's Admit landing at the same instant — wins this one.
 		h.Settle(deadline)
 		if h.prov.Calls("destroy") != 1 {
 			t.Fatalf("Calls(destroy) = %d at the deadline, want 1 (idle timer wins)", h.prov.Calls("destroy"))
@@ -507,8 +511,8 @@ func TestAC6_RequestAtExactDeadline(t *testing.T) {
 		if snap := h.ctl.Status(); snap.Public != "STOPPED" {
 			t.Fatalf("Public = %q at the deadline, want STOPPED", snap.Public)
 		}
-		if _, err := h.ctl.Admit(gen); err == nil {
-			t.Fatal("Admit at the deadline: want an error, got nil")
+		if _, err := h.ctl.Admit(gen); !errors.Is(err, ErrBackendUnavailable) {
+			t.Fatalf("Admit at the deadline = %v, want ErrBackendUnavailable", err)
 		}
 		if got := h.ctl.Status().InFlight; got != 0 {
 			t.Fatalf("InFlight after the denied Admit = %d, want 0", got)
@@ -526,7 +530,7 @@ func TestAC6_RequestAtExactDeadline(t *testing.T) {
 		if _, err := h.ctl.Start(context.Background()); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		h.Settle(t0.Add(45 * time.Second))
+		h.Settle(t0.Add(41 * time.Second))
 		readyAt := *h.ctl.Status().ReadyAt
 		gen := h.ctl.Status().Generation
 
@@ -547,9 +551,9 @@ func TestAC6_RequestAtExactDeadline(t *testing.T) {
 	})
 }
 
-// AC7 repeated start does not move the deadline (FR-3.4, FR-3.5): once
-// Ready, a redundant Start (or Status) must be a pure no-op, and the
-// original idle deadline must still fire on schedule.
+// Repeated start does not move the deadline: once Ready, a redundant
+// Start (or Status) must be a pure no-op, and the original idle deadline
+// must still fire on schedule.
 func TestAC7_RepeatedStartIsNoOp(t *testing.T) {
 	h := newHarness(t)
 	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
@@ -561,7 +565,7 @@ func TestAC7_RepeatedStartIsNoOp(t *testing.T) {
 	if _, err := h.ctl.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	h.Settle(t0.Add(45 * time.Second))
+	h.Settle(t0.Add(41 * time.Second))
 	readyAt := *h.ctl.Status().ReadyAt
 
 	h.Settle(readyAt.Add(100 * time.Second))
@@ -605,9 +609,9 @@ func TestAC7_RepeatedStartIsNoOp(t *testing.T) {
 	}
 }
 
-// AC8 stop during active inference (FR-3.6, FR-3.7): a manual Stop while
-// serving must drain rather than destroy at once, refuse new admissions,
-// be idempotent, and destroy once the request ends or drain times out.
+// Stop during active inference: a manual Stop while serving must drain
+// rather than destroy at once, refuse new admissions, be idempotent, and
+// destroy once the request ends or drain times out.
 func TestAC8_StopDuringActiveInference(t *testing.T) {
 	setup := func(t *testing.T) (*harness, time.Time, int64) {
 		h := newHarness(t)
@@ -620,7 +624,7 @@ func TestAC8_StopDuringActiveInference(t *testing.T) {
 		if _, err := h.ctl.Start(context.Background()); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		h.Settle(t0.Add(45 * time.Second))
+		h.Settle(t0.Add(41 * time.Second))
 		readyAt := *h.ctl.Status().ReadyAt
 		gen := h.ctl.Status().Generation
 
@@ -708,15 +712,16 @@ func TestAC8_StopDuringActiveInference(t *testing.T) {
 	})
 }
 
-// AC9 stop during provisioning (FR-3.11): a Stop before the provider
-// confirms creation has no id to destroy yet, so it only records the
-// desire to stop; the create's own outcome then finishes the job at once.
+// Stop during provisioning: a Stop before the provider confirms creation
+// has no id to destroy yet, so it only records the desire to stop; the
+// create's own outcome then finishes the job at once.
 func TestAC9_StopDuringProvisioning(t *testing.T) {
 	t.Run("stop while still Creating cancels once the create returns", func(t *testing.T) {
 		h := newHarness(t)
 		h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
 		h.prov.SetLatency("create", 10*time.Second)
-		before := testutil.ToFloat64(destroyAttemptsTotal.WithLabelValues("ok"))
+		beforeDestroyOK := testutil.ToFloat64(destroyAttemptsTotal.WithLabelValues("ok"))
+		beforeCancelled := testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("cancelled"))
 
 		t0 := h.clk.Now().Add(time.Second)
 		h.Settle(t0)
@@ -743,8 +748,11 @@ func TestAC9_StopDuringProvisioning(t *testing.T) {
 		if h.dial.Calls() != 0 {
 			t.Fatalf("Calls(dial) = %d, want 0 (never reached Booting)", h.dial.Calls())
 		}
-		if got := counterDelta(destroyAttemptsTotal.WithLabelValues("ok"), before); got != 1 {
+		if got := counterDelta(destroyAttemptsTotal.WithLabelValues("ok"), beforeDestroyOK); got != 1 {
 			t.Fatalf("destroy_attempts_total{ok} delta = %v, want 1", got)
+		}
+		if got := counterDelta(provisionAttemptsTotal.WithLabelValues("cancelled"), beforeCancelled); got != 1 {
+			t.Fatalf("provision_attempts_total{cancelled} delta = %v, want 1", got)
 		}
 		if snap := h.ctl.Status(); snap.Public != "STOPPED" {
 			t.Fatalf("Public = %q, want STOPPED", snap.Public)
@@ -811,9 +819,9 @@ func seedAdoptedReady(h *harness, gen int64, readyAt, lastInferenceFinishedAt, i
 	h.store.Put(doc)
 }
 
-// AC10 start during deletion (FR-2.8, FR-3.11): a Start arriving mid
-// destroy must revive into a fresh generation once it confirms; retries
-// land at t=10,30,70, following armDestroyRetry's actual 10s*2^n backoff.
+// Start during deletion: a Start arriving mid destroy must revive once
+// it confirms. Retries land at t=10,20,40 (armDestroyRetry's own
+// backoff); revival waits for the next 60s reconcile tick, a known gap.
 func TestAC10_StartDuringDeletion(t *testing.T) {
 	h := buildHarness(t)
 	seedAdoptedReady(h, 3, h.clk.Now(), time.Time{}, h.clk.Now().Add(1800*time.Second))
@@ -844,29 +852,28 @@ func TestAC10_StartDuringDeletion(t *testing.T) {
 		t.Fatalf("Start during deletion = %+v, %v, want DELETING, nil", snap, err)
 	}
 
-	h.Settle(t0.Add(29 * time.Second))
+	h.Settle(t0.Add(19 * time.Second))
 	if h.prov.Calls("destroy") != 1 {
 		t.Fatalf("Calls(destroy) = %d before the first retry, want 1", h.prov.Calls("destroy"))
 	}
-	h.Settle(t0.Add(30 * time.Second))
+	h.Settle(t0.Add(20 * time.Second))
 	if h.prov.Calls("destroy") != 2 {
-		t.Fatalf("Calls(destroy) = %d at the first retry (t=30), want 2", h.prov.Calls("destroy"))
+		t.Fatalf("Calls(destroy) = %d at the first retry (t=20), want 2", h.prov.Calls("destroy"))
 	}
-	h.Settle(t0.Add(69 * time.Second))
+	h.Settle(t0.Add(39 * time.Second))
 	if h.prov.Calls("create") != 0 {
 		t.Fatalf("Calls(create) = %d before the destroy confirms, want 0", h.prov.Calls("create"))
 	}
-	h.Settle(t0.Add(70 * time.Second))
+	h.Settle(t0.Add(40 * time.Second))
 	if h.prov.Calls("destroy") != 3 {
-		t.Fatalf("Calls(destroy) = %d at the second retry (t=70), want 3", h.prov.Calls("destroy"))
+		t.Fatalf("Calls(destroy) = %d at the second retry (t=40), want 3", h.prov.Calls("destroy"))
 	}
 
 	// Desired stayed RUNNING through the destroy, so the next periodic
-	// reconcile Tick (every 60s from t=0: 0,60,120,...) searches again —
-	// the first one after t=70 lands at t=120, not t=40.
-	h.Settle(t0.Add(120 * time.Second))
+	// reconcile Tick (every 60s from t=0: 0,60,120,...) searches again.
+	h.Settle(t0.Add(60 * time.Second))
 	if h.prov.Calls("search") != 1 || h.prov.Calls("create") != 1 {
-		t.Fatalf("search=%d create=%d at t=120, want 1/1", h.prov.Calls("search"), h.prov.Calls("create"))
+		t.Fatalf("search=%d create=%d at t=60, want 1/1", h.prov.Calls("search"), h.prov.Calls("create"))
 	}
 	doc, _, err := h.store.Load(context.Background())
 	if err != nil {
@@ -880,9 +887,9 @@ func TestAC10_StartDuringDeletion(t *testing.T) {
 	}
 }
 
-// AC11 restart after the deadline passed (FR-3.10, FR-6.9): a document
-// past its deadline must destroy without redialing (reason "manual",
-// recovery's own EvStop); one still ahead must redial and idle out normally.
+// Restart after the deadline passed: a document past its deadline must
+// destroy without redialing (reason "manual" — a known mislabeling);
+// one still ahead must redial and idle out normally.
 func TestAC11_RestartAfterDeadlinePassed(t *testing.T) {
 	t.Run("deadline already past: destroy without redialing", func(t *testing.T) {
 		h := buildHarness(t)
@@ -932,9 +939,9 @@ func TestAC11_RestartAfterDeadlinePassed(t *testing.T) {
 	})
 }
 
-// AC12 restart with a Ready instance (FR-4.2): recovering a document
-// whose deadline is still ahead must redial and nothing else, admit
-// immediately once dialed, and leave readyAt/idleDeadline unchanged.
+// Restart with a Ready instance: recovering a document whose deadline is
+// still ahead must redial and nothing else, admit immediately once
+// dialed, and leave readyAt/idleDeadline unchanged.
 func TestAC12_RestartWithReadyInstance(t *testing.T) {
 	h := buildHarness(t)
 	t0 := h.clk.Now()
@@ -967,9 +974,9 @@ func TestAC12_RestartWithReadyInstance(t *testing.T) {
 	}
 }
 
-// AC13 startup timeout (FR-5.4, FR-2.6): an instance that never reports
-// healthy must be destroyed at the startup deadline, its machine
-// denylisted for an hour, and the backoff-paced retry finds nothing.
+// Startup timeout: an instance that never reports healthy must be
+// destroyed at the startup deadline, its machine denylisted for an hour,
+// and a Start inside the 60s no_offer backoff window denied outright.
 func TestAC13_StartupTimeout(t *testing.T) {
 	h := newHarness(t)
 	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000})
@@ -1008,16 +1015,17 @@ func TestAC13_StartupTimeout(t *testing.T) {
 		t.Fatalf("snapshot = %+v, want STOPPED/STOPPED/no_offer", snap)
 	}
 
-	// Verified against gateReason directly: backoff clears at 960 and
-	// attempts is under cap, so this Start is not denied — it only
-	// restarts the search, which the still-active denylist sends to no_offer.
+	// Inside the no_offer backoff window (960 to 1020), Start is denied
+	// outright rather than restarting a search the denylist would refuse anyway.
 	h.Settle(t0.Add(990 * time.Second))
 	snap2, err := h.ctl.Start(context.Background())
-	if err != nil || snap2.Public != "ALLOCATING" {
-		t.Fatalf("Start at t=990 = %+v, %v, want ALLOCATING, nil", snap2, err)
+	if !errors.Is(err, ErrGPUUnavailable) {
+		t.Fatalf("Start at t=990 err = %v, want ErrGPUUnavailable", err)
 	}
-	h.Settle(t0.Add(991 * time.Second))
-	if h.prov.Calls("create") != 1 {
-		t.Fatalf("Calls(create) = %d after the t=990 restart, want still 1 (offer still denylisted)", h.prov.Calls("create"))
+	if snap2.Public != "STOPPED" || snap2.Unavailable != "no_offer" {
+		t.Fatalf("snapshot at t=990 = %+v, want STOPPED/no_offer", snap2)
+	}
+	if h.prov.Calls("create") != 1 || h.prov.Calls("search") != 2 {
+		t.Fatalf("create=%d search=%d, want 1/2 (denied, no new search)", h.prov.Calls("create"), h.prov.Calls("search"))
 	}
 }
