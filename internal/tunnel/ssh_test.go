@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"sync"
 	"testing"
@@ -117,5 +118,52 @@ func TestSSHCloseIsSafeConcurrentlyAndTwice(t *testing.T) {
 
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close() again: %v, want nil", err)
+	}
+}
+
+func TestSSHDialHandshakeStallDoesNotHangOrLeak(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- conn // accept, then never speak SSH
+	}()
+
+	host, port, _ := splitHostPortForTest(t, ln.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, dialErr := NewSSH(testSSHKey(t)).Dial(ctx, Instance{Host: host, Port: port})
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("Dial took %v, want it to return promptly on ctx cancellation", elapsed)
+	}
+	if dialErr == nil {
+		t.Fatal("Dial: want error, got nil")
+	}
+
+	select {
+	case conn := <-accepted:
+		defer func() { _ = conn.Close() }()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+			if _, err := conn.Read(make([]byte, 1)); err != nil {
+				if errors.Is(err, io.EOF) {
+					return // our side closed the stalled connection, as expected
+				}
+			}
+		}
+		t.Fatal("stalled server-side connection was never closed by Dial")
+	case <-time.After(2 * time.Second):
+		t.Fatal("listener never accepted a connection")
 	}
 }

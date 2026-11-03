@@ -51,29 +51,32 @@ func (d *sshDialer) Dial(ctx context.Context, in Instance) (*Conn, error) {
 	}
 
 	addr := net.JoinHostPort(in.Host, strconv.Itoa(in.Port))
-	type result struct {
-		client *ssh.Client
-		err    error
-	}
-	resultCh := make(chan result, 1)
-	go func() {
-		c, err := ssh.Dial("tcp", addr, config)
-		resultCh <- result{c, err}
-	}()
 
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case r := <-resultCh:
-		if r.err != nil {
-			if mismatch {
-				return nil, ErrHostKeyMismatch
-			}
-			return nil, fmt.Errorf("tunnel: ssh dial: %w", r.err)
-		}
-		// Snapshot tunables so the loop never reads vars a test may rewrite.
-		return wrapSSHClient(r.client, observed, keepaliveInterval, keepaliveMaxMisses), nil
+	// ClientConfig.Timeout only bounds the TCP connect; NewClientConn's
+	// handshake has no deadline of its own, so we set one on the raw
+	// conn and let a cancelled ctx force-close it rather than abandon it.
+	rawConn, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("tunnel: ssh dial: %w", err)
 	}
+	if err := rawConn.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		_ = rawConn.Close()
+		return nil, fmt.Errorf("tunnel: set deadline: %w", err)
+	}
+	stop := context.AfterFunc(ctx, func() { _ = rawConn.Close() })
+	sshConn, chans, reqs, err := ssh.NewClientConn(rawConn, addr, config)
+	stop()
+	if err != nil {
+		_ = rawConn.Close()
+		if mismatch {
+			return nil, ErrHostKeyMismatch
+		}
+		return nil, fmt.Errorf("tunnel: ssh dial: %w", err)
+	}
+	_ = rawConn.SetDeadline(time.Time{}) // keepalive owns liveness from here
+	client := ssh.NewClient(sshConn, chans, reqs)
+	// Snapshot tunables so the loop never reads vars a test may rewrite.
+	return wrapSSHClient(client, observed, keepaliveInterval, keepaliveMaxMisses), nil
 }
 
 func wrapSSHClient(client *ssh.Client, hostKey string, interval time.Duration, maxMisses int) *Conn {
