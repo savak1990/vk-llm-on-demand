@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,13 +40,25 @@ func TestSSHRoundTrip(t *testing.T) {
 }
 
 func TestDialRejectsEmptyInstance(t *testing.T) {
+	keyRead := false
+	key := func() ([]byte, error) {
+		keyRead = true
+		return nil, nil
+	}
+
 	start := time.Now()
-	_, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{})
+	_, err := NewSSH(key).Dial(context.Background(), Instance{})
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("Dial took %v, want it to reject the empty instance instantly", elapsed)
 	}
 	if err == nil {
 		t.Fatal("Dial: want error for zero-value Instance, got nil")
+	}
+	if !strings.Contains(err.Error(), "no ssh address") {
+		t.Fatalf("Dial err = %q, want it to mention a missing ssh address", err)
+	}
+	if keyRead {
+		t.Fatal("Dial read the ssh key before validating the address; the guard ran too late or a dial was attempted")
 	}
 }
 
