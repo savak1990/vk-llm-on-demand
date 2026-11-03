@@ -530,6 +530,59 @@ func TestStartGate(t *testing.T) {
 	}
 }
 
+// A Start inside the 60s no_offer backoff window is denied outright,
+// without a redundant search the still-fresh denylist would refuse anyway.
+func TestStartGateNoOfferBackoff(t *testing.T) {
+	c, prov, clk, _, _ := newTestController(t)
+	prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000})
+	c.noOfferUntil = clk.Now().Add(60 * time.Second)
+	ctx := context.Background()
+	if _, err := c.Start(ctx); !errors.Is(err, ErrGPUUnavailable) {
+		t.Fatalf("Start err = %v, want ErrGPUUnavailable", err)
+	}
+	for c.step(ctx) {
+	}
+	if prov.Calls("search") != 0 {
+		t.Fatalf("Calls(search) = %d, want 0", prov.Calls("search"))
+	}
+	doc, _, _ := c.deps.Store.Load(ctx)
+	if doc.Desired != store.DesiredStopped {
+		t.Fatalf("Desired = %v, want STOPPED", doc.Desired)
+	}
+	if snap := c.Status(); snap.Unavailable != "no_offer" {
+		t.Fatalf("Unavailable = %q, want no_offer", snap.Unavailable)
+	}
+
+	clk.Advance(60 * time.Second)
+	if _, err := c.Start(ctx); err != nil {
+		t.Fatalf("Start after the window: %v", err)
+	}
+}
+
+func TestNoOfferBackoffEnds(t *testing.T) {
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		state, next State
+		ev          Event
+		want        time.Time
+		ok          bool
+	}{
+		{"T6 no offer starts the window", Searching, Idle, Event{Kind: EvNoOffer}, now.Add(60 * time.Second), true},
+		{"T7 search error is not a no_offer", Searching, Idle, Event{Kind: EvNoOffer, Err: errStale}, time.Time{}, false},
+		{"T7 stop during search", Searching, Idle, Event{Kind: EvStop}, time.Time{}, false},
+		{"no match leaves state", Ready, Ready, Event{Kind: EvTick}, time.Time{}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := noOfferBackoffEnds(c.state, c.next, c.ev, now)
+			if !got.Equal(c.want) || ok != c.ok {
+				t.Errorf("noOfferBackoffEnds(%v->%v, %v) = (%v, %v), want (%v, %v)", c.state, c.next, c.ev.Kind, got, ok, c.want, c.ok)
+			}
+		})
+	}
+}
+
 // With no provider id the label is the only handle; the exact-label match
 // must not reach a later generation that shares the prefix.
 func TestDestroyWithoutIDDestroysEveryExactLabelMatch(t *testing.T) {

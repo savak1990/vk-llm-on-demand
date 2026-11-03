@@ -15,10 +15,10 @@ func (c *Controller) dispatchReconcile(ctx context.Context) {
 	if !c.reconciling.CompareAndSwap(false, true) {
 		return
 	}
-	go func() {
+	c.spawn(func() {
 		defer c.reconciling.Store(false)
 		c.reconcileOnce(ctx)
-	}()
+	})
 }
 
 // reconcileOnce loads the document before listing, so any instance newer
@@ -118,12 +118,12 @@ func (c *Controller) reconcileCompareInstances(ctx context.Context, doc store.Do
 		}
 		if c.orphanObserved[inst.ID] >= 2 && mayDestroy(inst.Label, c.deps.InstallationID, doc.Generation) {
 			id := inst.ID
-			go func() {
+			c.spawn(func() {
 				if destroyConfirmed(ctx, c, id) {
 					shutdownsTotal.WithLabelValues("orphan").Inc()
 					orphansDestroyedTotal.Inc()
 				}
-			}()
+			})
 		}
 	}
 	for id := range c.orphanObserved {

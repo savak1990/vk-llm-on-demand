@@ -133,6 +133,8 @@ func provisionOutcome(state, next State, ev Event) (string, bool) {
 		return "deadline_exceeded", true
 	case isCreatingBootingOrLoading(state) && next == Destroying && (ev.Kind == EvStop || ev.Kind == EvBudgetExhausted):
 		return "cancelled", true
+	case state == Creating && next == Destroying && ev.Kind == EvCreated:
+		return "cancelled", true
 	case isCreatingBootingOrLoading(state) && next == Idle && ev.Kind == EvVanished:
 		return "lost", true
 	case state == Loading && next == Ready && ev.Kind == EvHealthOK:

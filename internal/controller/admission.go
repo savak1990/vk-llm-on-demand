@@ -126,7 +126,7 @@ func (c *Controller) ReportUpstreamFailure(gen int64) {
 	if !live {
 		return
 	}
-	go c.suspectProbe(gen, conn)
+	c.spawn(func() { c.suspectProbe(gen, conn) })
 }
 
 func (c *Controller) suspectProbe(gen int64, conn interface {

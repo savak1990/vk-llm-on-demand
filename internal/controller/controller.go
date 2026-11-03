@@ -141,7 +141,10 @@ type Controller struct {
 	lastBalanceKnown bool // false until a balance read succeeds; Allow then denies as balance_low
 
 	destroyRetryMu sync.Mutex
-	destroyRetryN  int // trailing failed-destroy count since Destroying was last entered; backoff = min(5m, 10s*2^n)
+	destroyRetryN  int // trailing failed-destroy count since Destroying was last entered; backoff = min(5m, 10s*2^(n-1))
+
+	noOfferMu    sync.Mutex
+	noOfferUntil time.Time // armed by a no_offer transition; gateReason denies a Start inside it
 
 	reconciling    atomic.Bool
 	reconcileMu    sync.Mutex
@@ -153,6 +156,8 @@ type Controller struct {
 	pollTerminalMu   sync.Mutex
 	pollTerminalGen  int64
 	pollTerminalSeen int // consecutive startup-poll gets with a terminal status for pollTerminalGen
+
+	inFlightEffects atomic.Int64 // every goroutine this package starts, counted for its whole life; a test harness drives a fake clock off it
 }
 
 // New validates the configuration and builds a Controller; it does not
@@ -184,3 +189,15 @@ func New(d Deps) (*Controller, error) {
 // (64) that a blocking send here would mean something is already
 // badly wrong, which is the signal a full channel should give.
 func (c *Controller) postEvent(e Event) { c.events <- e }
+
+// spawn runs fn on its own goroutine, counted as in flight for fn's
+// whole lifetime — including whatever it posts back after a provider,
+// dialer or worker call returns — not just that call's own duration.
+// Every goroutine this package starts goes through it.
+func (c *Controller) spawn(fn func()) {
+	c.inFlightEffects.Add(1)
+	go func() {
+		defer c.inFlightEffects.Add(-1)
+		fn()
+	}()
+}

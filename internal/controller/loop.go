@@ -131,6 +131,11 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		if reason, ok := shutdownReason(state, next, ev, inFlight, doc, c.deps.Config, now); ok {
 			shutdownsTotal.WithLabelValues(reason).Inc()
 		}
+		if until, ok := noOfferBackoffEnds(state, next, ev, now); ok {
+			c.noOfferMu.Lock()
+			c.noOfferUntil = until
+			c.noOfferMu.Unlock()
+		}
 	}
 	if outcome, ok := provisionOutcome(state, next, ev); ok {
 		provisionAttemptsTotal.WithLabelValues(outcome).Inc()
@@ -171,7 +176,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		c.armTimer(timerDestroyRetry, c.deps.Clock.Now())
 	}
 	if holdsConn(state) && !holdsConn(next) {
-		go dispatchCloseConn(c)
+		c.spawn(func() { dispatchCloseConn(c) })
 	}
 	c.syncTimers(state, next, doc)
 
@@ -196,8 +201,9 @@ func isUnavailableReason(reason string) bool {
 }
 
 // gateReason is the Start/Tick/Gone admission gate for the states that can
-// begin a provision: budget, then the hourly attempts cap, then the create
-// backoff, which only paces and is never a denial.
+// begin a provision: budget, then the hourly attempts cap, then the
+// no_offer search backoff (a real denial), then the create backoff, which
+// only paces and is never a denial.
 func (c *Controller) gateReason(state State, ev Event, doc store.Document, now time.Time) string {
 	if ev.Reason != "" {
 		return ev.Reason
@@ -220,10 +226,26 @@ func (c *Controller) gateReason(state State, ev Event, doc store.Document, now t
 	if a.Hour == now.UTC().Format("2006-01-02T15") && a.Count >= c.deps.Config.MaxProvisionAttemptsPerHour {
 		return "attempts_exhausted"
 	}
+	c.noOfferMu.Lock()
+	noOfferUntil := c.noOfferUntil
+	c.noOfferMu.Unlock()
+	if now.Before(noOfferUntil) {
+		return "no_offer"
+	}
 	if now.Before(nextCreateAllowedAt(doc.Ops)) {
 		return "backoff"
 	}
 	return ""
+}
+
+// noOfferBackoffEnds is T6's own 60s search backoff window, started the
+// moment a no_offer transition commits; a provider_error is not a
+// no_offer and never starts it.
+func noOfferBackoffEnds(state, next State, ev Event, now time.Time) (time.Time, bool) {
+	if state == Searching && next == Idle && ev.Kind == EvNoOffer && ev.Err == nil {
+		return now.Add(60 * time.Second), true
+	}
+	return time.Time{}, false
 }
 
 // syncTimers arms each state-scoped timer on entry and clears it on
@@ -258,7 +280,14 @@ func (c *Controller) syncTimers(prev, next State, doc store.Document) {
 		if !inService(prev) {
 			c.armTimer(timerMetricsPull, now.Add(metricsPullInterval))
 		}
-		c.armIdle(doc)
+		// Only Ready, never Serving: decide's no-match default echoes
+		// Serving straight back as next while InFlight>0 blocks T20, and
+		// re-arming an already-past IdleDeadline on every such pass would
+		// never stop being due — RequestEnd's own flush re-arms it once
+		// InFlight reaches 0.
+		if next == Ready {
+			c.armIdle(doc)
+		}
 	} else {
 		c.clearTimer(timerIdle)
 		c.clearTimer(timerMetricsPull)
@@ -274,13 +303,13 @@ func (c *Controller) armIdle(doc store.Document) {
 // requeue retries an event whose CAS exhausted its conflict budget.
 func (c *Controller) requeue(ev Event) {
 	ctx := c.effCtx()
-	go func() {
+	c.spawn(func() {
 		select {
 		case <-c.deps.Clock.After(requeueDelay):
 			c.postEvent(ev)
 		case <-ctx.Done():
 		}
-	}()
+	})
 }
 
 func (c *Controller) flushAndRun(mutate func(*store.Document) error) func(*store.Document) error {
@@ -325,7 +354,7 @@ func (c *Controller) flushActivity(ctx context.Context) {
 func (c *Controller) queueEffects(effects []Effect) {
 	ctx := c.effCtx()
 	for _, e := range effects {
-		go c.runEffect(ctx, e)
+		c.spawn(func() { c.runEffect(ctx, e) })
 	}
 }
 
@@ -361,7 +390,7 @@ func (c *Controller) armDestroyRetry() {
 	c.destroyRetryMu.Unlock()
 	backoff := 5 * time.Minute
 	if n < 5 {
-		backoff = min(backoff, 10*time.Second*time.Duration(int64(1)<<uint(n)))
+		backoff = min(backoff, 10*time.Second*time.Duration(int64(1)<<uint(n-1)))
 	}
 	c.armTimer(timerDestroyRetry, c.deps.Clock.Now().Add(backoff))
 }
@@ -484,7 +513,8 @@ func (c *Controller) fireDestroyRetry(ctx context.Context) {
 		}
 	}
 	id, hasID := providerIDOf(doc)
-	go dispatchDestroy(c.effCtx(), c, gen, label, id, hasID)
+	effCtx := c.effCtx()
+	c.spawn(func() { dispatchDestroy(effCtx, c, gen, label, id, hasID) })
 }
 
 func (c *Controller) pollTick(ctx context.Context) {
@@ -494,10 +524,12 @@ func (c *Controller) pollTick(ctx context.Context) {
 	switch state {
 	case Creating, Booting:
 		if id, ok := c.currentProviderID(ctx); ok {
-			go dispatchGet(c.effCtx(), c, effGet{id: id, gen: gen})
+			effCtx := c.effCtx()
+			c.spawn(func() { dispatchGet(effCtx, c, effGet{id: id, gen: gen}) })
 		}
 	case Loading:
-		go dispatchProbe(c.effCtx(), c, effProbe{gen: gen})
+		effCtx := c.effCtx()
+		c.spawn(func() { dispatchProbe(effCtx, c, effProbe{gen: gen}) })
 	}
 	if inStartup(state) {
 		c.armTimer(timerPoll, c.deps.Clock.Now().Add(pollInterval))
@@ -511,13 +543,16 @@ func (c *Controller) dispatchScrape(ctx context.Context) {
 	if conn == nil {
 		return
 	}
-	go func() {
+	c.spawn(func() {
 		if err := c.deps.Worker.Scrape(ctx, conn.RoundTripper()); err != nil && c.deps.Log != nil {
 			c.deps.Log.Warn("controller: metrics scrape failed", "err", err)
 		}
-	}()
+	})
 }
 
+// handleEvent retries a real failure (a transient Store.Load, say) rather
+// than dropping the event: idle/drain have a Tick-based fallback if their
+// own timer was already cleared, but startup does not.
 func (c *Controller) handleEvent(ctx context.Context, ev Event) {
 	err := c.processEvent(ctx, ev)
 	if err == nil || errors.Is(err, errStale) || errors.Is(err, ErrGPUUnavailable) {
@@ -526,6 +561,7 @@ func (c *Controller) handleEvent(ctx context.Context, ev Event) {
 	if c.deps.Log != nil {
 		c.deps.Log.Error("controller: process event failed", "kind", ev.Kind, "err", err)
 	}
+	c.requeue(ev)
 }
 
 func (c *Controller) currentGen() int64 {

@@ -84,7 +84,8 @@ func (c *Controller) recoverOnce(ctx context.Context) error {
 		c.handleEvent(ctx, Event{Kind: EvDeadlineExpired, Gen: doc.Generation})
 	case next == Ready:
 		if id, ok := providerIDOf(doc); ok {
-			go c.recoverDial(c.effCtx(), id, doc.Generation, inst.HostKeyFingerprint)
+			effCtx, hostKey := c.effCtx(), inst.HostKeyFingerprint
+			c.spawn(func() { c.recoverDial(effCtx, id, doc.Generation, hostKey) })
 		}
 	case next == Draining:
 		// In-flight requests died with the previous process, so the drain is already complete.

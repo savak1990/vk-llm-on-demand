@@ -96,6 +96,7 @@ func TestProvisionOutcomeByTransition(t *testing.T) {
 		{"T14 terminal before ready", Booting, Destroying, Event{Kind: EvProviderObserved, Status: provider.StatusExited}, "failed_status", true},
 		{"T15 startup deadline", Loading, Destroying, Event{Kind: EvDeadlineExpired}, "deadline_exceeded", true},
 		{"T16 stop while booting", Booting, Destroying, Event{Kind: EvStop}, "cancelled", true},
+		{"T8 create lands after stop already flipped desired", Creating, Destroying, Event{Kind: EvCreated}, "cancelled", true},
 		{"T27 vanished before ready", Booting, Idle, Event{Kind: EvVanished}, "lost", true},
 		{"T32 health ok", Loading, Ready, Event{Kind: EvHealthOK}, "ok", true},
 		{"T27 vanished while draining is not a provisioning attempt", Draining, Idle, Event{Kind: EvVanished}, "", false},
