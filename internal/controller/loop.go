@@ -548,8 +548,8 @@ func (c *Controller) dispatchScrape(ctx context.Context) {
 }
 
 // handleEvent retries a real failure only for EvDeadlineExpired/
-// EvIdleTimer: their own timer is gone with no other resend path, unlike
-// poll/reconcile, which resend themselves on the next tick regardless.
+// EvIdleTimer/EvGone: each has no other resend path — their own timer is
+// gone, and Destroying (EvGone's state) has no periodic Tick fallback.
 func (c *Controller) handleEvent(ctx context.Context, ev Event) {
 	err := c.processEvent(ctx, ev)
 	if err == nil || errors.Is(err, errStale) || errors.Is(err, ErrGPUUnavailable) {
@@ -558,7 +558,7 @@ func (c *Controller) handleEvent(ctx context.Context, ev Event) {
 	if c.deps.Log != nil {
 		c.deps.Log.Error("controller: process event failed", "kind", ev.Kind, "err", err)
 	}
-	if ev.Kind == EvDeadlineExpired || ev.Kind == EvIdleTimer {
+	if ev.Kind == EvDeadlineExpired || ev.Kind == EvIdleTimer || ev.Kind == EvGone {
 		c.requeue(ev)
 	}
 }

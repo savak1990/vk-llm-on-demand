@@ -717,3 +717,34 @@ func TestStartupDeadlineSurvivesOneFailedLoad(t *testing.T) {
 		return prov.Calls("destroy") > 0
 	})
 }
+
+// A Store.Load failure right when EvGone lands must not strand the
+// controller in Destroying (decide has no Tick/Vanished fallback out of
+// it); the retry still reaches Idle once the store recovers.
+func TestDestroyGoneSurvivesOneFailedLoad(t *testing.T) {
+	c, _, clk, _, _ := newTestController(t)
+	c.state = Destroying
+	c.generation = 3
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Destroying.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+	})
+	c.deps.Store.(interface{ FailNext(int, error) }).FailNext(1, errors.New("transient load failure"))
+
+	ctx := context.Background()
+	c.postEvent(Event{Kind: EvGone, Gen: 3})
+	if !c.step(ctx) {
+		t.Fatal("step: EvGone did not fire")
+	}
+	if c.stateNow() != Destroying {
+		t.Fatalf("state after the failed Load = %v, want Destroying unchanged", c.stateNow())
+	}
+
+	clk.BlockUntil(1)
+	clk.Advance(requeueDelay)
+	waitFor(t, "Idle after the requeued EvGone retry", func() bool {
+		for c.step(ctx) {
+		}
+		return c.stateNow() == Idle
+	})
+}
