@@ -12,6 +12,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
@@ -26,20 +27,37 @@ import (
 // exported tunnel.NewConn, following store/fake's style of a scripted
 // fake plus a call counter the ACs read with Calls().
 type fakeDialerForHarness struct {
-	calls   int64
-	hostKey string
+	calls    int64
+	hostKey  string
+	lastAddr atomic.Value // string, "host:port" the dialer was last called with
+	failErr  atomic.Value // error, returned by every Dial call once set (AC26's host-key-mismatch case)
 }
 
 func newFakeDialerForHarness() *fakeDialerForHarness {
 	return &fakeDialerForHarness{hostKey: "sha256:fake"}
 }
 
-func (d *fakeDialerForHarness) Dial(_ context.Context, _ tunnel.Instance) (*tunnel.Conn, error) {
+func (d *fakeDialerForHarness) Dial(_ context.Context, in tunnel.Instance) (*tunnel.Conn, error) {
 	atomic.AddInt64(&d.calls, 1)
+	d.lastAddr.Store(fmt.Sprintf("%s:%d", in.Host, in.Port))
+	if err, ok := d.failErr.Load().(error); ok {
+		return nil, err
+	}
 	return tunnel.NewConn(nil, func() error { return nil }, d.hostKey), nil
 }
 
 func (d *fakeDialerForHarness) Calls() int { return int(atomic.LoadInt64(&d.calls)) }
+
+// LastAddr is the "host:port" the most recent Dial call carried; AC26 uses
+// it to confirm the dial target is always the provider's live address.
+func (d *fakeDialerForHarness) LastAddr() string {
+	v, _ := d.lastAddr.Load().(string)
+	return v
+}
+
+// FailAll makes every subsequent Dial call return err; AC26 uses it to
+// simulate a pinned host key no longer matching the worker.
+func (d *fakeDialerForHarness) FailAll(err error) { d.failErr.Store(err) }
 
 var _ tunnel.Dialer = (*fakeDialerForHarness)(nil)
 
@@ -197,6 +215,53 @@ func (h *harness) Settle(upTo time.Time) {
 		}
 		h.clk.Advance(target.Sub(h.clk.Now()))
 	}
+}
+
+// metricValue reads one metric's current value from h's own registry by
+// family name; store's conflictsTotal is unexported outside its package,
+// so this is the only way this file can read it. labels are name/value pairs.
+func (h *harness) metricValue(name string, labels ...string) float64 {
+	h.t.Helper()
+	if len(labels)%2 != 0 {
+		h.t.Fatalf("metricValue(%q): odd number of label args %v", name, labels)
+	}
+	want := make(map[string]string, len(labels)/2)
+	for i := 0; i < len(labels); i += 2 {
+		want[labels[i]] = labels[i+1]
+	}
+	mfs, err := h.reg.Gather()
+	if err != nil {
+		h.t.Fatalf("metricValue(%q): Gather: %v", name, err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if !metricLabelsMatch(m, want) {
+				continue
+			}
+			if c := m.GetCounter(); c != nil {
+				return c.GetValue()
+			}
+			if g := m.GetGauge(); g != nil {
+				return g.GetValue()
+			}
+		}
+	}
+	return 0
+}
+
+func metricLabelsMatch(m *dto.Metric, want map[string]string) bool {
+	if len(want) != len(m.GetLabel()) {
+		return false
+	}
+	for _, lp := range m.GetLabel() {
+		if want[lp.GetName()] != lp.GetValue() {
+			return false
+		}
+	}
+	return true
 }
 
 // counterDelta reads a counter relative to a baseline captured earlier:
@@ -1028,4 +1093,790 @@ func TestAC13_StartupTimeout(t *testing.T) {
 	if h.prov.Calls("create") != 1 || h.prov.Calls("search") != 2 {
 		t.Fatalf("create=%d search=%d, want 1/2 (denied, no new search)", h.prov.Calls("create"), h.prov.Calls("search"))
 	}
+}
+
+// Provider list error: a reconcile tick that can't list instances must
+// skip the comparison entirely rather than destroying blind, and resume
+// counting consecutive orphan observations once listing recovers.
+func TestAC14_ProviderListError(t *testing.T) {
+	h := buildHarness(t)
+	t0 := h.clk.Now()
+	seedAdoptedReady(h, 3, t0, time.Time{}, t0.Add(1800*time.Second))
+	h.worker.SetProbeSequence(ProbeReady)
+	h.run()
+
+	h.Settle(t0.Add(30 * time.Second))
+	h.prov.AddInstance(provider.Instance{ID: 20, Label: "vkllm:iid:2", Status: provider.StatusRunning})
+	h.prov.FailNext("list", 10, &provider.Error{Op: "list", Class: provider.Retryable, Err: errors.New("fake list failure")})
+	beforeErr := testutil.ToFloat64(reconcileRunsTotal.WithLabelValues("error"))
+
+	h.Settle(t0.Add(600 * time.Second))
+	if h.prov.Calls("destroy") != 0 {
+		t.Fatalf("Calls(destroy) by t=600 = %d, want 0", h.prov.Calls("destroy"))
+	}
+	if got := counterDelta(reconcileRunsTotal.WithLabelValues("error"), beforeErr); got != 10 {
+		t.Fatalf("reconcile_runs_total{error} delta = %v, want 10", got)
+	}
+	if snap := h.ctl.Status(); snap.Public != "READY" {
+		t.Fatalf("Public = %q, want READY", snap.Public)
+	}
+
+	beforeOrphans := testutil.ToFloat64(orphansDestroyedTotal)
+	h.Settle(t0.Add(720 * time.Second))
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) at t=720 = %d, want 1", h.prov.Calls("destroy"))
+	}
+	if got := counterDelta(orphansDestroyedTotal, beforeOrphans); got != 1 {
+		t.Fatalf("orphans_destroyed_total delta = %v, want 1", got)
+	}
+}
+
+// Instance vanishes: the harness destroying the active id out of band
+// must surface as two consecutive missing reconcile observations,
+// closing the ledger and the tunnel with no destroy call of its own.
+func TestAC15_InstanceVanishes(t *testing.T) {
+	h := buildHarness(t)
+	t0 := h.clk.Now()
+	seedAdoptedReady(h, 3, t0, time.Time{}, t0.Add(1800*time.Second))
+	h.worker.SetProbeSequence(ProbeReady)
+	h.run()
+
+	h.Settle(t0.Add(time.Second))
+	if _, err := h.ctl.Admit(3); err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	closed := make(chan struct{}, 1)
+	h.ctl.mu.Lock()
+	h.ctl.conn = tunnel.NewConn(nil, func() error { closed <- struct{}{}; return nil }, "sha256:fake")
+	h.ctl.mu.Unlock()
+	beforeFailure := testutil.ToFloat64(shutdownsTotal.WithLabelValues("failure"))
+
+	h.Settle(t0.Add(30 * time.Second))
+	if err := h.prov.DestroyInstance(context.Background(), 9); err != nil {
+		t.Fatalf("harness destroy of id 9: %v", err)
+	}
+
+	h.Settle(t0.Add(60 * time.Second))
+	if snap := h.ctl.Status(); snap.Public != "READY" {
+		t.Fatalf("Public at t=60 = %q, want READY", snap.Public)
+	}
+	select {
+	case <-closed:
+		t.Fatal("Conn.Close called before the second missing observation")
+	default:
+	}
+
+	h.Settle(t0.Add(120 * time.Second))
+	snap := h.ctl.Status()
+	if snap.Public != "STOPPED" || snap.Desired != store.DesiredStopped {
+		t.Fatalf("snapshot at t=120 = %+v, want STOPPED/STOPPED", snap)
+	}
+	select {
+	case <-closed:
+	default:
+		t.Fatal("Conn.Close was never called")
+	}
+	doc, _, err := h.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if doc.Instance != nil {
+		t.Fatalf("doc.Instance = %+v, want nil", doc.Instance)
+	}
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) = %d, want 1 (the harness's own)", h.prov.Calls("destroy"))
+	}
+	if got := counterDelta(shutdownsTotal.WithLabelValues("failure"), beforeFailure); got != 1 {
+		t.Fatalf("shutdowns_total{failure} delta = %v, want 1", got)
+	}
+}
+
+// Orphan injection: a foreign-label instance under our own installation id,
+// at or behind the current generation, is destroyed after two observations;
+// one ahead of it first advances the fence; a foreign installation id never is.
+func TestAC16_OrphanInjection(t *testing.T) {
+	seedIdleGen3 := func(t *testing.T) *harness {
+		h := buildHarness(t)
+		doc, _, err := h.store.Load(context.Background())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		doc.Generation = 3
+		h.store.Put(doc)
+		h.run()
+		return h
+	}
+
+	t.Run("behind the current generation: destroyed after two observations", func(t *testing.T) {
+		h := seedIdleGen3(t)
+		t0 := h.clk.Now()
+		beforeOrphans := testutil.ToFloat64(orphansDestroyedTotal)
+		beforeShutdown := testutil.ToFloat64(shutdownsTotal.WithLabelValues("orphan"))
+
+		h.Settle(t0.Add(30 * time.Second))
+		h.prov.AddInstance(provider.Instance{ID: 20, Label: "vkllm:iid:2", Status: provider.StatusRunning})
+
+		h.Settle(t0.Add(119 * time.Second))
+		if h.prov.Calls("destroy") != 0 {
+			t.Fatalf("Calls(destroy) before t=120 = %d, want 0", h.prov.Calls("destroy"))
+		}
+		h.Settle(t0.Add(120 * time.Second))
+		if h.prov.Calls("destroy") != 1 {
+			t.Fatalf("Calls(destroy) at t=120 = %d, want 1", h.prov.Calls("destroy"))
+		}
+		if got := counterDelta(orphansDestroyedTotal, beforeOrphans); got != 1 {
+			t.Fatalf("orphans_destroyed_total delta = %v, want 1", got)
+		}
+		if got := counterDelta(shutdownsTotal.WithLabelValues("orphan"), beforeShutdown); got != 1 {
+			t.Fatalf("shutdowns_total{orphan} delta = %v, want 1", got)
+		}
+	})
+
+	t.Run("ahead of the current generation: advances the fence, then destroys", func(t *testing.T) {
+		h := seedIdleGen3(t)
+		t0 := h.clk.Now()
+
+		h.Settle(t0.Add(30 * time.Second))
+		h.prov.AddInstance(provider.Instance{ID: 21, Label: "vkllm:iid:5", Status: provider.StatusRunning})
+
+		h.Settle(t0.Add(60 * time.Second))
+		doc, _, err := h.store.Load(context.Background())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if doc.Generation != 5 {
+			t.Fatalf("Generation at t=60 = %d, want 5 (fence advanced)", doc.Generation)
+		}
+		if h.prov.Calls("destroy") != 0 {
+			t.Fatalf("Calls(destroy) at t=60 = %d, want 0", h.prov.Calls("destroy"))
+		}
+
+		h.Settle(t0.Add(120 * time.Second))
+		if h.prov.Calls("destroy") != 1 {
+			t.Fatalf("Calls(destroy) at t=120 = %d, want 1", h.prov.Calls("destroy"))
+		}
+	})
+
+	t.Run("a foreign installation id is never a destroy target", func(t *testing.T) {
+		h := seedIdleGen3(t)
+		t0 := h.clk.Now()
+
+		h.Settle(t0.Add(30 * time.Second))
+		h.prov.AddInstance(provider.Instance{ID: 22, Label: "vkllm:other:1", Status: provider.StatusRunning})
+
+		h.Settle(t0.Add(7200 * time.Second))
+		if h.prov.Calls("destroy") != 0 {
+			t.Fatalf("Calls(destroy) after 2h = %d, want 0", h.prov.Calls("destroy"))
+		}
+	})
+}
+
+// Restart with an empty store: a foreign-to-us-in-memory but label-matching
+// instance observed with no document at all first advances the fence to its
+// own generation, then destroys it; desired stays STOPPED throughout.
+func TestAC17_RestartWithEmptyStore(t *testing.T) {
+	h := buildHarness(t)
+	t0 := h.clk.Now()
+	h.prov.AddInstance(provider.Instance{ID: 5, Label: "vkllm:iid:7", Status: provider.StatusRunning})
+	h.run()
+
+	h.Settle(t0)
+	doc, _, err := h.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if doc.Generation != 7 {
+		t.Fatalf("Generation at t=0 = %d, want 7", doc.Generation)
+	}
+
+	beforeOrphans := testutil.ToFloat64(orphansDestroyedTotal)
+	h.Settle(t0.Add(59 * time.Second))
+	if h.prov.Calls("destroy") != 0 {
+		t.Fatalf("Calls(destroy) before t=60 = %d, want 0", h.prov.Calls("destroy"))
+	}
+	h.Settle(t0.Add(60 * time.Second))
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) at t=60 = %d, want 1", h.prov.Calls("destroy"))
+	}
+	if got := counterDelta(orphansDestroyedTotal, beforeOrphans); got != 1 {
+		t.Fatalf("orphans_destroyed_total delta = %v, want 1", got)
+	}
+	if h.prov.Calls("create") != 0 {
+		t.Fatalf("Calls(create) = %d, want 0", h.prov.Calls("create"))
+	}
+	doc2, _, err := h.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if doc2.Desired != store.DesiredStopped {
+		t.Fatalf("Desired = %q, want STOPPED", doc2.Desired)
+	}
+}
+
+// Destroy retries: a failing destroy must retry on armDestroyRetry's own
+// backoff (10/20/40s) without the periodic reconcile tick adding an extra
+// attempt of its own, denying Admit throughout and finishing once confirmed.
+func TestAC18_DestroyRetries(t *testing.T) {
+	h := buildHarness(t)
+	t0 := h.clk.Now()
+	seedAdoptedReady(h, 3, t0, time.Time{}, t0.Add(1800*time.Second))
+	h.prov.FailDestroy(3)
+	h.worker.SetProbeSequence(ProbeReady)
+	h.run()
+
+	beforeRetryable := testutil.ToFloat64(destroyAttemptsTotal.WithLabelValues("retryable"))
+	beforeOK := testutil.ToFloat64(destroyAttemptsTotal.WithLabelValues("ok"))
+
+	h.Settle(t0.Add(10 * time.Second))
+	if _, err := h.ctl.Stop(context.Background(), false); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	h.Settle(t0.Add(10 * time.Second))
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) at t=10 = %d, want 1", h.prov.Calls("destroy"))
+	}
+
+	h.Settle(t0.Add(11 * time.Second))
+	if _, err := h.ctl.Admit(3); !errors.Is(err, ErrBackendUnavailable) {
+		t.Fatalf("Admit during destroy retries = %v, want ErrBackendUnavailable", err)
+	}
+
+	h.Settle(t0.Add(19 * time.Second))
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) at t=19 = %d, want 1", h.prov.Calls("destroy"))
+	}
+	h.Settle(t0.Add(20 * time.Second))
+	if h.prov.Calls("destroy") != 2 {
+		t.Fatalf("Calls(destroy) at t=20 = %d, want 2", h.prov.Calls("destroy"))
+	}
+	h.Settle(t0.Add(40 * time.Second))
+	if h.prov.Calls("destroy") != 3 {
+		t.Fatalf("Calls(destroy) at t=40 = %d, want 3", h.prov.Calls("destroy"))
+	}
+	h.Settle(t0.Add(60 * time.Second))
+	if h.prov.Calls("destroy") != 3 {
+		t.Fatalf("Calls(destroy) at t=60 = %d, want still 3 (the reconcile tick adds none)", h.prov.Calls("destroy"))
+	}
+	h.Settle(t0.Add(80 * time.Second))
+	if h.prov.Calls("destroy") != 4 {
+		t.Fatalf("Calls(destroy) at t=80 = %d, want 4", h.prov.Calls("destroy"))
+	}
+	if snap := h.ctl.Status(); snap.Public != "STOPPED" {
+		t.Fatalf("Public at t=80 = %q, want STOPPED", snap.Public)
+	}
+	if got := counterDelta(destroyAttemptsTotal.WithLabelValues("retryable"), beforeRetryable); got != 3 {
+		t.Fatalf("destroy_attempts_total{retryable} delta = %v, want 3", got)
+	}
+	if got := counterDelta(destroyAttemptsTotal.WithLabelValues("ok"), beforeOK); got != 1 {
+		t.Fatalf("destroy_attempts_total{ok} delta = %v, want 1", got)
+	}
+
+	h.Settle(t0.Add(600 * time.Second))
+	if h.prov.Calls("search") != 0 {
+		t.Fatalf("Calls(search) by t=600 = %d, want 0", h.prov.Calls("search"))
+	}
+}
+
+// Max lifetime: continuous admit/requestEnd activity must not block the
+// 12h lifetime cutoff, which fires on the periodic Tick regardless of
+// how recently the instance was last used.
+func TestAC19_MaxLifetime(t *testing.T) {
+	h := buildHarness(t)
+	t0 := h.clk.Now()
+	createdAt := t0.Add(-11 * time.Hour)
+	seedAdoptedReady(h, 3, createdAt, time.Time{}, t0.Add(1800*time.Second))
+	h.worker.SetProbeSequence(ProbeReady)
+	h.run()
+
+	beforeLifetime := testutil.ToFloat64(shutdownsTotal.WithLabelValues("lifetime"))
+
+	deadline := t0.Add(3600 * time.Second)
+	for mark := t0; mark.Before(deadline); mark = mark.Add(30 * time.Second) {
+		h.Settle(mark)
+		if _, err := h.ctl.Admit(3); err != nil {
+			t.Fatalf("Admit at %v: %v", mark, err)
+		}
+		h.Settle(mark.Add(10 * time.Second))
+		h.ctl.RequestEnd(3)
+	}
+
+	h.Settle(deadline.Add(-time.Second))
+	if h.prov.Calls("destroy") != 0 {
+		t.Fatalf("Calls(destroy) just before t=3600 = %d, want 0", h.prov.Calls("destroy"))
+	}
+
+	h.Settle(deadline)
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) at t=3600 = %d, want 1", h.prov.Calls("destroy"))
+	}
+	if got := counterDelta(shutdownsTotal.WithLabelValues("lifetime"), beforeLifetime); got != 1 {
+		t.Fatalf("shutdowns_total{lifetime} delta = %v, want 1", got)
+	}
+}
+
+// Budget exhaustion mid-Serving: a balance dropping below the floor while
+// serving must drain (not destroy outright), deny every new admission and
+// Start, and finish once the in-flight request ends or the drain times out.
+func TestAC20_BudgetMidServing(t *testing.T) {
+	setup := func(t *testing.T) (*harness, time.Time) {
+		h := buildHarness(t)
+		t0 := h.clk.Now()
+		seedAdoptedReady(h, 3, t0, time.Time{}, t0.Add(1800*time.Second))
+		h.worker.SetProbeSequence(ProbeReady)
+		h.run()
+		h.Settle(t0)
+		if _, err := h.ctl.Admit(3); err != nil {
+			t.Fatalf("Admit: %v", err)
+		}
+		h.Settle(t0.Add(30 * time.Second))
+		h.prov.SetBalance(0)
+		return h, t0
+	}
+
+	t.Run("the request ending destroys at once", func(t *testing.T) {
+		h, t0 := setup(t)
+		beforeBudget := testutil.ToFloat64(shutdownsTotal.WithLabelValues("budget"))
+
+		h.Settle(t0.Add(60 * time.Second))
+		snap := h.ctl.Status()
+		if snap.State != Draining || snap.Desired != store.DesiredStopped {
+			t.Fatalf("snapshot at t=60 = %+v, want Draining/STOPPED", snap)
+		}
+
+		h.Settle(t0.Add(61 * time.Second))
+		if _, err := h.ctl.Admit(3); !errors.Is(err, ErrDraining) {
+			t.Fatalf("Admit at t=61 = %v, want ErrDraining", err)
+		}
+		snap2, err := h.ctl.Start(context.Background())
+		if !errors.Is(err, ErrGPUUnavailable) {
+			t.Fatalf("Start at t=61 = %v, want ErrGPUUnavailable", err)
+		}
+		if snap2.Unavailable != "balance_low" {
+			t.Fatalf("Unavailable at t=61 = %q, want balance_low", snap2.Unavailable)
+		}
+
+		h.Settle(t0.Add(90 * time.Second))
+		h.ctl.RequestEnd(3)
+		h.Settle(t0.Add(90 * time.Second))
+		if h.prov.Calls("destroy") != 1 {
+			t.Fatalf("Calls(destroy) at t=90 = %d, want 1", h.prov.Calls("destroy"))
+		}
+		if got := counterDelta(shutdownsTotal.WithLabelValues("budget"), beforeBudget); got != 1 {
+			t.Fatalf("shutdowns_total{budget} delta = %v, want 1", got)
+		}
+	})
+
+	t.Run("no RequestEnd still destroys at the drain timeout", func(t *testing.T) {
+		h, t0 := setup(t)
+		closed := make(chan struct{}, 1)
+		h.ctl.mu.Lock()
+		h.ctl.conn = tunnel.NewConn(nil, func() error { closed <- struct{}{}; return nil }, "sha256:fake")
+		h.ctl.mu.Unlock()
+
+		h.Settle(t0.Add(119 * time.Second))
+		if h.prov.Calls("destroy") != 0 {
+			t.Fatalf("Calls(destroy) before t=120 = %d, want 0", h.prov.Calls("destroy"))
+		}
+		h.Settle(t0.Add(120 * time.Second))
+		if h.prov.Calls("destroy") != 1 {
+			t.Fatalf("Calls(destroy) at t=120 = %d, want 1", h.prov.Calls("destroy"))
+		}
+		select {
+		case <-closed:
+		default:
+			t.Fatal("Conn.Close was never called")
+		}
+	})
+}
+
+// CAS conflict storm: 12 consecutive version conflicts on the Searching
+// commit exceed one Transition's 8-attempt budget, exhausting it once and
+// requeuing the Start event (a 5s delay) before the retry succeeds.
+func TestAC21_CASConflictStorm(t *testing.T) {
+	h := newHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusOther, provider.StatusOther)
+	h.worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable, ProbeLoading, ProbeLoading, ProbeLoading, ProbeReady)
+	beforeConflicts := h.metricValue("vkllm_store_conflicts_total")
+
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	h.store.ConflictNext(12)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	h.Settle(t0.Add(45 * time.Second)) // t=46
+	snap := h.ctl.Status()
+	if snap.Public != "READY" || snap.Generation != 1 {
+		t.Fatalf("snapshot = %+v, want READY/gen1", snap)
+	}
+	if h.prov.Calls("search") != 1 || h.prov.Calls("create") != 1 {
+		t.Fatalf("search=%d create=%d, want 1/1", h.prov.Calls("search"), h.prov.Calls("create"))
+	}
+	if got := h.metricValue("vkllm_store_conflicts_total") - beforeConflicts; got != 12 {
+		t.Fatalf("vkllm_store_conflicts_total delta = %v, want 12", got)
+	}
+}
+
+// Terminal status: two consecutive terminal gets during Booting destroy
+// (failing, since this happened before Ready) but leave desired RUNNING, so
+// the backoff retries automatically once the hourly/backoff window allows.
+func TestAC22_TerminalStatus(t *testing.T) {
+	h := newHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusExited, provider.StatusExited)
+	h.prov.FailDestroy(1)
+	beforeFailedStatus := testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("failed_status"))
+
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	h.Settle(t0.Add(5 * time.Second)) // t=6: first get, not yet confirmed terminal
+	if h.prov.Calls("get") != 1 {
+		t.Fatalf("Calls(get) at t=6 = %d, want 1", h.prov.Calls("get"))
+	}
+
+	h.Settle(t0.Add(10 * time.Second)) // t=11: second get confirms terminal; destroy 1 fires and fails
+	if h.prov.Calls("get") != 2 {
+		t.Fatalf("Calls(get) at t=11 = %d, want 2", h.prov.Calls("get"))
+	}
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) at t=11 = %d, want 1", h.prov.Calls("destroy"))
+	}
+
+	h.Settle(t0.Add(14 * time.Second)) // t=15
+	if snap := h.ctl.Status(); snap.Public != "FAILED" {
+		t.Fatalf("Public at t=15 = %q, want FAILED", snap.Public)
+	}
+
+	h.Settle(t0.Add(20 * time.Second)) // t=21: the retry succeeds
+	if h.prov.Calls("destroy") != 2 {
+		t.Fatalf("Calls(destroy) at t=21 = %d, want 2", h.prov.Calls("destroy"))
+	}
+	snap := h.ctl.Status()
+	if snap.Public != "STOPPED" {
+		t.Fatalf("Public at t=21 = %q, want STOPPED", snap.Public)
+	}
+	if snap.Desired != store.DesiredRunning {
+		t.Fatalf("Desired = %q, want RUNNING", snap.Desired)
+	}
+	if got := counterDelta(provisionAttemptsTotal.WithLabelValues("failed_status"), beforeFailedStatus); got != 1 {
+		t.Fatalf("provision_attempts_total{failed_status} delta = %v, want 1", got)
+	}
+
+	h.Settle(t0.Add(118 * time.Second)) // t=119: still backed off
+	if h.prov.Calls("search") != 1 {
+		t.Fatalf("Calls(search) before t=120 = %d, want still 1", h.prov.Calls("search"))
+	}
+	h.Settle(t0.Add(119 * time.Second)) // t=120
+	if h.prov.Calls("search") != 2 {
+		t.Fatalf("Calls(search) at t=120 = %d, want 2", h.prov.Calls("search"))
+	}
+}
+
+// Non-terminal string: a persistent StatusOther ("scheduling"-like) status
+// never satisfies T12's dial condition or T14's terminal-destroy condition,
+// so only the startup deadline ever ends this instance's life.
+func TestAC23_NonTerminalString(t *testing.T) {
+	h := newHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
+	seq := make([]provider.InstanceStatus, 300)
+	for i := range seq {
+		seq[i] = provider.StatusOther
+	}
+	h.prov.SetStatusSequence(provider.InstanceID(1), seq...)
+
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	h.Settle(t0.Add(899 * time.Second))
+	if h.prov.Calls("destroy") != 0 {
+		t.Fatalf("Calls(destroy) before t=901 = %d, want 0", h.prov.Calls("destroy"))
+	}
+	h.Settle(t0.Add(900 * time.Second))
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) at t=901 = %d, want 1", h.prov.Calls("destroy"))
+	}
+}
+
+// Attempts cap: three startup-timeout cycles within the same hour exhaust
+// MaxProvisionAttemptsPerHour, denying even an explicit Start until the
+// next hour's bucket reopens the gate on a clean machine.
+func TestAC24_AttemptsCap(t *testing.T) {
+	h := newHarness(t)
+	h.prov.SetOffers(
+		provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"},
+		provider.Offer{ID: 12, MachineID: 43, Hourly: 600000, GPUName: "L40S"},
+		provider.Offer{ID: 13, MachineID: 44, Hourly: 600000, GPUName: "L40S"},
+		provider.Offer{ID: 14, MachineID: 45, Hourly: 600000, GPUName: "L40S"},
+	)
+	h.worker.SetProbeSequence(ProbeUnreachable)
+	beforeExhausted := testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("attempts_exhausted"))
+
+	t0 := h.clk.Now()
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start at t=0: %v", err)
+	}
+	h.Settle(t0.Add(time.Second))
+	if h.prov.Calls("create") != 1 {
+		t.Fatalf("Calls(create) right after t=0 = %d, want 1", h.prov.Calls("create"))
+	}
+
+	h.Settle(t0.Add(959 * time.Second))
+	if h.prov.Calls("create") != 1 {
+		t.Fatalf("Calls(create) before t=960 = %d, want 1", h.prov.Calls("create"))
+	}
+	h.Settle(t0.Add(960 * time.Second))
+	if h.prov.Calls("create") != 2 {
+		t.Fatalf("Calls(create) at t=960 = %d, want 2", h.prov.Calls("create"))
+	}
+
+	h.Settle(t0.Add(1979 * time.Second))
+	if h.prov.Calls("create") != 2 {
+		t.Fatalf("Calls(create) before t=1980 = %d, want 2", h.prov.Calls("create"))
+	}
+	h.Settle(t0.Add(1980 * time.Second))
+	if h.prov.Calls("create") != 3 {
+		t.Fatalf("Calls(create) at t=1980 = %d, want 3", h.prov.Calls("create"))
+	}
+
+	h.Settle(t0.Add(2880 * time.Second))
+	snap := h.ctl.Status()
+	if snap.Desired != store.DesiredStopped || snap.Unavailable != "attempts_exhausted" {
+		t.Fatalf("snapshot at t=2880 = %+v, want STOPPED/attempts_exhausted", snap)
+	}
+	// Known metrics gap, not silently worked around: this denial happens on
+	// an Idle+Tick event, which provisionOutcome has no case for (only a
+	// Searching+OfferChosen denial is mapped), so no counter moves here.
+	if got := counterDelta(provisionAttemptsTotal.WithLabelValues("attempts_exhausted"), beforeExhausted); got != 0 {
+		t.Fatalf("provision_attempts_total{attempts_exhausted} delta = %v, want 0 (known metrics gap)", got)
+	}
+
+	h.Settle(t0.Add(3000 * time.Second))
+	if _, err := h.ctl.Start(context.Background()); !errors.Is(err, ErrGPUUnavailable) {
+		t.Fatalf("Start at t=3000 = %v, want ErrGPUUnavailable", err)
+	}
+	if h.prov.Calls("create") != 3 {
+		t.Fatalf("Calls(create) after the denied Start at t=3000 = %d, want still 3", h.prov.Calls("create"))
+	}
+
+	h.Settle(t0.Add(3600 * time.Second))
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start at t=3600: %v", err)
+	}
+	h.Settle(t0.Add(3601 * time.Second))
+	if h.prov.Calls("create") != 4 {
+		t.Fatalf("Calls(create) at t=3600 = %d, want 4", h.prov.Calls("create"))
+	}
+	doc, _, err := h.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if doc.Instance == nil || doc.Instance.Offer.MachineID != 45 {
+		t.Fatalf("doc.Instance = %+v, want machine 45", doc.Instance)
+	}
+}
+
+// Ready gate: a worker that never reports healthy must never reach Ready,
+// no matter how long it loads; only the startup deadline ends it.
+func TestAC25_ReadyGate(t *testing.T) {
+	h := newHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusOther, provider.StatusOther)
+	h.worker.SetProbeSequence(ProbeLoading)
+
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	h.Settle(t0.Add(40 * time.Second))
+	if snap := h.ctl.Status(); snap.Public != "LOADING_MODEL" {
+		t.Fatalf("Public = %q, want LOADING_MODEL", snap.Public)
+	}
+
+	h.Settle(t0.Add(899 * time.Second))
+	if h.prov.Calls("destroy") != 0 {
+		t.Fatalf("Calls(destroy) before t=901 = %d, want 0", h.prov.Calls("destroy"))
+	}
+	if snap := h.ctl.Status(); snap.Public != "LOADING_MODEL" {
+		t.Fatalf("Public at t=900 = %q, want LOADING_MODEL", snap.Public)
+	}
+
+	h.Settle(t0.Add(900 * time.Second))
+	if h.prov.Calls("destroy") != 1 {
+		t.Fatalf("Calls(destroy) at t=901 = %d, want 1", h.prov.Calls("destroy"))
+	}
+}
+
+// SSRF boundary and host key: recovery must dial the address the provider
+// reports right now, never the one persisted in the document, and a pinned
+// host key that no longer matches must destroy without ever creating again.
+func TestAC26_SSRFBoundaryAndHostKey(t *testing.T) {
+	seed := func(t *testing.T, h *harness, t0 time.Time) {
+		doc, _, err := h.store.Load(context.Background())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		doc.Generation = 4
+		doc.Desired = store.DesiredRunning
+		idle := t0.Add(1800 * time.Second)
+		doc.Instance = &store.Instance{
+			State: Ready.String(), Label: "vkllm:iid:4", ProviderID: "9",
+			SSHHost: "198.51.100.7", SSHPort: 2222,
+			CreatedAt: t0, ReadyAt: &t0, IdleDeadline: &idle,
+		}
+		h.store.Put(doc)
+	}
+
+	t.Run("dials the provider's live address, never the stored one", func(t *testing.T) {
+		h := buildHarness(t)
+		t0 := h.clk.Now()
+		h.prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:4", Status: provider.StatusRunning, SSHHost: "192.0.2.10", SSHPort: 41022})
+		seed(t, h, t0)
+		h.worker.SetProbeSequence(ProbeReady)
+		h.run()
+
+		h.Settle(t0.Add(time.Second))
+		if h.dial.Calls() != 1 {
+			t.Fatalf("Calls(dial) = %d, want 1", h.dial.Calls())
+		}
+		if got := h.dial.LastAddr(); got != "192.0.2.10:41022" {
+			t.Fatalf("LastAddr = %q, want 192.0.2.10:41022 (never the stored 198.51.100.7:2222)", got)
+		}
+
+		doc, _, err := h.store.Load(context.Background())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if doc.Instance.SSHHost != "198.51.100.7" || doc.Instance.SSHPort != 2222 {
+			t.Fatalf("stored address = %s:%d, want unchanged 198.51.100.7:2222", doc.Instance.SSHHost, doc.Instance.SSHPort)
+		}
+	})
+
+	t.Run("a flaky recovery get never dials before it resolves", func(t *testing.T) {
+		h := buildHarness(t)
+		t0 := h.clk.Now()
+		h.prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:4", Status: provider.StatusRunning, SSHHost: "192.0.2.10", SSHPort: 41022})
+		h.prov.FailNext("get", 6, &provider.Error{Op: "get", Class: provider.Retryable, Err: errors.New("fake transient get failure")})
+		seed(t, h, t0)
+		h.worker.SetProbeSequence(ProbeReady)
+		h.run()
+
+		h.Settle(t0)
+		if h.dial.Calls() != 0 {
+			t.Fatalf("Calls(dial) at t=0 = %d, want 0", h.dial.Calls())
+		}
+	})
+
+	t.Run("a host key mismatch destroys without ever creating", func(t *testing.T) {
+		h := buildHarness(t)
+		t0 := h.clk.Now()
+		h.prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:4", Status: provider.StatusRunning, SSHHost: "192.0.2.10", SSHPort: 41022})
+		h.dial.FailAll(tunnel.ErrHostKeyMismatch)
+		seed(t, h, t0)
+		h.run()
+
+		h.Settle(t0)
+		if h.prov.Calls("destroy") != 1 {
+			t.Fatalf("Calls(destroy) at t=0 = %d, want 1", h.prov.Calls("destroy"))
+		}
+		if h.prov.Calls("create") != 0 {
+			t.Fatalf("Calls(create) = %d, want 0", h.prov.Calls("create"))
+		}
+	})
+}
+
+// Worker crash: two consecutive suspect-probe misses, 5s apart, destroy the
+// instance; a Ready probe on the second check saves it; a balance already
+// under the floor denies a fresh Start before ever searching.
+func TestAC27_WorkerCrash(t *testing.T) {
+	setup := func(t *testing.T) (*harness, time.Time) {
+		h := buildHarness(t)
+		t0 := h.clk.Now()
+		seedAdoptedReady(h, 3, t0, time.Time{}, t0.Add(1800*time.Second))
+		h.worker.SetProbeSequence(ProbeReady)
+		h.run()
+		h.Settle(t0.Add(time.Second))
+		if _, err := h.ctl.Admit(3); err != nil {
+			t.Fatalf("Admit: %v", err)
+		}
+		return h, t0
+	}
+
+	t.Run("two misses destroy the instance", func(t *testing.T) {
+		h, t0 := setup(t)
+		closed := make(chan struct{}, 1)
+		h.ctl.mu.Lock()
+		h.ctl.conn = tunnel.NewConn(nil, func() error { closed <- struct{}{}; return nil }, "sha256:fake")
+		h.ctl.mu.Unlock()
+
+		h.Settle(t0.Add(10 * time.Second))
+		h.worker.SetProbeSequence(ProbeUnreachable)
+		beforeProbes := h.worker.probes() // setup's own recovery suspect-probe already ran once
+		h.ctl.ReportUpstreamFailure(3)
+		h.Settle(t0.Add(10 * time.Second))
+		if got := h.worker.probes() - beforeProbes; got != 1 {
+			t.Fatalf("probes right after the first miss = %d, want 1", got)
+		}
+
+		h.Settle(t0.Add(15 * time.Second))
+		if got := h.worker.probes() - beforeProbes; got != 2 {
+			t.Fatalf("probes at t=15 = %d, want 2", got)
+		}
+		if h.prov.Calls("destroy") != 1 {
+			t.Fatalf("Calls(destroy) at t=15 = %d, want 1", h.prov.Calls("destroy"))
+		}
+		select {
+		case <-closed:
+		default:
+			t.Fatal("Conn.Close was never called")
+		}
+		doc, _, err := h.store.Load(context.Background())
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if doc.Desired != store.DesiredStopped {
+			t.Fatalf("Desired = %q, want STOPPED", doc.Desired)
+		}
+	})
+
+	t.Run("a Ready probe at the second check saves the instance", func(t *testing.T) {
+		h, t0 := setup(t)
+
+		h.Settle(t0.Add(10 * time.Second))
+		h.worker.SetProbeSequence(ProbeUnreachable, ProbeReady)
+		h.ctl.ReportUpstreamFailure(3)
+
+		h.Settle(t0.Add(15 * time.Second))
+		if h.prov.Calls("destroy") != 0 {
+			t.Fatalf("Calls(destroy) at t=15 = %d, want 0", h.prov.Calls("destroy"))
+		}
+	})
+
+	t.Run("a balance already under the floor denies Start before searching", func(t *testing.T) {
+		h := newHarness(t)
+		h.prov.SetBalance(1_590_000)
+
+		t0 := h.clk.Now().Add(time.Second)
+		h.Settle(t0)
+		snap, err := h.ctl.Start(context.Background())
+		if !errors.Is(err, ErrGPUUnavailable) {
+			t.Fatalf("Start = %v, want ErrGPUUnavailable", err)
+		}
+		if snap.Unavailable != "balance_low" {
+			t.Fatalf("Unavailable = %q, want balance_low", snap.Unavailable)
+		}
+		if h.prov.Calls("search") != 0 {
+			t.Fatalf("Calls(search) = %d, want 0", h.prov.Calls("search"))
+		}
+	})
 }
