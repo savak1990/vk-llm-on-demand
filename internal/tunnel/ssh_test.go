@@ -80,9 +80,11 @@ func TestKeepaliveClose(t *testing.T) {
 	client := &http.Client{Transport: conn.RoundTripper()}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := client.Get("http://worker/"); err != nil {
+		resp, err := client.Get("http://worker/")
+		if err != nil {
 			return // the tunnel closed itself, as expected
 		}
+		_ = resp.Body.Close()
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("keepalive misses never closed the Conn within 2s")

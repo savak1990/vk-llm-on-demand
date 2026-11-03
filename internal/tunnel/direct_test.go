@@ -62,7 +62,11 @@ func TestDirectCloseStopsNewConnections(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	client := &http.Client{Transport: conn.RoundTripper()}
-	if _, err := client.Get("http://worker/"); err == nil {
+	resp, err := client.Get("http://worker/")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
 		t.Fatal("Get after Close: want error, got nil")
 	}
 }
