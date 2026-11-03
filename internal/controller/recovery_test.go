@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
+	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
@@ -316,5 +318,98 @@ func TestRunRecoveryLoadingResumesToReady(t *testing.T) {
 	}
 	if d := dialer.dials(); len(d) == 0 || d[0].HostKey != "fp" {
 		t.Fatalf("dials = %+v, want the pinned host key", d)
+	}
+}
+
+// failNthLoad fails exactly the nth Load and passes every other call through.
+type failNthLoad struct {
+	store.Store
+	mu      sync.Mutex
+	n, fail int
+}
+
+func (s *failNthLoad) Load(ctx context.Context) (store.Document, store.Version, error) {
+	s.mu.Lock()
+	s.n++
+	hit := s.n == s.fail
+	s.mu.Unlock()
+	if hit {
+		return store.Document{}, "", errors.New("transient load failure")
+	}
+	return s.Store.Load(ctx)
+}
+
+// No Ready row ever drains a desired=STOPPED instance, so a stop-write lost
+// during recovery must rerun recovery rather than strand the GPU.
+func TestRunRecoveryStoppedReadyRetriesFailedStop(t *testing.T) {
+	c, prov, clk, _, _ := newTestController(t)
+	c.deps.Config.IdleShutdownEnabled = false
+	prov.SetBalance(100_000_000)
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3", Status: provider.StatusRunning, SSHHost: "h", SSHPort: 22})
+	readyAt := clk.Now()
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Desired = store.DesiredStopped
+		d.Instance = &store.Instance{State: Ready.String(), Label: "vkllm:iid:3", ProviderID: "9", ReadyAt: &readyAt}
+	})
+	c.deps.Store = &failNthLoad{Store: c.deps.Store, fail: 2} // recoverOnce's Load passes, the stop's own Load fails
+
+	runLoop(t, c)
+	clk.BlockUntil(1)
+	clk.Advance(recoverRetry)
+	waitFor(t, "instance destroyed", func() bool { return c.stateNow() == Idle && loadDoc(t, c).Instance == nil })
+	if _, err := prov.GetInstance(context.Background(), 9); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("GetInstance(9) = %v, want ErrNotFound", err)
+	}
+	if d := c.deps.Dialer.(*recordDialer).dials(); len(d) != 0 {
+		t.Fatalf("dials = %v, want none for a stopped instance", d)
+	}
+}
+
+func runRecoveredReady(t *testing.T, seq ...ProbeStatus) (*Controller, *fakeprovider.Fake, *fakeclock.Clock, *fakeWorker) {
+	t.Helper()
+	c, prov, clk, _, worker := newTestController(t)
+	worker.SetProbeSequence(seq...)
+	prov.SetBalance(100_000_000)
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3", Status: provider.StatusRunning, SSHHost: "h", SSHPort: 22})
+	readyAt := clk.Now()
+	future := clk.Now().Add(30 * time.Minute)
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Desired = store.DesiredRunning
+		d.Instance = &store.Instance{State: Ready.String(), Label: "vkllm:iid:3", ProviderID: "9", HostKeyFingerprint: "fp", ReadyAt: &readyAt, IdleDeadline: &future}
+	})
+	runLoop(t, c)
+	waitFor(t, "first recovery probe", func() bool { return worker.probes() >= 1 })
+	return c, prov, clk, worker
+}
+
+func TestRunRecoveryOneProbeMissKeepsReady(t *testing.T) {
+	c, prov, clk, worker := runRecoveredReady(t, ProbeUnreachable, ProbeReady)
+	for i := 0; i < 20 && worker.probes() < 2; i++ {
+		clk.Advance(time.Second)
+		time.Sleep(2 * time.Millisecond)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if n := prov.Calls("destroy"); n != 0 {
+		t.Fatalf("Calls(destroy) = %d, want 0 after a single miss", n)
+	}
+	if s := c.stateNow(); s != Ready {
+		t.Fatalf("state = %v, want Ready after a single miss", s)
+	}
+	if n := worker.probes(); n < 2 {
+		t.Fatalf("probes = %d, want the 5s follow-up probe", n)
+	}
+}
+
+func TestRunRecoveryTwoProbeMissesDestroy(t *testing.T) {
+	c, prov, clk, _ := runRecoveredReady(t, ProbeUnreachable, ProbeUnreachable)
+	for i := 0; i < 20 && prov.Calls("destroy") == 0; i++ {
+		clk.Advance(time.Second)
+		time.Sleep(2 * time.Millisecond)
+	}
+	waitFor(t, "instance destroyed", func() bool { return c.stateNow() == Idle && loadDoc(t, c).Instance == nil })
+	if _, err := prov.GetInstance(context.Background(), 9); !errors.Is(err, provider.ErrNotFound) {
+		t.Fatalf("GetInstance(9) = %v, want ErrNotFound", err)
 	}
 }

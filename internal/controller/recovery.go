@@ -77,7 +77,10 @@ func (c *Controller) recoverOnce(ctx context.Context) error {
 	switch {
 	case next == Ready && (idleRuleFires(f) || lifetimeExpired(f) || doc.Desired == store.DesiredStopped):
 		// T22 then T25: the same writes as a live idle stop, so desired ends STOPPED.
-		c.handleEvent(ctx, Event{Kind: EvStop, Gen: doc.Generation})
+		// A failed stop reruns recovery: no Ready row drains a desired=STOPPED instance later.
+		if err := c.processEvent(ctx, Event{Kind: EvStop, Gen: doc.Generation}); err != nil {
+			return err
+		}
 		c.handleEvent(ctx, Event{Kind: EvDeadlineExpired, Gen: doc.Generation})
 	case next == Ready:
 		if id, ok := providerIDOf(doc); ok {

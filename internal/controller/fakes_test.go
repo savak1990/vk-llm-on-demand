@@ -195,6 +195,7 @@ type fakeWorker struct {
 	mu         sync.Mutex
 	probeSeq   []ProbeStatus
 	probeIdx   int
+	probeCalls int
 	keyCalls   int
 	buildCalls int
 }
@@ -226,6 +227,7 @@ func (w *fakeWorker) BuildCreate(offer provider.Offer, label, workerKey string) 
 func (w *fakeWorker) Probe(_ context.Context, _ http.RoundTripper, _, _ string) (ProbeStatus, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.probeCalls++
 	if len(w.probeSeq) == 0 {
 		return ProbeUnreachable, nil
 	}
@@ -234,6 +236,12 @@ func (w *fakeWorker) Probe(_ context.Context, _ http.RoundTripper, _, _ string) 
 		w.probeIdx++
 	}
 	return s, nil
+}
+
+func (w *fakeWorker) probes() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.probeCalls
 }
 
 func (w *fakeWorker) Scrape(context.Context, http.RoundTripper) error { return nil }
