@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -142,6 +143,12 @@ type Controller struct {
 
 	destroyRetryMu sync.Mutex
 	destroyRetryN  int // trailing failed-destroy count since Destroying was last entered; backoff = min(5m, 10s*2^n)
+
+	reconciling    atomic.Bool
+	reconcileMu    sync.Mutex
+	orphanObserved map[provider.InstanceID]int // keyed by id, not label: a duplicate shares the active instance's label
+	activeLabel    string
+	activeObserved int // consecutive lists missing activeLabel
 }
 
 // New validates the configuration and builds a Controller; it does not
@@ -163,6 +170,7 @@ func New(d Deps) (*Controller, error) {
 		wake:           make(chan struct{}, 1),
 		stages:         make(map[string]time.Duration),
 		stageEnteredAt: make(map[string]time.Time),
+		orphanObserved: make(map[provider.InstanceID]int),
 	}, nil
 }
 
