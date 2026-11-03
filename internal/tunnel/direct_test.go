@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 )
 
@@ -63,5 +64,35 @@ func TestDirectCloseStopsNewConnections(t *testing.T) {
 	client := &http.Client{Transport: conn.RoundTripper()}
 	if _, err := client.Get("http://worker/"); err == nil {
 		t.Fatal("Get after Close: want error, got nil")
+	}
+}
+
+func TestDirectCloseIsSafeConcurrentlyAndTwice(t *testing.T) {
+	addr := startEchoHTTPServer(t)
+	conn, err := NewDirect(addr).Dial(context.Background(), Instance{})
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+
+	const n = 10
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = conn.Close()
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Close() goroutine %d: %v, want nil", i, err)
+		}
+	}
+
+	if err := conn.Close(); err != nil {
+		t.Fatalf("Close() again: %v, want nil", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -22,6 +23,7 @@ func (d *directDialer) Dial(ctx context.Context, _ Instance) (*Conn, error) {
 	_ = probe.Close()
 
 	closed := make(chan struct{})
+	var once sync.Once
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			select {
@@ -35,11 +37,7 @@ func (d *directDialer) Dial(ctx context.Context, _ Instance) (*Conn, error) {
 	return &Conn{
 		rt: transport,
 		closer: func() error {
-			select {
-			case <-closed:
-			default:
-				close(closed)
-			}
+			once.Do(func() { close(closed) })
 			transport.CloseIdleConnections()
 			return nil
 		},
