@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
@@ -17,7 +16,7 @@ import (
 func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 	offers, err := c.deps.Provider.SearchOffers(ctx, e.filter)
 	if err != nil {
-		c.postEvent(Event{Kind: EvNoOffer, Reason: "provider_error"})
+		c.postEvent(Event{Kind: EvNoOffer, Err: err, Reason: "provider_error"})
 		return
 	}
 	if len(offers) == 0 {
@@ -27,9 +26,7 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 	c.postEvent(Event{Kind: EvOfferChosen, Offer: offers[0]})
 }
 
-// dispatchCreate is saga step 2 (price assertion before the call) and
-// step 3 (the call itself); the op and label were already committed by
-// T5's mutate before this ever runs (C-2).
+// Price is asserted before the provider call so an over-cap offer never reaches it.
 func dispatchCreate(ctx context.Context, c *Controller, e effCreate) {
 	if err := c.deps.Budget.AssertPrice(e.offer.Hourly.USD(), c.deps.Config.MaxHourlyPriceUSD); err != nil {
 		c.postEvent(Event{Kind: EvCreateFailed, Gen: e.gen, Err: err, Class: provider.Fatal})
@@ -55,8 +52,7 @@ func dispatchCreate(ctx context.Context, c *Controller, e effCreate) {
 	c.postEvent(Event{Kind: EvCreated, Gen: e.gen, ProviderID: id})
 }
 
-// dispatchGet is saga step 5's boot-polling GetInstance call. A failed
-// read posts nothing (C-9); the next poll tick retries.
+// A failed read posts nothing, so the next poll tick retries instead of this goroutine retrying blindly.
 func dispatchGet(ctx context.Context, c *Controller, e effGet) {
 	inst, err := c.deps.Provider.GetInstance(ctx, e.id)
 	if err != nil {
@@ -69,9 +65,8 @@ func dispatchGet(ctx context.Context, c *Controller, e effGet) {
 	})
 }
 
-// dispatchDial is saga step 5's link step: dial using only the address
-// from the GetInstance result the caller already observed (NFR-8.4),
-// never from the document.
+// Dials the address the caller just observed, never one read back from
+// the document, so a stale or edited document can't redirect the connection.
 func dispatchDial(ctx context.Context, c *Controller, e effDial) {
 	conn, err := c.deps.Dialer.Dial(ctx, e.inst)
 	if err != nil {
@@ -106,25 +101,6 @@ func dispatchProbe(ctx context.Context, c *Controller, e effProbe) {
 		return
 	}
 	c.postEvent(Event{Kind: EvHealthOK, Gen: e.gen})
-}
-
-// buildSearchFilter is saga step 1's filter: the configured shape plus
-// the live, unexpired denylist (expired entries are pruned elsewhere,
-// in the reconcile tick's own CAS — this function just skips them).
-func buildSearchFilter(f config.ProviderFilter, maxHourlyUSD float64, denylist []store.DenyEntry, now time.Time) provider.OfferFilter {
-	excl := make([]int64, 0, len(denylist))
-	for _, d := range denylist {
-		if d.Until.After(now) {
-			excl = append(excl, d.MachineID)
-		}
-	}
-	return provider.OfferFilter{
-		GPUName: f.GPUName, NumGPUs: f.NumGPUs, MinCPUCores: f.MinCPUCores,
-		MinCPURAMGB: f.MinCPURAMGB, MinDiskGB: f.MinDiskGB, MinReliability: f.MinReliability,
-		MinInetDownMBps: f.MinInetDownMBps, MinDiskBwMBps: f.MinDiskBwMBps, MinCUDA: f.MinCUDA,
-		Geolocation: f.Geolocation, MaxHourly: provider.Money(maxHourlyUSD * 1_000_000),
-		ExcludeMachineIDs: excl,
-	}
 }
 
 // nextCreateAllowedAt is saga step 7's backoff: n trailing create-* ops

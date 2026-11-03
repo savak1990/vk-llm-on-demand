@@ -45,7 +45,7 @@ func recvEvent(t *testing.T, c *Controller) (Event, bool) {
 func TestDispatchSearchFindsOffer(t *testing.T) {
 	c, prov, _, _, _ := newTestController(t)
 	prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
-	dispatchSearch(context.Background(), c, effSearch{filter: buildSearchFilter(config.ProviderFilter{}, 0.80, nil, time.Time{})})
+	dispatchSearch(context.Background(), c, effSearch{filter: provider.OfferFilter{MaxHourly: 800000}})
 	ev, ok := recvEvent(t, c)
 	if !ok || ev.Kind != EvOfferChosen || ev.Offer.ID != 11 {
 		t.Fatalf("event = %+v, ok=%v", ev, ok)
@@ -58,6 +58,16 @@ func TestDispatchSearchNoOffer(t *testing.T) {
 	ev, ok := recvEvent(t, c)
 	if !ok || ev.Kind != EvNoOffer || ev.Reason != "no_offer" {
 		t.Fatalf("event = %+v, ok=%v", ev, ok)
+	}
+}
+
+func TestDispatchSearchProviderErrorSetsErr(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	prov.FailNext("search", 1, context.DeadlineExceeded)
+	dispatchSearch(context.Background(), c, effSearch{})
+	ev, ok := recvEvent(t, c)
+	if !ok || ev.Kind != EvNoOffer || ev.Err == nil {
+		t.Fatalf("event = %+v, ok=%v, want EvNoOffer with Err set", ev, ok)
 	}
 }
 
@@ -104,10 +114,9 @@ func TestDispatchGetFailureReadPostsNothing(t *testing.T) {
 
 func TestDispatchDialPlainFailurePostsNothing(t *testing.T) {
 	c, _, _, _, _ := newTestController(t)
-	// Nothing listens on :1; dispatchDial's job here is only to prove a
-	// plain (non-host-key) failure posts no event, so the next poll tick
-	// retries. The success path (LinkUp with a real HostKey) needs a real
-	// or fake-SSH listener and lives in Task 10's harness, where one exists.
+	// Nothing listens on :1, so this only proves a plain dial failure posts
+	// no event; the success path needs a live listener and is covered
+	// elsewhere.
 	c.deps.Dialer = tunnel.NewDirect("127.0.0.1:1")
 	dispatchDial(context.Background(), c, effDial{inst: tunnel.Instance{Host: "127.0.0.1", Port: 1}, gen: 1})
 	if _, ok := recvEvent(t, c); ok {
@@ -156,20 +165,5 @@ func TestNextCreateAllowedAt(t *testing.T) {
 	ops = append(ops, store.Op{Key: "create-4", FinishedAt: &f3, Outcome: "ready"})
 	if got := nextCreateAllowedAt(ops); !got.IsZero() {
 		t.Fatalf("ready resets: got %v, want zero", got)
-	}
-}
-
-func TestBuildSearchFilterExcludesOnlyUnexpiredDenylist(t *testing.T) {
-	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	denylist := []store.DenyEntry{
-		{MachineID: 1, Until: now.Add(time.Hour)},  // still denied
-		{MachineID: 2, Until: now.Add(-time.Hour)}, // expired
-	}
-	f := buildSearchFilter(config.ProviderFilter{GPUName: "L40S"}, 0.80, denylist, now)
-	if len(f.ExcludeMachineIDs) != 1 || f.ExcludeMachineIDs[0] != 1 {
-		t.Fatalf("ExcludeMachineIDs = %v, want [1]", f.ExcludeMachineIDs)
-	}
-	if f.MaxHourly != provider.Money(800000) {
-		t.Fatalf("MaxHourly = %v, want 800000", f.MaxHourly)
 	}
 }
