@@ -99,18 +99,32 @@ func TestAdmitVsDrainRace(t *testing.T) {
 			}
 		}()
 	}
+	var drainWG sync.WaitGroup
+	drainWG.Add(1)
 	go func() {
+		defer drainWG.Done()
 		time.Sleep(time.Millisecond)
 		c.mu.Lock()
 		c.state = Draining
 		c.mu.Unlock()
 	}()
 	wg.Wait()
+	drainWG.Wait()
 	if admitted != ended {
 		t.Fatalf("admitted=%d ended=%d, every admitted request must end", admitted, ended)
 	}
-	if c.inFlight < 0 {
-		t.Fatalf("inFlight went negative: %d", c.inFlight)
+
+	c.mu.Lock()
+	inFlight, state := c.inFlight, c.state
+	c.mu.Unlock()
+	if inFlight != 0 {
+		t.Fatalf("inFlight = %d, want 0 once every admitted call has ended", inFlight)
+	}
+	if state != Draining {
+		t.Fatalf("state = %v, want Draining", state)
+	}
+	if admitted <= 0 || admitted >= 1000 {
+		t.Fatalf("admitted = %d, want a genuine mix of admitted and rejected calls (0 < admitted < 1000)", admitted)
 	}
 }
 
@@ -170,6 +184,36 @@ func TestReportUpstreamFailureTwoMissesPostsWorkerFailed(t *testing.T) {
 	ev, ok := recvEvent(t, c)
 	if !ok || ev.Kind != EvWorkerFailed || ev.Gen != 3 {
 		t.Fatalf("event = %+v, ok=%v", ev, ok)
+	}
+}
+
+func TestReportUpstreamFailureIsSingleFlight(t *testing.T) {
+	c := readyController(t)
+	clk := fakeclock.New(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	c.deps.Clock = clk
+	worker := c.deps.Worker.(*fakeWorker)
+	worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable)
+
+	c.ReportUpstreamFailure(3)
+	clk.BlockUntil(1) // the first probe is now parked between its two attempts
+
+	c.mu.Lock()
+	suspect := c.suspect
+	c.mu.Unlock()
+	if !suspect {
+		t.Fatal("suspect flag must be set while the first probe is in flight")
+	}
+
+	c.ReportUpstreamFailure(3) // must be a no-op: a probe already owns the flight
+
+	clk.Advance(5 * time.Second)
+
+	ev, ok := recvEvent(t, c)
+	if !ok || ev.Kind != EvWorkerFailed || ev.Gen != 3 {
+		t.Fatalf("event = %+v, ok=%v", ev, ok)
+	}
+	if _, ok := recvEvent(t, c); ok {
+		t.Fatal("a second ReportUpstreamFailure call while one probe is in flight must not spawn a second probe")
 	}
 }
 

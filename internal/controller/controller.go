@@ -119,6 +119,7 @@ type Controller struct {
 
 	activityPending bool
 	activityAt      time.Time
+	suspect         bool
 
 	timersMu sync.Mutex
 	timers   map[timerKind]time.Time

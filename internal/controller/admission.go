@@ -84,12 +84,13 @@ func computeIdleDeadline(readyAt, lastInferenceFinishedAt *time.Time, timeout ti
 }
 
 // ObserveFirstToken records the first_token stage once per generation;
-// a later call for the same generation is a no-op.
+// a later call for the same generation is a no-op. mu is held for the
+// whole check so a generation change can't land between the read and
+// the write.
 func (c *Controller) ObserveFirstToken(gen int64, d time.Duration) {
 	c.mu.Lock()
-	cur := c.generation
-	c.mu.Unlock()
-	if gen != cur {
+	defer c.mu.Unlock()
+	if gen != c.generation {
 		return
 	}
 	c.stagesMu.Lock()
@@ -99,13 +100,16 @@ func (c *Controller) ObserveFirstToken(gen int64, d time.Duration) {
 	c.stagesMu.Unlock()
 }
 
-// ReportUpstreamFailure probes now and again 5s later (on the
-// controller's own clock, so tests can fast-forward it); two
-// consecutive non-Ready results raise WorkerFailed (T24).
+// ReportUpstreamFailure is single-flight: it probes twice, 5s apart on
+// the clock, and raises WorkerFailed (T24) only if both miss; a call
+// while a probe is already in flight is a no-op.
 func (c *Controller) ReportUpstreamFailure(gen int64) {
 	c.mu.Lock()
 	cur, conn := c.generation, c.conn
-	live := gen == cur && (c.state == Ready || c.state == Serving) && conn != nil
+	live := gen == cur && (c.state == Ready || c.state == Serving) && conn != nil && !c.suspect
+	if live {
+		c.suspect = true
+	}
 	c.mu.Unlock()
 	if !live {
 		return
@@ -116,8 +120,16 @@ func (c *Controller) ReportUpstreamFailure(gen int64) {
 func (c *Controller) suspectProbe(gen int64, conn interface {
 	RoundTripper() http.RoundTripper
 }) {
+	defer func() {
+		c.mu.Lock()
+		c.suspect = false
+		c.mu.Unlock()
+	}()
 	seed, err := c.deps.WorkerSeed()
 	if err != nil {
+		if c.deps.Log != nil {
+			c.deps.Log.Error("controller: worker seed read failed", "gen", gen, "err", err)
+		}
 		return
 	}
 	key := c.deps.Worker.WorkerKey(seed, c.deps.InstallationID, gen)
