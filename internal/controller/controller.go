@@ -113,9 +113,7 @@ type Controller struct {
 	mu         sync.Mutex
 	state      State
 	generation int64
-	label      string
 	inFlight   int
-	admitting  bool
 	conn       *tunnel.Conn
 	failing    bool
 	since      time.Time

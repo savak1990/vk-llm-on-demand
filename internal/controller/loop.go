@@ -99,6 +99,9 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	if err != nil {
 		return err
 	}
+	if ev.Err != nil {
+		c.setLastError(ev.Err.Error())
+	}
 
 	now := c.deps.Clock.Now()
 	ev.Reason = c.gateReason(state, ev, doc, now)
@@ -122,6 +125,9 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 			return txErr
 		}
 		doc = committed
+		if reason, ok := shutdownReason(state, next, ev, inFlight, doc, c.deps.Config, now); ok {
+			shutdownsTotal.WithLabelValues(reason).Inc()
+		}
 	}
 
 	// Nothing can be admitted before a generation reaches Ready, so a new
@@ -134,6 +140,8 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	c.generation = doc.Generation
 	if next != state {
 		c.state = next
+		c.since = now
+		setGPUState(PublicState(next, c.failing))
 	}
 	c.mu.Unlock()
 
@@ -533,6 +541,9 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err := c.recover(ctx); err != nil {
 		return err
 	}
+	c.mu.Lock()
+	setGPUState(PublicState(c.state, c.failing))
+	c.mu.Unlock()
 
 	for {
 		for c.step(ctx) {
@@ -578,11 +589,4 @@ func (c *Controller) callerEvent(ctx context.Context, ev Event) (Snapshot, error
 		}
 	}
 	return c.Status(), store.ErrRetriesExhausted
-}
-
-// Status is a placeholder until the status work replaces it.
-func (c *Controller) Status() Snapshot {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return Snapshot{State: c.state, Public: PublicState(c.state, c.failing)}
 }

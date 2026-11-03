@@ -107,6 +107,7 @@ func (c *Controller) ObserveFirstToken(gen int64, d time.Duration) {
 	c.stagesMu.Lock()
 	if _, already := c.stages["first_token"]; !already {
 		c.stages["first_token"] = d
+		coldstartStageSeconds.WithLabelValues("first_token").Observe(d.Seconds())
 	}
 	c.stagesMu.Unlock()
 }

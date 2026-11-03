@@ -112,7 +112,12 @@ func (c *Controller) reconcileCompareInstances(ctx context.Context, doc store.Do
 			continue
 		}
 		if c.orphanObserved[inst.ID] >= 2 && mayDestroy(inst.Label, c.deps.InstallationID, doc.Generation) {
-			go destroyConfirmed(ctx, c, inst.ID)
+			id := inst.ID
+			go func() {
+				if destroyConfirmed(ctx, c, id) {
+					shutdownsTotal.WithLabelValues("orphan").Inc()
+				}
+			}()
 		}
 	}
 	for id := range c.orphanObserved {

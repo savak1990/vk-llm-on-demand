@@ -320,8 +320,8 @@ func TestStopRetriesOnStale(t *testing.T) {
 	if _, err := c.Stop(context.Background(), false); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if s.loads != 4 {
-		t.Fatalf("Load calls = %d, want 4 (stale attempt, then a clean retry)", s.loads)
+	if s.loads != 5 {
+		t.Fatalf("Load calls = %d, want 5 (stale attempt, then a clean retry, then Status's own Load)", s.loads)
 	}
 }
 
