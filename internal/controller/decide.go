@@ -42,6 +42,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	case (state == Idle || state == Draining || state == Destroying) && ev.Reason != "" && ev.Reason != "backoff" &&
 		(ev.Kind == EvStart || ((ev.Kind == EvTick || ev.Kind == EvGone) && state == Idle && f.Doc.Desired == store.DesiredRunning)):
 		return state, func(d *store.Document) error {
+			if state == Idle && d.Instance != nil {
+				return errStale
+			}
 			d.Desired = store.DesiredStopped
 			return nil
 		}, nil
@@ -91,6 +94,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// back to Idle; only Stop writes a CAS.
 	case state == Searching && ev.Kind == EvStop:
 		return Idle, func(d *store.Document) error {
+			if d.Instance != nil {
+				return errStale
+			}
 			d.Desired = store.DesiredStopped
 			return nil
 		}, nil
@@ -189,6 +195,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance == nil || d.Generation != ev.Gen {
 				return errStale
 			}
+			if f.Budget != nil {
+				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH)
+			}
 			d.Instance.State = Destroying.String()
 			finishOp(d, createOpKey(d.Generation), "duplicate_label", f.Now)
 			return nil
@@ -199,6 +208,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	case state == Booting && ev.Kind == EvProviderObserved && ev.Status == provider.StatusRunning && ev.SSHHost != "":
 		return Booting, func(d *store.Document) error {
 			if d.Instance == nil || d.Generation != ev.Gen {
+				return errStale
+			}
+			if d.Instance.State != Booting.String() {
 				return errStale
 			}
 			d.Instance.SSHHost = ev.SSHHost
@@ -241,8 +253,15 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// T15: startup took too long — destroy, denylist the machine for
 	// an hour, and keep desired so the backoff retries elsewhere.
 	case isCreatingBootingOrLoading(state) && ev.Kind == EvDeadlineExpired:
+		snapshotState := ""
+		if f.Doc.Instance != nil {
+			snapshotState = f.Doc.Instance.State
+		}
 		return Destroying, func(d *store.Document) error {
 			if d.Instance == nil || d.Generation != ev.Gen {
+				return errStale
+			}
+			if d.Instance.State != snapshotState {
 				return errStale
 			}
 			if d.Instance.CreatedAt.Add(f.Cfg.StartupTimeout).After(f.Now) {
@@ -261,8 +280,15 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// destroy at once.
 	case (ev.Kind == EvStop || ev.Kind == EvBudgetExhausted) &&
 		(state == Booting || state == Loading || (state == Creating && f.Doc.Instance != nil && f.Doc.Instance.ProviderID != "")):
+		snapshotState := ""
+		if f.Doc.Instance != nil {
+			snapshotState = f.Doc.Instance.State
+		}
 		return Destroying, func(d *store.Document) error {
 			if d.Instance == nil || d.Generation != f.Doc.Generation {
+				return errStale
+			}
+			if d.Instance.State != snapshotState {
 				return errStale
 			}
 			d.Instance.State = Destroying.String()
@@ -416,6 +442,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// sure desired is STOPPED; everything else is already in motion.
 	case (state == Idle || state == Draining || state == Destroying) && ev.Kind == EvStop:
 		return state, func(d *store.Document) error {
+			if state == Idle && d.Instance != nil {
+				return errStale
+			}
 			d.Desired = store.DesiredStopped
 			return nil
 		}, nil
