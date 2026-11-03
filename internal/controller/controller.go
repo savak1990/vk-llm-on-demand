@@ -149,6 +149,11 @@ type Controller struct {
 	orphanObserved map[provider.InstanceID]int // keyed by id, not label: a duplicate shares the active instance's label
 	activeLabel    string
 	activeObserved int // consecutive lists missing activeLabel
+	terminalSeen   int // consecutive lists showing activeLabel in a terminal status
+
+	pollTerminalMu   sync.Mutex
+	pollTerminalGen  int64
+	pollTerminalSeen int // consecutive startup-poll gets with a terminal status for pollTerminalGen
 }
 
 // New validates the configuration and builds a Controller; it does not

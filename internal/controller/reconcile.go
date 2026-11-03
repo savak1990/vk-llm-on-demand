@@ -48,18 +48,22 @@ func (c *Controller) reconcileOnce(ctx context.Context) {
 // raises is the only periodic trigger for the lifetime and drain-complete rules.
 func (c *Controller) reconcilePruneAndBudget(ctx context.Context, balance provider.Money, known bool) {
 	now := c.deps.Clock.Now()
-	_, _ = store.Transition(ctx, c.deps.Store, c.flushAndRun(func(d *store.Document) error {
+	_, err := store.Transition(ctx, c.deps.Store, c.flushAndRun(func(d *store.Document) error {
 		d.MachineDenylist = slices.DeleteFunc(d.MachineDenylist, func(e store.DenyEntry) bool { return !e.Until.After(now) })
 		c.deps.Budget.Rollover(d, now)
 		c.deps.Budget.RefreshOpenEntry(d, now)
 		return nil
 	}))
+	if err != nil && c.deps.Log != nil {
+		c.deps.Log.Warn("controller: reconcile prune failed", "err", err)
+	}
 	doc, _, err := c.deps.Store.Load(ctx)
 	if err != nil {
 		return
 	}
 	c.postEvent(Event{Kind: EvTick, Gen: doc.Generation})
-	if doc.Instance == nil {
+	// A balance never read since start is no evidence of a low one; Start's gate still denies on it.
+	if doc.Instance == nil || !known {
 		return
 	}
 	if reason := c.deps.Budget.Allow(doc, balance, known); reason != "" {
@@ -83,6 +87,7 @@ func (c *Controller) reconcileCompareInstances(ctx context.Context, doc store.Do
 		if doc.Instance != nil {
 			if hasID && inst.ID == activeID {
 				active = inst
+				delete(c.orphanObserved, inst.ID)
 				continue
 			}
 			// An id-less instance is a create whose outcome never came back; adopt the lowest id.
@@ -90,6 +95,7 @@ func (c *Controller) reconcileCompareInstances(ctx context.Context, doc store.Do
 				if adopt == nil || inst.ID < adopt.ID {
 					adopt = inst
 				}
+				delete(c.orphanObserved, inst.ID)
 				continue
 			}
 		}
@@ -119,11 +125,14 @@ func (c *Controller) reconcileCompareInstances(ctx context.Context, doc store.Do
 	}
 
 	if doc.Instance == nil {
-		c.activeLabel, c.activeObserved = "", 0
+		c.activeLabel, c.activeObserved, c.terminalSeen = "", 0, 0
 		return
 	}
 	if doc.Instance.Label != c.activeLabel {
-		c.activeLabel, c.activeObserved = doc.Instance.Label, 0
+		c.activeLabel, c.activeObserved, c.terminalSeen = doc.Instance.Label, 0, 0
+	}
+	if active == nil || !active.Status.Terminal() {
+		c.terminalSeen = 0
 	}
 	switch {
 	case adopt != nil:
@@ -132,7 +141,11 @@ func (c *Controller) reconcileCompareInstances(ctx context.Context, doc store.Do
 	case active != nil:
 		c.activeObserved = 0
 		if active.Status.Terminal() {
-			c.postEvent(Event{Kind: EvProviderObserved, Gen: doc.Generation, Status: active.Status, RawStatus: active.RawStatus})
+			c.terminalSeen++
+			if c.terminalSeen >= 2 {
+				c.terminalSeen = 0
+				c.postEvent(Event{Kind: EvProviderObserved, Gen: doc.Generation, Status: active.Status, RawStatus: active.RawStatus})
+			}
 		}
 	default:
 		c.activeObserved++

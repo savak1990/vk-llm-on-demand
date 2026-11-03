@@ -205,10 +205,16 @@ func TestReconcileTable(t *testing.T) {
 			wantEvents: []Event{{Kind: EvCreated, Gen: 4, ProviderID: 11}, {Kind: EvCreated, Gen: 4, ProviderID: 11}},
 		},
 		{
-			name:      "terminal_status_forwarded",
+			name:      "terminal_status_first_observation_only_counts",
 			edit:      ready(3, "9"),
 			instances: []provider.Instance{{ID: 9, Label: "vkllm:iid:3", Status: provider.StatusExited, RawStatus: "exited"}},
 			passes:    1, wantDestroy: 0, wantGen: 3,
+		},
+		{
+			name:      "terminal_status_forwarded_on_second_observation",
+			edit:      ready(3, "9"),
+			instances: []provider.Instance{{ID: 9, Label: "vkllm:iid:3", Status: provider.StatusExited, RawStatus: "exited"}},
+			passes:    2, wantDestroy: 0, wantGen: 3,
 			wantEvents: []Event{{Kind: EvProviderObserved, Gen: 3, Status: provider.StatusExited, RawStatus: "exited"}},
 		},
 		{
@@ -392,4 +398,115 @@ func TestReconcileBudgetExhaustedCarriesGen(t *testing.T) {
 	if len(got) != 2 || got[1] != (Event{Kind: EvBudgetExhausted, Gen: 3, Reason: "budget_exhausted"}) {
 		t.Fatalf("events = %+v, want Tick then BudgetExhausted gen=3", got)
 	}
+}
+
+func drainSteps(c *Controller) {
+	for c.step(context.Background()) {
+	}
+}
+
+// One transient terminal status must not destroy a serving GPU; only a second consecutive one does.
+func TestReconcileTransientTerminalStatusDoesNotDestroy(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	prov.SetBalance(100_000_000)
+	c.state, c.generation = Ready, 3
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Desired = store.DesiredRunning
+		d.Instance = &store.Instance{Label: "vkllm:iid:3", ProviderID: "9", State: Ready.String()}
+	})
+	ctx := context.Background()
+	observe := func(s provider.InstanceStatus) {
+		prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3", Status: s})
+		c.reconcileOnce(ctx)
+		drainSteps(c)
+	}
+	for _, s := range []provider.InstanceStatus{provider.StatusOffline, provider.StatusRunning, provider.StatusOffline} {
+		observe(s)
+		if st := c.stateNow(); st != Ready {
+			t.Fatalf("state after %v = %v, want Ready", s, st)
+		}
+	}
+	if d := loadDoc(t, c); d.Desired != store.DesiredRunning {
+		t.Fatalf("desired = %q, want RUNNING after non-consecutive terminal observations", d.Desired)
+	}
+	observe(provider.StatusOffline)
+	if st := c.stateNow(); st != Destroying && st != Idle {
+		t.Fatalf("state after two consecutive offline = %v, want Destroying", st)
+	}
+	waitFor(t, "destroy", func() bool { return prov.Calls("destroy") >= 1 })
+}
+
+// The startup poll has the same rule: a single exited get during Booting is not a destroy decision.
+func TestPollTransientTerminalStatusDoesNotDestroy(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	c.state, c.generation = Booting, 3
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3"})
+	prov.SetStatusSequence(9, provider.StatusExited, provider.StatusRunning, provider.StatusExited)
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Desired = store.DesiredRunning
+		d.Instance = &store.Instance{Label: "vkllm:iid:3", ProviderID: "9", State: Booting.String()}
+		d.Ops = []store.Op{{Key: "create-3", Outcome: "created"}}
+	})
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		dispatchGet(ctx, c, effGet{id: 9, gen: 3})
+		drainSteps(c)
+		if st := c.stateNow(); st != Booting {
+			t.Fatalf("state after get %d = %v, want Booting", i+1, st)
+		}
+	}
+	if got := prov.Calls("destroy"); got != 0 {
+		t.Fatalf("Calls(destroy) = %d, want 0", got)
+	}
+	dispatchGet(ctx, c, effGet{id: 9, gen: 3})
+	drainSteps(c)
+	if st := c.stateNow(); st != Destroying && st != Idle {
+		t.Fatalf("state after two consecutive exited = %v, want Destroying", st)
+	}
+	waitFor(t, "destroy", func() bool { return prov.Calls("destroy") >= 1 })
+}
+
+// A balance never read since start must not drain a live instance; Start's own gate still denies.
+func TestReconcileUnknownBalanceDoesNotDrainReady(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	c.lastBalance, c.lastBalanceKnown = 0, false
+	prov.FailNext("balance", 1, errors.New("balance down"))
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3", Status: provider.StatusRunning})
+	c.state, c.generation = Ready, 3
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Desired = store.DesiredRunning
+		d.Instance = &store.Instance{Label: "vkllm:iid:3", ProviderID: "9", State: Ready.String()}
+	})
+	c.reconcileOnce(context.Background())
+	drainSteps(c)
+	if st := c.stateNow(); st != Ready {
+		t.Fatalf("state = %v, want Ready", st)
+	}
+	if d := loadDoc(t, c); d.Desired != store.DesiredRunning {
+		t.Fatalf("desired = %q, want RUNNING", d.Desired)
+	}
+}
+
+// A count taken while an id was ahead of the fence must not carry over once that id has been active.
+func TestReconcileOrphanCountClearedWhileActive(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	prov.AddInstance(provider.Instance{ID: 7, Label: "vkllm:iid:5", Status: provider.StatusRunning})
+	ctx := context.Background()
+	putDoc(t, c, func(d *store.Document) { d.Generation = 3 })
+	c.reconcileCompareInstances(ctx, loadDoc(t, c), mustList(t, prov)) // ahead: counted, fence to 5
+	putDoc(t, c, func(d *store.Document) {
+		d.Instance = &store.Instance{Label: "vkllm:iid:5", ProviderID: "7", State: Ready.String()}
+	})
+	c.reconcileCompareInstances(ctx, loadDoc(t, c), mustList(t, prov)) // active
+	putDoc(t, c, func(d *store.Document) { d.Instance = nil })
+	c.reconcileCompareInstances(ctx, loadDoc(t, c), mustList(t, prov)) // first true orphan observation
+	time.Sleep(20 * time.Millisecond)
+	if got := prov.Calls("destroy"); got != 0 {
+		t.Fatalf("Calls(destroy) = %d after one orphan observation, want 0", got)
+	}
+	c.reconcileCompareInstances(ctx, loadDoc(t, c), mustList(t, prov))
+	waitFor(t, "orphan destroy", func() bool { return prov.Calls("destroy") == 1 })
 }

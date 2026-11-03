@@ -58,11 +58,33 @@ func dispatchGet(ctx context.Context, c *Controller, e effGet) {
 	if err != nil {
 		return
 	}
+	if !c.confirmPollStatus(e.gen, inst.Status.Terminal()) {
+		return
+	}
 	c.postEvent(Event{
 		Kind: EvProviderObserved, Gen: e.gen,
 		Status: inst.Status, RawStatus: inst.RawStatus,
 		SSHHost: inst.SSHHost, SSHPort: inst.SSHPort,
 	})
+}
+
+// confirmPollStatus holds back a terminal status until two consecutive gets
+// for the same generation report one; a destroy is never one observation.
+func (c *Controller) confirmPollStatus(gen int64, terminal bool) bool {
+	c.pollTerminalMu.Lock()
+	defer c.pollTerminalMu.Unlock()
+	if gen != c.pollTerminalGen || !terminal {
+		c.pollTerminalGen, c.pollTerminalSeen = gen, 0
+	}
+	if !terminal {
+		return true
+	}
+	c.pollTerminalSeen++
+	if c.pollTerminalSeen < 2 {
+		return false
+	}
+	c.pollTerminalSeen = 0
+	return true
 }
 
 // Dials the address the caller just observed, never one read back from
