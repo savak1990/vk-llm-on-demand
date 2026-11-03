@@ -21,10 +21,16 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	case isProvisioningOrServing(state) && ev.Kind == EvStart && f.Doc.Desired == store.DesiredRunning:
 		return state, nil, nil
 
+	// A backoff wait is a pacing delay, not a denial: nothing below
+	// should deny, search, or revive until it elapses.
+	case (state == Idle || state == Draining || state == Destroying) &&
+		(ev.Kind == EvStart || ev.Kind == EvTick || ev.Kind == EvGone) && ev.Reason == "backoff":
+		return state, nil, nil
+
 	// T2: Start denied by the gate, or a stale wanted Tick/Gone newly
 	// denied while Idle — write desired=STOPPED (idempotent if already
-	// stopped) and deny; Unavailable/ErrGPUUnavailable are Task 5/6's.
-	case (state == Idle || state == Draining || state == Destroying) && ev.Reason != "" &&
+	// stopped) and deny; the caller maps the denial to its own error.
+	case (state == Idle || state == Draining || state == Destroying) && ev.Reason != "" && ev.Reason != "backoff" &&
 		(ev.Kind == EvStart || ((ev.Kind == EvTick || ev.Kind == EvGone) && state == Idle && f.Doc.Desired == store.DesiredRunning)):
 		return state, func(d *store.Document) error {
 			d.Desired = store.DesiredStopped
@@ -40,6 +46,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance != nil {
 				return errStale
 			}
+			if ev.Kind != EvStart && d.Desired != store.DesiredRunning {
+				return errStale
+			}
 			d.Desired = store.DesiredRunning
 			return nil
 		}, []Effect{effSearch{filter: searchFilter(f)}}
@@ -51,6 +60,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		ev.Kind == EvStart:
 		return state, func(d *store.Document) error {
 			if d.Instance == nil || d.Generation != f.Doc.Generation {
+				return errStale
+			}
+			if d.Instance.State != state.String() {
 				return errStale
 			}
 			d.Desired = store.DesiredRunning
@@ -116,6 +128,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance == nil || d.Generation != ev.Gen {
 				return errStale
 			}
+			if (d.Desired == store.DesiredStopped) != dest {
+				return errStale
+			}
 			op := findOp(d, createOpKey(d.Generation))
 			if op == nil || op.Outcome != "" {
 				return errStale
@@ -124,14 +139,14 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if f.Budget != nil {
 				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH)
 			}
-			if d.Desired == store.DesiredStopped {
+			if dest {
 				d.Instance.State = Destroying.String()
 				op.Outcome = "cancelled"
 				t := f.Now
 				op.FinishedAt = &t
 			} else {
-				// "created" is not yet a terminal outcome: T32/T15/T16/T14/T27
-				// still need to overwrite it once this generation's op finishes.
+				// an outcome still open, not yet terminal: later rows
+				// overwrite it once this generation's op finishes.
 				d.Instance.State = Booting.String()
 				op.Outcome = "created"
 			}
@@ -157,8 +172,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		return Creating, nil, nil
 
 	// T11: the provider says our label already exists — destroy every
-	// instance under that exact label (Task 6's generic destroy hook
-	// uses the document's own label, so no CAS is needed here).
+	// instance under that exact label, using the document's own label
+	// rather than a write here, since this generation never got one.
 	case state == Creating && ev.Kind == EvCreateFailed && ev.Duplicate:
 		return Destroying, nil, nil
 
@@ -210,6 +225,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance == nil || d.Generation != ev.Gen {
 				return errStale
 			}
+			if d.Instance.CreatedAt.Add(f.Cfg.StartupTimeout).After(f.Now) {
+				return errStale
+			}
 			d.Instance.State = Destroying.String()
 			finishOp(d, createOpKey(d.Generation), "deadline", f.Now)
 			d.MachineDenylist = append(d.MachineDenylist, store.DenyEntry{
@@ -241,6 +259,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance == nil || d.Generation != f.Doc.Generation {
 				return errStale
 			}
+			if d.Instance.ProviderID != "" {
+				return errStale
+			}
 			d.Desired = store.DesiredStopped
 			return nil
 		}, nil
@@ -250,7 +271,10 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// or when in-flight reaches zero (T25), not here.
 	case state == Ready && (ev.Kind == EvIdleTimer || ev.Kind == EvTick) && f.InFlight == 0 && idleRuleFires(f):
 		return Draining, func(d *store.Document) error {
-			if d.Instance == nil || d.Instance.IdleDeadline == nil || f.Now.Before(*d.Instance.IdleDeadline) {
+			if d.Instance == nil || d.Instance.State != Ready.String() {
+				return errStale
+			}
+			if d.Instance.IdleDeadline == nil || f.Now.Before(*d.Instance.IdleDeadline) {
 				return errStale
 			}
 			d.Desired = store.DesiredStopped
@@ -264,6 +288,10 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance == nil || d.Generation != f.Doc.Generation {
 				return errStale
 			}
+			// Serving is memory-only; the document always stores it as Ready.
+			if d.Instance.State != Ready.String() {
+				return errStale
+			}
 			if d.Instance.CreatedAt.Add(f.Cfg.MaxLifetime).After(f.Now) {
 				return errStale
 			}
@@ -275,7 +303,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// T22: a manual Stop or a budget denial while serving — drain.
 	case (state == Ready || state == Serving) && (ev.Kind == EvStop || ev.Kind == EvBudgetExhausted):
 		return Draining, func(d *store.Document) error {
-			if d.Instance == nil {
+			if d.Instance == nil || d.Instance.State != Ready.String() {
 				return errStale
 			}
 			d.Desired = store.DesiredStopped
@@ -319,7 +347,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// passed — either way, destroy.
 	case state == Draining && (ev.Kind == EvDeadlineExpired || (ev.Kind == EvTick && f.InFlight == 0)):
 		return Destroying, func(d *store.Document) error {
-			if d.Instance == nil {
+			if d.Instance == nil || d.Instance.State != Draining.String() {
 				return errStale
 			}
 			d.Instance.State = Destroying.String()
@@ -342,8 +370,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			return nil
 		}, nil
 
-	// T28/T30: dispatching and retrying the destroy call itself is
-	// Task 6's generic Destroying hook; decide has nothing to add.
+	// T28/T30: dispatching and retrying the destroy call itself is a
+	// generic hook keyed on being in Destroying; decide adds nothing.
 	case state == Destroying && ev.Kind == EvTick:
 		return Destroying, nil, nil
 
@@ -358,6 +386,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if f.Budget != nil {
 				f.Budget.CloseEntry(d, f.Now, ev.Gen)
 			}
+			finishOp(d, destroyOpKey(d.Generation), "ok", f.Now)
 			d.Instance = nil
 			return nil
 		}, nil
@@ -448,6 +477,8 @@ func lifetimeExpired(f Facts) bool {
 
 func createOpKey(gen int64) string { return fmt.Sprintf("create-%d", gen) }
 
+func destroyOpKey(gen int64) string { return fmt.Sprintf("destroy-%d", gen) }
+
 func createOpOpen(doc store.Document, gen int64) bool {
 	for _, op := range doc.Ops {
 		if op.Key == createOpKey(gen) {
@@ -490,8 +521,7 @@ func dialTarget(f Facts, ev Event) tunnel.Instance {
 }
 
 // searchFilter builds the offer filter from config and the document's
-// own unexpired denylist; the dispatcher (Task 4) owns the actual
-// SearchOffers call.
+// own unexpired denylist; the actual SearchOffers call is the loop's.
 func searchFilter(f Facts) provider.OfferFilter {
 	pf := f.Cfg.ProviderFilter
 	excl := make([]int64, 0, len(f.Doc.MachineDenylist))

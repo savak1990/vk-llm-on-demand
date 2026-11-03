@@ -65,6 +65,20 @@ func TestTransitionTable(t *testing.T) {
 		}
 	})
 
+	t.Run("T1_guard_restale_if_stop_won_the_race", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Desired = store.DesiredRunning
+		_, mutate, _ := decide(Idle, Event{Kind: EvTick}, Facts{Now: now, Doc: doc})
+		live := doc
+		live.Desired = store.DesiredStopped // a concurrent T31 Stop committed first
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T1 mutate against a Stop that won the race: want errStale, got %v", err)
+		}
+		if live.Desired != store.DesiredStopped {
+			t.Fatalf("T1 must not undo the Stop: desired=%q", live.Desired)
+		}
+	})
+
 	t.Run("T2_start_denied_at_idle", func(t *testing.T) {
 		doc, _ := store.NewDocument("iid")
 		next, mutate, effects := decide(Idle, Event{Kind: EvStart, Reason: "budget_exhausted"}, Facts{Now: now, Doc: doc})
@@ -88,6 +102,33 @@ func TestTransitionTable(t *testing.T) {
 		next, mutate, _ := decide(Destroying, Event{Kind: EvStart, Reason: "balance_low"}, Facts{Now: now, Doc: doc})
 		if next != Destroying || mutate == nil {
 			t.Fatalf("T2 destroying: next=%v mutate=%v", next, mutate != nil)
+		}
+	})
+
+	t.Run("backoff_start_at_idle_is_true_noop", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		next, mutate, effects := decide(Idle, Event{Kind: EvStart, Reason: "backoff"}, Facts{Now: now, Doc: doc})
+		if next != Idle || mutate != nil || effects != nil {
+			t.Fatalf("backoff start: next=%v mutate=%v effects=%v, want true no-op", next, mutate != nil, effects)
+		}
+	})
+
+	t.Run("backoff_tick_at_idle_is_true_noop", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Desired = store.DesiredRunning
+		next, mutate, effects := decide(Idle, Event{Kind: EvTick, Reason: "backoff"}, Facts{Now: now, Doc: doc})
+		if next != Idle || mutate != nil || effects != nil {
+			t.Fatalf("backoff tick: next=%v mutate=%v effects=%v, want true no-op", next, mutate != nil, effects)
+		}
+	})
+
+	t.Run("backoff_never_triggers_t2_denial_cas", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Generation = 2
+		doc.Instance = &store.Instance{State: Destroying.String(), Label: "vkllm:iid:2"}
+		next, mutate, effects := decide(Destroying, Event{Kind: EvStart, Reason: "backoff"}, Facts{Now: now, Doc: doc})
+		if next != Destroying || mutate != nil || effects != nil {
+			t.Fatalf("backoff at destroying: next=%v mutate=%v effects=%v, want true no-op, not T2's CAS", next, mutate != nil, effects)
 		}
 	})
 
@@ -134,6 +175,18 @@ func TestTransitionTable(t *testing.T) {
 		live.Generation = 2
 		if err := mutate(&live); !errors.Is(err, errStale) {
 			t.Fatalf("T4 guard: want errStale, got %v", err)
+		}
+	})
+
+	t.Run("T4_guard_restale_if_stage_moved_on", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Generation = 1
+		doc.Instance = &store.Instance{State: Draining.String(), Label: "vkllm:iid:1"}
+		_, mutate, _ := decide(Draining, Event{Kind: EvStart}, Facts{Now: now, Doc: doc})
+		live := doc
+		live.Instance = &store.Instance{State: Destroying.String(), Label: "vkllm:iid:1"} // T25/T26 already advanced it
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T4 mutate against a stage that already moved on: want errStale, got %v", err)
 		}
 	})
 
@@ -297,6 +350,23 @@ func TestTransitionTable(t *testing.T) {
 		}
 	})
 
+	t.Run("T8_guard_restale_if_stop_won_the_race", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Generation = 1
+		doc.Desired = store.DesiredRunning // snapshot: decide picks Booting
+		doc.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", CreatedAt: now}
+		doc.Ops = []store.Op{{Key: "create-1", StartedAt: now}}
+		next, mutate, _ := decide(Creating, Event{Kind: EvCreated, Gen: 1, ProviderID: provider.InstanceID(9)}, Facts{Now: now, Doc: doc, Budget: newFakeBudget(1, 30)})
+		if next != Booting {
+			t.Fatalf("T8: next=%v, want Booting", next)
+		}
+		live := doc
+		live.Desired = store.DesiredStopped // T17's Stop committed before this CAS ran
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T8 mutate against a Stop that won the race: want errStale, got %v", err)
+		}
+	})
+
 	t.Run("T9_create_failed_terminal", func(t *testing.T) {
 		doc, _ := store.NewDocument("iid")
 		doc.Generation = 1
@@ -418,7 +488,8 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredRunning
 		doc.Instance = &store.Instance{State: Booting.String(), Offer: store.Offer{MachineID: 42}, CreatedAt: now.Add(-16 * time.Minute)}
 		doc.Ops = []store.Op{{Key: "create-1", StartedAt: now, Outcome: "created"}}
-		next, mutate, effects := decide(Booting, Event{Kind: EvDeadlineExpired, Gen: 1}, Facts{Now: now, Doc: doc})
+		cfg := config.Controller{StartupTimeout: 15 * time.Minute}
+		next, mutate, effects := decide(Booting, Event{Kind: EvDeadlineExpired, Gen: 1}, Facts{Now: now, Doc: doc, Cfg: cfg})
 		if next != Destroying || mutate == nil || effects != nil {
 			t.Fatalf("T15: next=%v mutate=%v effects=%v", next, mutate != nil, effects)
 		}
@@ -431,6 +502,20 @@ func TestTransitionTable(t *testing.T) {
 		}
 		if !got.MachineDenylist[0].Until.Equal(now.Add(time.Hour)) {
 			t.Fatalf("T15 denylist until = %v, want %v", got.MachineDenylist[0].Until, now.Add(time.Hour))
+		}
+	})
+
+	t.Run("T15_guard_restale_if_not_actually_expired", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Generation = 1
+		doc.Instance = &store.Instance{State: Booting.String(), Offer: store.Offer{MachineID: 42}, CreatedAt: now.Add(-16 * time.Minute)}
+		cfg := config.Controller{StartupTimeout: 15 * time.Minute}
+		_, mutate, _ := decide(Booting, Event{Kind: EvDeadlineExpired, Gen: 1}, Facts{Now: now, Doc: doc, Cfg: cfg})
+		live := doc
+		restarted := now.Add(-time.Minute)
+		live.Instance = &store.Instance{State: Booting.String(), Offer: store.Offer{MachineID: 42}, CreatedAt: restarted} // a redial reset the clock
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T15 mutate against a timer that no longer applies: want errStale, got %v", err)
 		}
 	})
 
@@ -482,6 +567,19 @@ func TestTransitionTable(t *testing.T) {
 		}
 	})
 
+	t.Run("T17_guard_restale_if_id_arrived_meanwhile", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Generation = 1
+		doc.Desired = store.DesiredRunning
+		doc.Instance = &store.Instance{State: Creating.String(), ProviderID: ""}
+		_, mutate, _ := decide(Creating, Event{Kind: EvStop}, Facts{Now: now, Doc: doc})
+		live := doc
+		live.Instance = &store.Instance{State: Booting.String(), ProviderID: "9"} // T8 adopted an id first
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T17 mutate against an id that arrived meanwhile: want errStale, got %v", err)
+		}
+	})
+
 	t.Run("T18_T19_admit_and_requestend_are_not_decide_rows", func(t *testing.T) {
 		t.Skip("Admit/RequestEnd act directly under the admission mutex (R16); decide has no EventKind for them")
 	})
@@ -518,11 +616,24 @@ func TestTransitionTable(t *testing.T) {
 		}
 	})
 
+	t.Run("T20_guard_restale_if_stage_moved_on", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Desired = store.DesiredRunning
+		past := now.Add(-time.Second)
+		doc.Instance = &store.Instance{State: Ready.String(), IdleDeadline: &past}
+		_, mutate, _ := decide(Ready, Event{Kind: EvIdleTimer}, Facts{Now: now, Doc: doc, InFlight: 0})
+		live := doc
+		live.Instance = &store.Instance{State: Destroying.String(), IdleDeadline: &past} // T24 already destroyed it
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T20 mutate against a stage that already moved on: want errStale, got %v", err)
+		}
+	})
+
 	t.Run("T21_max_lifetime_drains_regardless_of_inflight", func(t *testing.T) {
 		doc, _ := store.NewDocument("iid")
 		doc.Generation = 1
 		doc.Desired = store.DesiredRunning
-		doc.Instance = &store.Instance{State: Serving.String(), CreatedAt: now.Add(-13 * time.Hour)}
+		doc.Instance = &store.Instance{State: Ready.String(), CreatedAt: now.Add(-13 * time.Hour)}
 		cfg := config.Controller{MaxLifetime: 12 * time.Hour}
 		next, mutate, effects := decide(Serving, Event{Kind: EvTick}, Facts{Now: now, Doc: doc, InFlight: 3, Cfg: cfg})
 		if next != Draining || mutate == nil || effects != nil {
@@ -547,9 +658,22 @@ func TestTransitionTable(t *testing.T) {
 		}
 	})
 
+	t.Run("T21_guard_restale_if_stage_moved_on", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Generation = 1
+		doc.Instance = &store.Instance{State: Serving.String(), CreatedAt: now.Add(-13 * time.Hour)}
+		cfg := config.Controller{MaxLifetime: 12 * time.Hour}
+		_, mutate, _ := decide(Serving, Event{Kind: EvTick}, Facts{Now: now, Doc: doc, Cfg: cfg})
+		live := doc
+		live.Instance = &store.Instance{State: Draining.String(), CreatedAt: now.Add(-13 * time.Hour)} // T20 already drained it
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T21 mutate against a stage that already moved on: want errStale, got %v", err)
+		}
+	})
+
 	t.Run("T22_stop_while_serving_drains", func(t *testing.T) {
 		doc, _ := store.NewDocument("iid")
-		doc.Instance = &store.Instance{State: Serving.String()}
+		doc.Instance = &store.Instance{State: Ready.String()}
 		next, mutate, effects := decide(Serving, Event{Kind: EvStop}, Facts{Now: now, Doc: doc})
 		if next != Draining || mutate == nil || effects != nil {
 			t.Fatalf("T22: next=%v mutate=%v effects=%v", next, mutate != nil, effects)
@@ -560,6 +684,17 @@ func TestTransitionTable(t *testing.T) {
 		}
 		if got.Desired != store.DesiredStopped || got.Instance.State != Draining.String() {
 			t.Fatalf("T22 result: desired=%q state=%q", got.Desired, got.Instance.State)
+		}
+	})
+
+	t.Run("T22_guard_restale_if_stage_moved_on", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Instance = &store.Instance{State: Ready.String()}
+		_, mutate, _ := decide(Serving, Event{Kind: EvStop}, Facts{Now: now, Doc: doc})
+		live := doc
+		live.Instance = &store.Instance{State: Destroying.String()} // a concurrent T24 already committed
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T22 mutate against a stage that already moved on: want errStale, got %v", err)
 		}
 	})
 
@@ -627,6 +762,17 @@ func TestTransitionTable(t *testing.T) {
 		}
 	})
 
+	t.Run("T25_T26_guard_restale_if_stage_moved_on", func(t *testing.T) {
+		doc, _ := store.NewDocument("iid")
+		doc.Instance = &store.Instance{State: Draining.String()}
+		_, mutate, _ := decide(Draining, Event{Kind: EvDeadlineExpired}, Facts{Now: now, Doc: doc})
+		live := doc
+		live.Instance = &store.Instance{State: Destroying.String()} // T28's retry timer already moved it on
+		if err := mutate(&live); !errors.Is(err, errStale) {
+			t.Fatalf("T25/T26 mutate against a stage that already moved on: want errStale, got %v", err)
+		}
+	})
+
 	t.Run("T27_vanished_before_ready_keeps_desired", func(t *testing.T) {
 		doc, _ := store.NewDocument("iid")
 		doc.Generation = 1
@@ -671,6 +817,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Generation = 4
 		doc.Desired = store.DesiredRunning // T4 revived it mid-destroy
 		doc.Instance = &store.Instance{State: Destroying.String()}
+		doc.Ops = []store.Op{{Key: "destroy-4", StartedAt: now}}
 		b := newFakeBudget(1, 30)
 		next, mutate, effects := decide(Destroying, Event{Kind: EvGone, Gen: 4}, Facts{Now: now, Doc: doc, Budget: b})
 		if next != Idle || mutate == nil || effects != nil {
@@ -682,6 +829,9 @@ func TestTransitionTable(t *testing.T) {
 		}
 		if got.Instance != nil || got.Desired != store.DesiredRunning {
 			t.Fatalf("T29 result: instance=%+v desired=%q", got.Instance, got.Desired)
+		}
+		if got.Ops[0].Outcome != "ok" || got.Ops[0].FinishedAt == nil {
+			t.Fatalf("T29 destroy op result: %+v", got.Ops[0])
 		}
 	})
 
