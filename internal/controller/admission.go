@@ -33,6 +33,9 @@ func (c *Controller) RequestEnd(gen int64) {
 		c.inFlight--
 	}
 	if gen == c.generation && (c.state == Serving || c.state == Draining) {
+		if !c.activityPending {
+			c.armTimer(timerFlush, c.deps.Clock.Now().Add(flushDelay))
+		}
 		c.activityPending = true
 		c.activityAt = c.deps.Clock.Now()
 		if c.inFlight == 0 && c.state == Serving {
@@ -59,12 +62,17 @@ func (c *Controller) pendingActivity() (time.Time, bool) {
 	return c.activityAt, c.activityPending
 }
 
-// clearActivity marks the pending activity flushed; the loop calls this
-// only after the CAS that carried it has actually committed.
-func (c *Controller) clearActivity() {
+// clearActivity marks the activity recorded at at flushed, unless a newer
+// RequestEnd replaced it meanwhile; the loop calls this only after the
+// CAS that carried at has committed.
+func (c *Controller) clearActivity(at time.Time) bool {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.activityAt.Equal(at) {
+		return false
+	}
 	c.activityPending = false
-	c.mu.Unlock()
+	return true
 }
 
 // computeIdleDeadline returns max(readyAt, lastInferenceFinishedAt) +

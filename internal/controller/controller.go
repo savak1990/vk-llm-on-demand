@@ -105,6 +105,8 @@ const (
 type Controller struct {
 	deps Deps
 
+	procMu sync.Mutex // serializes processEvent between the loop and Start/Stop callers
+
 	runCtx context.Context // set once by Run (Task 6); effect goroutines use this, never a caller's request ctx
 
 	mu         sync.Mutex
