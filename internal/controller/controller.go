@@ -136,6 +136,10 @@ type Controller struct {
 	lastErrorMu sync.Mutex
 	lastError   string
 
+	balanceMu        sync.Mutex
+	lastBalance      provider.Money
+	lastBalanceKnown bool // false until a balance read succeeds; Allow then denies as balance_low
+
 	destroyRetryMu sync.Mutex
 	destroyRetryN  int // trailing failed-destroy count since Destroying was last entered; backoff = min(5m, 10s*2^n)
 }

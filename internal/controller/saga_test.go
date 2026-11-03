@@ -24,11 +24,12 @@ func newTestController(t *testing.T) (*Controller, *fakeprovider.Fake, *fakecloc
 		Provider: prov, Store: fakestore.New("iid"), Clock: clk, Budget: budget, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
-		Config: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second},
+		Config: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxProvisionAttemptsPerHour: 3, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
+	c.lastBalance, c.lastBalanceKnown = provider.Money(100_000_000), true
 	return c, prov, clk, budget, worker
 }
 

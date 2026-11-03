@@ -41,6 +41,9 @@ func (c *Controller) RequestEnd(gen int64) {
 		if c.inFlight == 0 && c.state == Serving {
 			c.state = Ready
 		}
+		if c.inFlight == 0 && c.state == Draining {
+			c.armTimer(timerDrain, c.deps.Clock.Now())
+		}
 	}
 	c.mu.Unlock()
 	c.signalWake()

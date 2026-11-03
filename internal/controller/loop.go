@@ -29,6 +29,7 @@ func (c *Controller) armTimer(k timerKind, at time.Time) {
 	c.timersMu.Lock()
 	c.timers[k] = at
 	c.timersMu.Unlock()
+	c.signalWake()
 }
 
 func (c *Controller) clearTimer(k timerKind) {
@@ -99,8 +100,10 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		return err
 	}
 
+	now := c.deps.Clock.Now()
+	ev.Reason = c.gateReason(state, ev, doc, now)
 	next, mutate, effects := decide(state, ev, Facts{
-		Now: c.deps.Clock.Now(), Doc: doc, InFlight: inFlight, Failing: failing,
+		Now: now, Doc: doc, InFlight: inFlight, Failing: failing,
 		Cfg: c.deps.Config, Budget: c.deps.Budget,
 	})
 
@@ -146,7 +149,43 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	c.syncTimers(state, next, doc)
 
 	c.queueEffects(effects)
+	if ev.Kind == EvStart && isDenial(ev.Reason) {
+		return ErrGPUUnavailable
+	}
 	return nil
+}
+
+func isDenial(reason string) bool { return reason != "" && reason != "backoff" }
+
+// gateReason is the Start/Tick/Gone admission gate for the states that can
+// begin a provision: budget, then the hourly attempts cap, then the create
+// backoff, which only paces and is never a denial.
+func (c *Controller) gateReason(state State, ev Event, doc store.Document, now time.Time) string {
+	if ev.Reason != "" {
+		return ev.Reason
+	}
+	if ev.Kind != EvStart && ev.Kind != EvTick && ev.Kind != EvGone {
+		return ""
+	}
+	if state != Idle && state != Draining && state != Destroying {
+		return ""
+	}
+	if c.deps.Budget != nil {
+		c.balanceMu.Lock()
+		balance, known := c.lastBalance, c.lastBalanceKnown
+		c.balanceMu.Unlock()
+		if r := c.deps.Budget.Allow(doc, balance, known); r != "" {
+			return r
+		}
+	}
+	a := doc.AttemptsThisHour
+	if a.Hour == now.UTC().Format("2006-01-02T15") && a.Count >= c.deps.Config.MaxProvisionAttemptsPerHour {
+		return "attempts_exhausted"
+	}
+	if now.Before(nextCreateAllowedAt(doc.Ops)) {
+		return "backoff"
+	}
+	return ""
 }
 
 // syncTimers arms each state-scoped timer on entry and clears it on
@@ -165,7 +204,14 @@ func (c *Controller) syncTimers(prev, next State, doc store.Document) {
 	}
 
 	if next == Draining && prev != Draining {
-		c.armTimer(timerDrain, now.Add(c.deps.Config.ShutdownDrainTimeout))
+		c.mu.Lock()
+		idle := c.inFlight == 0
+		c.mu.Unlock()
+		if idle {
+			c.armTimer(timerDrain, now)
+		} else {
+			c.armTimer(timerDrain, now.Add(c.deps.Config.ShutdownDrainTimeout))
+		}
 	} else if next != Draining {
 		c.clearTimer(timerDrain)
 	}
@@ -301,38 +347,85 @@ func (c *Controller) currentProviderID(ctx context.Context) (provider.InstanceID
 	return providerIDOf(doc)
 }
 
-func dispatchDestroy(ctx context.Context, c *Controller, id provider.InstanceID, gen int64) {
+func destroyConfirmed(ctx context.Context, c *Controller, id provider.InstanceID) bool {
 	err := c.deps.Provider.DestroyInstance(ctx, id)
-	confirmed := errors.Is(err, provider.ErrNotFound)
-	if err == nil {
-		if _, getErr := c.deps.Provider.GetInstance(ctx, id); errors.Is(getErr, provider.ErrNotFound) {
-			confirmed = true
-		}
+	if errors.Is(err, provider.ErrNotFound) {
+		return true
 	}
-	if confirmed {
-		c.postEvent(Event{Kind: EvGone, Gen: gen})
-		return
+	if err != nil {
+		return false
 	}
-	c.armDestroyRetry()
+	_, getErr := c.deps.Provider.GetInstance(ctx, id)
+	return errors.Is(getErr, provider.ErrNotFound)
 }
 
-// fireDestroyRetry treats a failed read as a failed round: only the
-// provider confirming absence, or a record with no provider id at all,
-// may end Destroying.
+// dispatchDestroy is one destroy round. With no provider id (a duplicate
+// label, or a create whose outcome never came back) the targets are every
+// instance under the exact label; a prefix match alone would also catch gen 30 for gen 3.
+func dispatchDestroy(ctx context.Context, c *Controller, gen int64, label string, id provider.InstanceID, hasID bool) {
+	ids := []provider.InstanceID{id}
+	if !hasID {
+		insts, err := c.deps.Provider.ListInstances(ctx, label)
+		if err != nil {
+			c.armDestroyRetry()
+			return
+		}
+		ids = ids[:0]
+		for _, inst := range insts {
+			if inst.Label == label {
+				ids = append(ids, inst.ID)
+			}
+		}
+	}
+	for _, target := range ids {
+		if !destroyConfirmed(ctx, c, target) {
+			c.armDestroyRetry()
+			return
+		}
+	}
+	c.postEvent(Event{Kind: EvGone, Gen: gen})
+}
+
+// fireDestroyRetry treats a failed read as a failed round, refuses any
+// label the fence rejects, and records the destroy op before the first
+// provider call so a restart knows a destroy was under way.
 func (c *Controller) fireDestroyRetry(ctx context.Context) {
-	c.mu.Lock()
-	gen := c.generation
-	c.mu.Unlock()
 	doc, _, err := c.deps.Store.Load(ctx)
 	if err != nil {
 		c.armDestroyRetry()
 		return
 	}
-	if id, ok := providerIDOf(doc); ok {
-		go dispatchDestroy(c.effCtx(), c, id, gen)
+	if doc.Instance == nil {
+		c.mu.Lock()
+		gen := c.generation
+		c.mu.Unlock()
+		c.handleEvent(ctx, Event{Kind: EvGone, Gen: gen})
 		return
 	}
-	c.handleEvent(ctx, Event{Kind: EvGone, Gen: gen})
+	gen, label := doc.Generation, doc.Instance.Label
+	if !mayDestroy(label, c.deps.InstallationID, gen) {
+		if c.deps.Log != nil {
+			c.deps.Log.Error("controller: destroy refused by label fence", "label", label, "gen", gen)
+		}
+		c.armDestroyRetry()
+		return
+	}
+	if findOp(&doc, destroyOpKey(gen)) == nil {
+		now := c.deps.Clock.Now()
+		_, err := store.Transition(ctx, c.deps.Store, func(d *store.Document) error {
+			if d.Instance == nil || d.Generation != gen || findOp(d, destroyOpKey(gen)) != nil {
+				return nil
+			}
+			d.Ops = append(d.Ops, store.Op{Key: destroyOpKey(gen), StartedAt: now})
+			return nil
+		})
+		if err != nil {
+			c.armDestroyRetry()
+			return
+		}
+	}
+	id, hasID := providerIDOf(doc)
+	go dispatchDestroy(c.effCtx(), c, gen, label, id, hasID)
 }
 
 func (c *Controller) pollTick(ctx context.Context) {
@@ -368,7 +461,7 @@ func (c *Controller) dispatchScrape(ctx context.Context) {
 
 func (c *Controller) handleEvent(ctx context.Context, ev Event) {
 	err := c.processEvent(ctx, ev)
-	if err == nil || errors.Is(err, errStale) {
+	if err == nil || errors.Is(err, errStale) || errors.Is(err, ErrGPUUnavailable) {
 		return
 	}
 	if c.deps.Log != nil {

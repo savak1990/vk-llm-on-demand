@@ -238,6 +238,7 @@ func TestDeadlineTimersFollowStateClass(t *testing.T) {
 		t.Fatal("timerMetricsPull not armed on entering Ready")
 	}
 
+	c.inFlight = 1
 	if err := c.processEvent(ctx, Event{Kind: EvStop}); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -368,5 +369,230 @@ func TestDestroyRetryConfirmsGone(t *testing.T) {
 	}
 	if c.state != Idle || prov.Calls("destroy") != 1 {
 		t.Fatalf("state=%v destroy calls=%d, want Idle, 1", c.state, prov.Calls("destroy"))
+	}
+}
+
+func runLoop(t *testing.T, c *Controller) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = c.Run(ctx); close(done) }()
+	t.Cleanup(func() { cancel(); <-done })
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (c *Controller) stateNow() State {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state
+}
+
+// A parked Run must notice a timer armed from a caller goroutine.
+func TestRunWakesForStopFromBooting(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	c.state = Booting
+	c.generation = 3
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3"})
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Desired = store.DesiredRunning
+		d.Instance = &store.Instance{State: Booting.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+		d.Ops = append(d.Ops, store.Op{Key: createOpKey(3)})
+	})
+	runLoop(t, c)
+	if _, err := c.Stop(context.Background(), false); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitFor(t, "Idle after destroy", func() bool { return c.stateNow() == Idle })
+	if got := prov.Calls("destroy"); got != 1 {
+		t.Fatalf("Calls(destroy) = %d, want 1", got)
+	}
+}
+
+// With nothing in flight a drain has nothing to wait for; no clock advance here.
+func TestRunStopAtReadyIdleDestroysWithoutDrainWait(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	c.deps.Config.ShutdownDrainTimeout = 60 * time.Second
+	c.state = Ready
+	c.generation = 3
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3"})
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Desired = store.DesiredRunning
+		d.Instance = &store.Instance{State: Ready.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+	})
+	runLoop(t, c)
+	if _, err := c.Stop(context.Background(), false); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	waitFor(t, "Idle after destroy", func() bool { return c.stateNow() == Idle })
+	if got := prov.Calls("destroy"); got != 1 {
+		t.Fatalf("Calls(destroy) = %d, want 1", got)
+	}
+}
+
+func TestRequestEndLastOutOfDrainArmsDrainNow(t *testing.T) {
+	c, _, clk, _, _ := newTestController(t)
+	c.state = Draining
+	c.generation = 3
+	c.inFlight = 1
+	c.armTimer(timerDrain, clk.Now().Add(time.Minute))
+	c.RequestEnd(3)
+	if at, ok := timerAt(c, timerDrain); !ok || !at.Equal(clk.Now()) {
+		t.Fatalf("timerDrain = %v, %v, want now", at, ok)
+	}
+}
+
+// The backoff retry is armed from the destroy goroutine, so it must wake a
+// parked loop itself; the fake clock is driven by step to stay deterministic.
+func TestFailedDestroyRetryWakesLoopAndRetries(t *testing.T) {
+	c, prov, clk, _, _ := newTestController(t)
+	c.state = Destroying
+	c.generation = 3
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3"})
+	prov.FailDestroy(1)
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Destroying.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+	})
+	ctx := context.Background()
+	c.armTimer(timerDestroyRetry, clk.Now())
+	select {
+	case <-c.wake:
+	default:
+	}
+	c.step(ctx)
+	waitFor(t, "retry armed", func() bool { _, ok := timerAt(c, timerDestroyRetry); return ok })
+	select {
+	case <-c.wake:
+	default:
+		t.Fatal("arming the retry from the destroy goroutine did not wake the loop")
+	}
+	clk.Advance(20 * time.Second)
+	waitFor(t, "Idle after retry", func() bool {
+		for c.step(ctx) {
+		}
+		return c.stateNow() == Idle
+	})
+	if got := prov.Calls("destroy"); got != 2 {
+		t.Fatalf("Calls(destroy) = %d, want 2", got)
+	}
+}
+
+func TestStartGate(t *testing.T) {
+	hour := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02T15")
+	failed := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		edit        func(*store.Document)
+		unknownBal  bool
+		wantErr     error
+		wantDesired string
+	}{
+		{"attempts cap", func(d *store.Document) { d.AttemptsThisHour = store.Attempts{Hour: hour, Count: 3} }, false, ErrGPUUnavailable, store.DesiredStopped},
+		{"balance unknown", func(*store.Document) {}, true, ErrGPUUnavailable, store.DesiredStopped},
+		{"budget exhausted", func(d *store.Document) { d.Ledger.TotalUSD = 30 }, false, ErrGPUUnavailable, store.DesiredStopped},
+		{"create backoff", func(d *store.Document) {
+			d.Ops = append(d.Ops, store.Op{Key: createOpKey(1), FinishedAt: &failed, Outcome: "create_error"})
+		}, false, nil, store.DesiredRunning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, prov, _, _, _ := newTestController(t)
+			prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000})
+			c.lastBalanceKnown = !tc.unknownBal
+			putDoc(t, c, tc.edit)
+			ctx := context.Background()
+			if _, err := c.Start(ctx); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("Start err = %v, want %v", err, tc.wantErr)
+			}
+			for c.step(ctx) {
+			}
+			time.Sleep(10 * time.Millisecond)
+			if prov.Calls("search") != 0 || prov.Calls("create") != 0 {
+				t.Fatalf("search=%d create=%d, want 0, 0", prov.Calls("search"), prov.Calls("create"))
+			}
+			doc, _, _ := c.deps.Store.Load(ctx)
+			if doc.Desired != tc.wantDesired || c.stateNow() != Idle {
+				t.Fatalf("desired=%v state=%v, want %v, Idle", doc.Desired, c.stateNow(), tc.wantDesired)
+			}
+		})
+	}
+}
+
+// With no provider id the label is the only handle; the exact-label match
+// must not reach a later generation that shares the prefix.
+func TestDestroyWithoutIDDestroysEveryExactLabelMatch(t *testing.T) {
+	c, prov, clk, _, _ := newTestController(t)
+	c.state = Destroying
+	c.generation = 3
+	prov.AddInstance(provider.Instance{ID: 7, Label: "vkllm:iid:3"})
+	prov.AddInstance(provider.Instance{ID: 8, Label: "vkllm:iid:30"})
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Destroying.String(), Label: "vkllm:iid:3"}
+	})
+	c.armTimer(timerDestroyRetry, clk.Now())
+	ctx := context.Background()
+	c.step(ctx)
+	waitFor(t, "Gone", func() bool {
+		for c.step(ctx) {
+		}
+		return c.stateNow() == Idle
+	})
+	if prov.Calls("list") != 1 || prov.Calls("destroy") != 1 {
+		t.Fatalf("list=%d destroy=%d, want 1, 1", prov.Calls("list"), prov.Calls("destroy"))
+	}
+	if _, err := prov.GetInstance(ctx, 8); err != nil {
+		t.Fatalf("instance 8 (gen 30) was destroyed: %v", err)
+	}
+}
+
+func TestDestroyRecordsOpBeforeProviderCall(t *testing.T) {
+	c, prov, clk, _, _ := newTestController(t)
+	c.state = Destroying
+	c.generation = 3
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3"})
+	prov.FailDestroy(1)
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Destroying.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+	})
+	c.armTimer(timerDestroyRetry, clk.Now())
+	c.step(context.Background())
+	doc, _, _ := c.deps.Store.Load(context.Background())
+	op := findOp(&doc, destroyOpKey(3))
+	if op == nil || op.Outcome != "" {
+		t.Fatalf("destroy op = %+v, want open destroy-3 written before the call", op)
+	}
+}
+
+func TestDestroyRefusedByLabelFence(t *testing.T) {
+	c, prov, clk, _, _ := newTestController(t)
+	c.state = Destroying
+	c.generation = 3
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:other:3"})
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Destroying.String(), Label: "vkllm:other:3", ProviderID: "9"}
+	})
+	c.armTimer(timerDestroyRetry, clk.Now())
+	c.step(context.Background())
+	time.Sleep(10 * time.Millisecond)
+	if prov.Calls("destroy") != 0 || c.stateNow() != Destroying {
+		t.Fatalf("destroy=%d state=%v, want 0, Destroying", prov.Calls("destroy"), c.stateNow())
+	}
+	if at, ok := timerAt(c, timerDestroyRetry); !ok || !at.After(clk.Now()) {
+		t.Fatalf("timerDestroyRetry = %v, %v, want re-armed", at, ok)
 	}
 }
