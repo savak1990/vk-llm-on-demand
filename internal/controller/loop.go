@@ -124,10 +124,16 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		case txErr != nil:
 			return txErr
 		}
+		if next == Idle && state != Searching && doc.Instance != nil && doc.Instance.ProviderID != "" {
+			gpuUptimeSecondsTotal.Add(now.Sub(doc.Instance.CreatedAt).Seconds())
+		}
 		doc = committed
 		if reason, ok := shutdownReason(state, next, ev, inFlight, doc, c.deps.Config, now); ok {
 			shutdownsTotal.WithLabelValues(reason).Inc()
 		}
+	}
+	if outcome, ok := provisionOutcome(state, next, ev); ok {
+		provisionAttemptsTotal.WithLabelValues(outcome).Inc()
 	}
 
 	// Nothing can be admitted before a generation reaches Ready, so a new
@@ -138,12 +144,25 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		c.suspect = false
 	}
 	c.generation = doc.Generation
+	if next == Destroying {
+		c.failing = ev.Kind == EvProviderObserved || ev.Kind == EvWorkerFailed ||
+			(ev.Kind == EvDeadlineExpired && state != Draining)
+	}
+	if (ev.Kind == EvStart || next == Idle) && isUnavailableReason(ev.Reason) {
+		c.unavailable = ev.Reason
+	}
+	if next == Searching || (ev.Kind == EvStart && ev.Reason == "") {
+		c.unavailable = ""
+	}
 	if next != state {
 		c.state = next
 		c.since = now
 		setGPUState(PublicState(next, c.failing))
 	}
 	c.mu.Unlock()
+	if next == Searching {
+		c.setLastError("")
+	}
 
 	if next == Destroying && state != Destroying {
 		c.destroyRetryMu.Lock()
@@ -164,6 +183,17 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 }
 
 func isDenial(reason string) bool { return reason != "" && reason != "backoff" }
+
+// isUnavailableReason is isDenial narrowed to Snapshot.Unavailable's own
+// 4-value enum; "provider_error" and "backoff" are denials but not that.
+func isUnavailableReason(reason string) bool {
+	switch reason {
+	case "no_offer", "budget_exhausted", "balance_low", "attempts_exhausted":
+		return true
+	default:
+		return false
+	}
+}
 
 // gateReason is the Start/Tick/Gone admission gate for the states that can
 // begin a provision: budget, then the hourly attempts cap, then the create
@@ -358,13 +388,34 @@ func (c *Controller) currentProviderID(ctx context.Context) (provider.InstanceID
 func destroyConfirmed(ctx context.Context, c *Controller, id provider.InstanceID) bool {
 	err := c.deps.Provider.DestroyInstance(ctx, id)
 	if errors.Is(err, provider.ErrNotFound) {
+		destroyAttemptsTotal.WithLabelValues("ok").Inc()
 		return true
 	}
 	if err != nil {
+		destroyAttemptsTotal.WithLabelValues(destroyErrorOutcome(err)).Inc()
 		return false
 	}
 	_, getErr := c.deps.Provider.GetInstance(ctx, id)
-	return errors.Is(getErr, provider.ErrNotFound)
+	if errors.Is(getErr, provider.ErrNotFound) {
+		destroyAttemptsTotal.WithLabelValues("ok").Inc()
+		return true
+	}
+	destroyAttemptsTotal.WithLabelValues("retryable").Inc()
+	return false
+}
+
+// destroyErrorOutcome is T30's provider-error-class mapping for destroy_attempts_total.
+func destroyErrorOutcome(err error) string {
+	var perr *provider.Error
+	if errors.As(err, &perr) {
+		switch perr.Class {
+		case provider.Fatal:
+			return "fatal"
+		case provider.Terminal:
+			return "terminal"
+		}
+	}
+	return "retryable"
 }
 
 // dispatchDestroy is one destroy round. With no provider id (a duplicate

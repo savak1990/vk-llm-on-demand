@@ -11,7 +11,7 @@ import (
 // fill in document-sourced fields like GPUName and SpendInstanceUSD.
 func (c *Controller) Status() Snapshot {
 	c.mu.Lock()
-	state, gen, inFlight, failing, since := c.state, c.generation, c.inFlight, c.failing, c.since
+	state, gen, inFlight, failing, since, unavailable := c.state, c.generation, c.inFlight, c.failing, c.since, c.unavailable
 	c.mu.Unlock()
 
 	snap := Snapshot{
@@ -20,6 +20,7 @@ func (c *Controller) Status() Snapshot {
 		InstallationID: c.deps.InstallationID,
 		LabelPrefix:    "vkllm:" + c.deps.InstallationID + ":",
 		Provider:       "vastai",
+		Unavailable:    unavailable,
 	}
 
 	doc, _, err := c.deps.Store.Load(c.effCtx())
@@ -31,6 +32,7 @@ func (c *Controller) Status() Snapshot {
 	snap.AttemptsThisHour = doc.AttemptsThisHour.Count
 	snap.SpendMTDUSD = c.deps.Budget.EstimatedMTD(doc)
 	snap.NextCreateAt = nextCreateAllowedAt(doc.Ops)
+	recordDocGauges(doc, state, inFlight, c.deps.Clock.Now())
 
 	if doc.Instance == nil {
 		if snap.LastError == "" {
@@ -75,11 +77,8 @@ func (c *Controller) Status() Snapshot {
 	return snap
 }
 
-// setLastError and getLastError hold the controller-level last error —
-// transient failures (a failed search, create or worker check) that have
-// no document field to live in once the instance they touched is gone.
-// doc.Instance.LastError (set at T24) takes priority in Status when both
-// exist; this is only the fallback.
+// setLastError/getLastError hold the controller-level last error, the
+// Status fallback for a failure with no document field left to live in.
 func (c *Controller) setLastError(msg string) {
 	c.lastErrorMu.Lock()
 	c.lastError = msg

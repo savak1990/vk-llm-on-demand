@@ -8,41 +8,68 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
-// The remaining 9 rows of the spec's Observability table
-// (vkllm_provision_attempts_total, vkllm_gpu_uptime_seconds_total,
-// vkllm_gpu_idle_seconds, vkllm_gpu_idle_deadline_seconds,
-// vkllm_gpu_last_inference_finished_seconds, vkllm_destroy_attempts_total,
-// vkllm_orphans_destroyed_total, vkllm_reconcile_runs_total,
-// vkllm_instance_hourly_price_usd) are deferred to a later task; they
-// follow one of the 3 shapes below with nothing left to decide.
 var (
-	// Pattern 1: one-hot gauge over a fixed label enumeration.
 	gpuState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "vkllm_gpu_state",
 	}, []string{"state"})
 
-	// Pattern 2: counter with a bounded label enumeration.
 	shutdownsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "vkllm_shutdowns_total",
 	}, []string{"reason"})
 
-	// Pattern 3: histogram with a bounded label enumeration.
 	coldstartStageSeconds = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "vkllm_coldstart_stage_seconds",
 		Buckets: []float64{1, 5, 15, 30, 60, 120, 240, 480, 900},
 	}, []string{"stage"})
+
+	provisionAttemptsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vkllm_provision_attempts_total",
+	}, []string{"outcome"})
+
+	gpuUptimeSecondsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "vkllm_gpu_uptime_seconds_total",
+	})
+
+	gpuIdleSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "vkllm_gpu_idle_seconds",
+	})
+
+	gpuIdleDeadlineSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "vkllm_gpu_idle_deadline_seconds",
+	})
+
+	gpuLastInferenceFinishedSeconds = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "vkllm_gpu_last_inference_finished_seconds",
+	})
+
+	destroyAttemptsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vkllm_destroy_attempts_total",
+	}, []string{"outcome"})
+
+	orphansDestroyedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "vkllm_orphans_destroyed_total",
+	})
+
+	reconcileRunsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "vkllm_reconcile_runs_total",
+	}, []string{"outcome"})
+
+	instanceHourlyPriceUSD = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "vkllm_instance_hourly_price_usd",
+	})
 )
 
-// RegisterMetrics registers this package's collectors; main calls it
-// once (mirrors internal/store's own RegisterMetrics convention).
+// RegisterMetrics registers this package's collectors; main calls it once.
 func RegisterMetrics(reg prometheus.Registerer) {
-	reg.MustRegister(gpuState, shutdownsTotal, coldstartStageSeconds)
+	reg.MustRegister(gpuState, shutdownsTotal, coldstartStageSeconds,
+		provisionAttemptsTotal, gpuUptimeSecondsTotal, gpuIdleSeconds,
+		gpuIdleDeadlineSeconds, gpuLastInferenceFinishedSeconds,
+		destroyAttemptsTotal, orphansDestroyedTotal, reconcileRunsTotal,
+		instanceHourlyPriceUSD)
 }
 
-// setGPUState is the one-hot update: the current public state's gauge
-// goes to 1, every other of the 8 public states goes to 0 — call this
-// from processEvent whenever c.state actually changes, and once after
-// recovery so the gauge isn't empty before the first transition.
+// setGPUState is the one-hot update over the 8 public states; call on
+// every real state change, and once after recovery.
 func setGPUState(public string) {
 	for _, s := range []string{"STOPPED", "ALLOCATING", "STARTING", "LOADING_MODEL", "READY", "DRAINING", "DELETING", "FAILED"} {
 		if s == public {
@@ -53,11 +80,8 @@ func setGPUState(public string) {
 	}
 }
 
-// shutdownReason maps a committed transition onto the vkllm_shutdowns_total
-// reason label, replaying the exact guards decide.go used (idle checked
-// before lifetime, matching its case order) so the two can't be confused;
-// it is a pure, side-effect-free read of already-committed facts, called
-// only after the CAS that produced next has itself succeeded.
+// shutdownReason maps a committed transition onto vkllm_shutdowns_total's
+// reason, replaying decide.go's idle/lifetime guards rather than editing it.
 func shutdownReason(state, next State, ev Event, inFlight int, doc store.Document, cfg config.Controller, now time.Time) (string, bool) {
 	switch {
 	case isCreatingThroughDraining(state) && ev.Kind == EvProviderObserved && ev.Status.Terminal() && next == Destroying:
@@ -86,4 +110,78 @@ func manualOrBudget(ev Event) string {
 		return "manual"
 	}
 	return "budget"
+}
+
+// provisionOutcome maps a transition onto vkllm_provision_attempts_total's
+// outcome, for the rows the spec names one for; T2's edge-triggered gate
+// denials need their own allowed/denied memory and are not counted here.
+func provisionOutcome(state, next State, ev Event) (string, bool) {
+	switch {
+	case state == Searching && next == Idle && ev.Kind == EvNoOffer && ev.Err == nil:
+		return "no_offer", true
+	case state == Searching && next == Idle && ev.Kind == EvOfferChosen && ev.Reason != "":
+		return provisionDenialOutcome(ev.Reason)
+	case state == Searching && next == Idle && ev.Kind == EvNoOffer && ev.Err != nil:
+		return "provider_error", true
+	case state == Searching && next == Idle && ev.Kind == EvStop:
+		return "cancelled", true
+	case state == Creating && next == Idle && ev.Kind == EvCreateFailed:
+		return "provider_error", true
+	case isCreatingBootingOrLoading(state) && next == Destroying && ev.Kind == EvProviderObserved && ev.Status.Terminal():
+		return "failed_status", true
+	case isCreatingBootingOrLoading(state) && next == Destroying && ev.Kind == EvDeadlineExpired:
+		return "deadline_exceeded", true
+	case isCreatingBootingOrLoading(state) && next == Destroying && (ev.Kind == EvStop || ev.Kind == EvBudgetExhausted):
+		return "cancelled", true
+	case isCreatingBootingOrLoading(state) && next == Idle && ev.Kind == EvVanished:
+		return "lost", true
+	case state == Loading && next == Ready && ev.Kind == EvHealthOK:
+		return "ok", true
+	default:
+		return "", false
+	}
+}
+
+// provisionDenialOutcome is the spec's Unavailable-reason-to-outcome
+// mapping; the enum is closed, so an unrecognized reason counts nothing.
+func provisionDenialOutcome(reason string) (string, bool) {
+	switch reason {
+	case "no_offer":
+		return "no_offer", true
+	case "attempts_exhausted":
+		return "attempts_exhausted", true
+	case "budget_exhausted", "balance_low":
+		return "budget_exhausted", true
+	default:
+		return "", false
+	}
+}
+
+// recordDocGauges sets the 4 gauges that are pure functions of the
+// already-loaded document; Status is their only caller, so none of
+// these ever triggers a provider or store call of its own.
+func recordDocGauges(doc store.Document, state State, inFlight int, now time.Time) {
+	idleSeconds, idleDeadline, lastInference, hourly := 0.0, 0.0, 0.0, 0.0
+	if doc.Instance != nil {
+		hourly = doc.Instance.Offer.DPH
+		if doc.Instance.IdleDeadline != nil {
+			idleDeadline = float64(doc.Instance.IdleDeadline.Unix())
+		}
+		if doc.Instance.LastInferenceFinishedAt != nil {
+			lastInference = float64(doc.Instance.LastInferenceFinishedAt.Unix())
+		}
+		if state == Ready && inFlight == 0 {
+			base := doc.Instance.ReadyAt
+			if doc.Instance.LastInferenceFinishedAt != nil && (base == nil || doc.Instance.LastInferenceFinishedAt.After(*base)) {
+				base = doc.Instance.LastInferenceFinishedAt
+			}
+			if base != nil {
+				idleSeconds = now.Sub(*base).Seconds()
+			}
+		}
+	}
+	gpuIdleSeconds.Set(idleSeconds)
+	gpuIdleDeadlineSeconds.Set(idleDeadline)
+	gpuLastInferenceFinishedSeconds.Set(lastInference)
+	instanceHourlyPriceUSD.Set(hourly)
 }

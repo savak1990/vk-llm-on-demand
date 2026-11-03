@@ -29,6 +29,11 @@ func (c *Controller) reconcileOnce(ctx context.Context) {
 		return
 	}
 	instances, listErr := c.deps.Provider.ListInstances(ctx, "vkllm:"+c.deps.InstallationID+":")
+	if listErr != nil {
+		reconcileRunsTotal.WithLabelValues("error").Inc()
+	} else {
+		reconcileRunsTotal.WithLabelValues("ok").Inc()
+	}
 	b, balErr := c.deps.Provider.Balance(ctx)
 
 	c.balanceMu.Lock()
@@ -116,6 +121,7 @@ func (c *Controller) reconcileCompareInstances(ctx context.Context, doc store.Do
 			go func() {
 				if destroyConfirmed(ctx, c, id) {
 					shutdownsTotal.WithLabelValues("orphan").Inc()
+					orphansDestroyedTotal.Inc()
 				}
 			}()
 		}

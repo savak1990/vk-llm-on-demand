@@ -110,13 +110,14 @@ type Controller struct {
 
 	runCtx context.Context // set once by Run (Task 6); effect goroutines use this, never a caller's request ctx
 
-	mu         sync.Mutex
-	state      State
-	generation int64
-	inFlight   int
-	conn       *tunnel.Conn
-	failing    bool
-	since      time.Time
+	mu          sync.Mutex
+	state       State
+	generation  int64
+	inFlight    int
+	conn        *tunnel.Conn
+	failing     bool
+	unavailable string
+	since       time.Time
 
 	activityPending bool
 	activityAt      time.Time
