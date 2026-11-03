@@ -580,12 +580,9 @@ func (c *Controller) callerEvent(ctx context.Context, ev Event) (Snapshot, error
 	return c.Status(), store.ErrRetriesExhausted
 }
 
-// Status and recover are placeholders until the status and
-// restart-recovery work replaces them.
+// Status is a placeholder until the status work replaces it.
 func (c *Controller) Status() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return Snapshot{State: c.state, Public: PublicState(c.state, c.failing)}
 }
-
-func (c *Controller) recover(context.Context) error { return nil }

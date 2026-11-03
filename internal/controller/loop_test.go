@@ -603,14 +603,16 @@ func TestDestroyRefusedByLabelFence(t *testing.T) {
 func TestRunStartupTimeoutDestroysStuckBooting(t *testing.T) {
 	c, prov, clk, _, _ := newTestController(t)
 	c.deps.Config.StartupTimeout = 15 * time.Minute
-	c.state = Searching
-	putDoc(t, c, func(d *store.Document) { d.Desired = store.DesiredRunning })
-	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:1", Status: provider.StatusOther})
+	prov.SetBalance(100_000_000)
+	prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000})
+	// Not pre-seeded: an instance listed before Start would be a gen-above orphan to the t=0 reconcile.
 	never := make([]provider.InstanceStatus, 1000)
-	prov.SetStatusSequence(9, never...)
+	prov.SetStatusSequence(1, never...)
 	start := clk.Now()
 	runLoop(t, c)
-	c.postEvent(Event{Kind: EvOfferChosen, Offer: provider.Offer{ID: 11, MachineID: 42, Hourly: 600000}})
+	if _, err := c.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
 	waitFor(t, "Booting", func() bool { return c.stateNow() == Booting })
 
 	for i := 0; i < 400 && prov.Calls("destroy") == 0; i++ {

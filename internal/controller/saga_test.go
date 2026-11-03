@@ -21,7 +21,7 @@ func newTestController(t *testing.T) (*Controller, *fakeprovider.Fake, *fakecloc
 	budget := newFakeBudget(1.60, 30)
 	worker := newFakeWorker()
 	c, err := New(Deps{
-		Provider: prov, Store: fakestore.New("iid"), Clock: clk, Budget: budget, Worker: worker,
+		Provider: prov, Store: fakestore.New("iid"), Dialer: &recordDialer{}, Clock: clk, Budget: budget, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
 		Config: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxProvisionAttemptsPerHour: 3, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second},
