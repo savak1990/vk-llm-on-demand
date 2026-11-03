@@ -24,6 +24,12 @@ type Conn struct {
 	hostKey string
 }
 
+// NewConn builds a Conn from its parts; used by Dialer implementations
+// and by test fakes outside this package.
+func NewConn(rt http.RoundTripper, closer func() error, hostKey string) *Conn {
+	return &Conn{rt: rt, closer: closer, hostKey: hostKey}
+}
+
 // RoundTripper sends HTTP requests over this tunnel; requests reach
 // 127.0.0.1:8080 on the worker regardless of the request's own URL host.
 func (c *Conn) RoundTripper() http.RoundTripper { return c.rt }

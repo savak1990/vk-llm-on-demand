@@ -25,6 +25,10 @@ type sshDialer struct{ key func() ([]byte, error) }
 func NewSSH(key func() ([]byte, error)) Dialer { return &sshDialer{key: key} }
 
 func (d *sshDialer) Dial(ctx context.Context, in Instance) (*Conn, error) {
+	if in.Host == "" || in.Port <= 0 {
+		return nil, fmt.Errorf("tunnel: instance has no ssh address")
+	}
+
 	keyPEM, err := d.key()
 	if err != nil {
 		return nil, fmt.Errorf("tunnel: read ssh key: %w", err)
@@ -102,7 +106,7 @@ func wrapSSHClient(client *ssh.Client, hostKey string, interval time.Duration, m
 		return closeErr
 	}
 	go keepaliveLoop(client, closer, closed, interval, maxMisses)
-	return &Conn{rt: transport, hostKey: hostKey, closer: closer}
+	return NewConn(transport, closer, hostKey)
 }
 
 func keepaliveLoop(client *ssh.Client, closeFn func() error, closed <-chan struct{}, interval time.Duration, maxMisses int) {

@@ -34,12 +34,10 @@ func (d *directDialer) Dial(ctx context.Context, _ Instance) (*Conn, error) {
 			return nd.DialContext(ctx, "tcp", d.addr)
 		},
 	}
-	return &Conn{
-		rt: transport,
-		closer: func() error {
-			once.Do(func() { close(closed) })
-			transport.CloseIdleConnections()
-			return nil
-		},
-	}, nil
+	closer := func() error {
+		once.Do(func() { close(closed) })
+		transport.CloseIdleConnections()
+		return nil
+	}
+	return NewConn(transport, closer, ""), nil
 }

@@ -13,7 +13,7 @@ import (
 
 func TestSSHRoundTrip(t *testing.T) {
 	backend := startEchoHTTPServer(t)
-	addr, fp := startTestSSHServer(t, backend, true)
+	addr, fp := startTestSSHServer(t, backend, globalRequestAck)
 	host, port, _ := splitHostPortForTest(t, addr)
 
 	conn, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{Host: host, Port: port})
@@ -38,9 +38,20 @@ func TestSSHRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDialRejectsEmptyInstance(t *testing.T) {
+	start := time.Now()
+	_, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{})
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Dial took %v, want it to reject the empty instance instantly", elapsed)
+	}
+	if err == nil {
+		t.Fatal("Dial: want error for zero-value Instance, got nil")
+	}
+}
+
 func TestHostKeyMismatch(t *testing.T) {
 	backend := startEchoHTTPServer(t)
-	addr, _ := startTestSSHServer(t, backend, true)
+	addr, _ := startTestSSHServer(t, backend, globalRequestAck)
 	host, port, _ := splitHostPortForTest(t, addr)
 
 	_, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{Host: host, Port: port, HostKey: "sha256:not-the-real-fingerprint"})
@@ -51,7 +62,7 @@ func TestHostKeyMismatch(t *testing.T) {
 
 func TestHostKeyTrustOnFirstUse(t *testing.T) {
 	backend := startEchoHTTPServer(t)
-	addr, fp := startTestSSHServer(t, backend, true)
+	addr, fp := startTestSSHServer(t, backend, globalRequestAck)
 	host, port, _ := splitHostPortForTest(t, addr)
 
 	conn, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{Host: host, Port: port})
@@ -69,7 +80,7 @@ func TestKeepaliveClose(t *testing.T) {
 	defer restore()
 
 	backend := startEchoHTTPServer(t)
-	addr, _ := startTestSSHServer(t, backend, false) // never acks keepalives
+	addr, _ := startTestSSHServer(t, backend, globalRequestSilent) // never acks keepalives
 	host, port, _ := splitHostPortForTest(t, addr)
 
 	conn, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{Host: host, Port: port})
@@ -90,9 +101,34 @@ func TestKeepaliveClose(t *testing.T) {
 	t.Fatal("keepalive misses never closed the Conn within 2s")
 }
 
+func TestKeepaliveSurvivesRealOpenSSHFailureReply(t *testing.T) {
+	restore := SetKeepaliveForTest(20*time.Millisecond, 3)
+	defer restore()
+
+	backend := startEchoHTTPServer(t)
+	addr, _ := startTestSSHServer(t, backend, globalRequestNack) // replies ok=false, like real OpenSSH
+	host, port, _ := splitHostPortForTest(t, addr)
+
+	conn, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{Host: host, Port: port})
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	client := &http.Client{Transport: conn.RoundTripper()}
+	for i := 0; i < 25; i++ {
+		resp, err := client.Get("http://worker/")
+		if err != nil {
+			t.Fatalf("Get #%d: %v, want the tunnel to survive a REQUEST_FAILURE keepalive reply", i, err)
+		}
+		_ = resp.Body.Close()
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestSSHCloseIsSafeConcurrentlyAndTwice(t *testing.T) {
 	backend := startEchoHTTPServer(t)
-	addr, _ := startTestSSHServer(t, backend, true)
+	addr, _ := startTestSSHServer(t, backend, globalRequestAck)
 	host, port, _ := splitHostPortForTest(t, addr)
 
 	conn, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{Host: host, Port: port})

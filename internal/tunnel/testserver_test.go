@@ -12,11 +12,21 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// globalRequestMode controls how the test server answers global
+// requests (e.g. keepalive@openssh.com).
+type globalRequestMode int
+
+const (
+	globalRequestAck    globalRequestMode = iota // reply ok=true
+	globalRequestNack                            // reply ok=false, like real OpenSSH's REQUEST_FAILURE
+	globalRequestSilent                          // never reply
+)
+
 // startTestSSHServer runs a minimal in-process SSH server that proxies
 // every direct-tcpip channel to backendAddr, and returns its listen
-// address and host key fingerprint. ackGlobalRequests controls whether
-// it replies to keepalive requests (TestKeepaliveClose sets it false).
-func startTestSSHServer(t *testing.T, backendAddr string, ackGlobalRequests bool) (addr, hostKeyFingerprint string) {
+// address and host key fingerprint. mode controls how it answers
+// global requests such as keepalives.
+func startTestSSHServer(t *testing.T, backendAddr string, mode globalRequestMode) (addr, hostKeyFingerprint string) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -41,14 +51,14 @@ func startTestSSHServer(t *testing.T, backendAddr string, ackGlobalRequests bool
 			if err != nil {
 				return
 			}
-			go handleTestSSHConn(conn, config, backendAddr, ackGlobalRequests)
+			go handleTestSSHConn(conn, config, backendAddr, mode)
 		}
 	}()
 
 	return ln.Addr().String(), ssh.FingerprintSHA256(signer.PublicKey())
 }
 
-func handleTestSSHConn(conn net.Conn, config *ssh.ServerConfig, backendAddr string, ack bool) {
+func handleTestSSHConn(conn net.Conn, config *ssh.ServerConfig, backendAddr string, mode globalRequestMode) {
 	sc, chans, reqs, err := ssh.NewServerConn(conn, config)
 	if err != nil {
 		return
@@ -57,8 +67,15 @@ func handleTestSSHConn(conn net.Conn, config *ssh.ServerConfig, backendAddr stri
 
 	go func() {
 		for req := range reqs {
-			if ack && req.WantReply {
+			if !req.WantReply {
+				continue
+			}
+			switch mode {
+			case globalRequestAck:
 				_ = req.Reply(true, nil)
+			case globalRequestNack:
+				_ = req.Reply(false, nil)
+			case globalRequestSilent:
 			}
 		}
 	}()
