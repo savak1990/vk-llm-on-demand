@@ -1,14 +1,17 @@
 ---
 id: "CORE-040"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-02"
 depends_on: ["CORE-010"]
 adrs: ["0004", "0003", "0011", "0014"]
 ---
 
 # 040 — State store
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists; update-1 (ADR 0011): schema 2, `desired` RUNNING|STOPPED, idle timestamps, no leases.
+**Status note:** DONE. Implemented, tested, and the kind integration job
+(AC12, AC13, `TestKindRBAC`) ran against a real cluster in CI; findings are
+recorded in Evidence below. Update-1 (ADR 0011): schema 2, `desired`
+RUNNING|STOPPED, idle timestamps, no leases.
 
 **Complexity:** M
 **Risk:** medium — every other component trusts this package for its only durable state and for write serialisation
@@ -384,16 +387,66 @@ with a 2 s timeout whose error fails readiness, so `ErrCorrupt`,
 
 ## Definition of done
 
-- [ ] AC1–AC18 pass in CI; AC12–AC13 run in the kind job.
-- [ ] `make specs-check` passes; measured AC10 size recorded below.
-- [ ] Status flipped to DONE in the same PR (folder `040-D-state-store`); Evidence filled.
+- [x] AC1–AC18 pass in CI; AC12–AC13 run in the kind job.
+- [x] `make specs-check` passes; measured AC10 size recorded below.
+- [x] Status flipped to DONE in the same PR (folder `040-D-state-store`); Evidence filled.
 
 ## Open questions
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| `research.md` has no Kubernetes API section: request paths, `resourceVersion` semantics, 409 on stale PUT, keyless ConfigMap shape, the service-account mount paths, token rotation, the 1 MiB ConfigMap limit | rule: no external fact without a research citation | kind integration job (AC12, AC13, `TestKindRBAC`); then add a research section | values from ADR 0004 §2–3 and this spec |
+| `research.md` has no Kubernetes API section: request paths, `resourceVersion` semantics, 409 on stale PUT, keyless ConfigMap shape, the service-account mount paths, token rotation, the 1 MiB ConfigMap limit | rule: no external fact without a research citation | kind integration job (AC12, AC13, `TestKindRBAC`); then add a research section | **closed** (research §8): `resourceVersion`/409, keyless-ConfigMap-is-fresh-document and RBAC enforcement confirmed live; token rotation on 401 and the real in-pod service-account mount path stay unverified live (research §8 notes both gaps) |
 
 ## Evidence
 
-None yet.
+### AC10: capped document size (Task 2, unit test)
+
+`TestCappedDocumentSize` measured the encoded size of a document holding a
+full `instance`, 20 `ops`, 100 ledger entries and 10 denylist entries:
+**10,358 bytes** — well under the 256 KiB `Encode` guard and under this
+AC's 32,768-byte bound.
+
+### AC12, AC13, `TestKindRBAC`: kind integration job
+
+PR #7, GitHub Actions run 41529901458, job `store-kind`. Cluster: kind
+v0.33.0, kubectl v1.37.1, node image `kindest/node:v1.37.0`, API server on
+the runner's own loopback address at an ephemeral port.
+
+- `TestKindRace` (AC12): PASS in 6.36 s. Two writers ran 1000 successful
+  `Transition` calls each (2000 total); final `generation` 2000; each
+  writer's observed values strictly increasing; `vkllm_store_conflicts_total
+  > 0` — the real API server returned 409 on at least one stale
+  `resourceVersion` PUT during the race, confirming ADR 0004's
+  optimistic-concurrency assumption against a real cluster for the first
+  time (previously only verified against `httptest` fakes).
+- `TestKindRBAC`: PASS in 0.01 s. The scoped ServiceAccount token (bound to
+  a Role granting only `get`/`update` on the named ConfigMap) did `get` and
+  `update`, and got a real 403 Forbidden on `create`, `patch`, `delete` and
+  `list` — no RBAC surprise; the Role as written matches this spec's
+  contract exactly.
+- `TestKindMissingAndRecreate` (AC13): PASS in 0.12 s. Deleting the
+  ConfigMap made `Transition` and `Ready` fail with `ErrStoreMissing`;
+  recreating the empty-shell ConfigMap (`kubectl create configmap`, no
+  `data` key) made the next `Transition` see a fresh document
+  (`generation` 0, `IsFresh()` true) with the configured `installationId`
+  — confirming the "keyless ConfigMap = fresh document" contract (ADR 0004
+  §3) against the real API, not just the `httptest` mock.
+
+No RBAC surprise and no unexpected 409: everything on the real cluster
+behaved exactly as the Design and contracts section assumed.
+
+`internal/store` has no structured logging yet; the Observability
+section's failure log fields (`op`, `outcome`, `attempt`, `schema_version`,
+`bytes`) are wired in CORE-050, which constructs the store and wires it
+into `main`.
+
+**Not exercised live in this run:** the 401-token-refresh-and-retry path —
+no 401 occurred against the real cluster in this run; still verified only
+by Task 5's `httptest`-based unit tests, `TestTokenRefreshOn401` and
+`TestUnauthorizedAfterRetryIsTerminal`. The kind job also mints its token
+with `kubectl create token` and writes it to a file on the runner rather
+than running the client as an in-cluster pod, so `InCluster`'s real
+`/var/run/secrets/kubernetes.io/serviceaccount/` mount paths were not
+exercised live either; `Config` was built by hand against kind, as this
+spec's own "`configmap` implementation" section already says the
+integration test does. Full write-up: research §8.

@@ -37,6 +37,7 @@ jobs:
               - '.golangci.yml'
               - 'deploy/docker/gpu-on-demand.Dockerfile'
               - 'Makefile'
+              - 'test/kind/**'
             helm:
               - 'deploy/helm/**'
             workflows:
@@ -155,6 +156,43 @@ jobs:
           make helm-package VERSION="$version"
           ls dist/
 
+  store-kind:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    concurrency:
+      group: ci-store-kind-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+
+      - name: Apply the test RBAC fixture
+        run: kubectl apply -f test/kind/role.yaml
+
+      - name: Mint a token and export cluster connection details
+        run: |
+          set -euo pipefail
+          echo "KIND_TOKEN=$(kubectl create token vkllm-state-test --duration=10m)" >> "$GITHUB_ENV"
+          echo "KIND_API_SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')" >> "$GITHUB_ENV"
+          kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > ca.crt
+          echo "KIND_CA_PATH=$PWD/ca.crt" >> "$GITHUB_ENV"
+
+      - name: Write the token to a file (the client reads a path, not an env var)
+        run: echo -n "$KIND_TOKEN" > token && echo "KIND_TOKEN_PATH=$PWD/token" >> "$GITHUB_ENV"
+
+      - run: go test -tags integration ./internal/store/... -count=1 -run 'TestKind' -v
+
   workflows:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
@@ -261,6 +299,7 @@ jobs:
       - go
       - image
       - helm
+      - store-kind
       - workflows
       - repo
       - security

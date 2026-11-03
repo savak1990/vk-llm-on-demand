@@ -443,3 +443,44 @@ each candidate `inet_down` threshold leaves; this spike did not run that
 census call (the production filter's `inet_down` clause was simply applied
 without a parallel unfiltered count), so that part of the rule's input is
 also unavailable from this data and is not fabricated here.
+
+## 8. Kubernetes API (CORE-040 kind job)
+
+Findings from the kind integration job in PR #7 (GitHub Actions run
+41529901458, job `store-kind`): kind v0.33.0, kubectl v1.37.1, node image
+`kindest/node:v1.37.0`, API server served on the runner's own loopback
+address at an ephemeral port. Tagged **S** (our own observation against a
+real cluster, not vendor documentation) unless noted.
+
+| Fact | Tag | Source |
+|---|---|---|
+| A PUT whose `metadata.resourceVersion` no longer matches the stored object returns 409, not a silent overwrite | S | `TestKindRace`: two writers, 1000 successful `Transition` calls each (2000 total), final `generation` 2000, strictly increasing per writer, `vkllm_store_conflicts_total > 0` — the real API server returned at least one 409 during the race |
+| A keyless ConfigMap (the chart's empty shell, no `data` key) reads back as a fresh document: `generation` 0, `IsFresh()` true, the configured `installationId` | S | `TestKindMissingAndRecreate`, shell recreated with `kubectl create configmap vkllm-state` (no `data` key) |
+| Deleting the ConfigMap fails `Transition` and `Ready` with `ErrStoreMissing` rather than a recreate | S | `TestKindMissingAndRecreate` |
+| A Role granting only `get`/`update` on one ConfigMap by `resourceNames` is enforced exactly: the bound ServiceAccount token's `get`/`update` succeed, and `create`, `patch`, `delete` and `list` (the collection GET) all return a real 403 | S | `TestKindRBAC` |
+| `TestCappedDocumentSize` (unit test, no cluster): a document with a full `instance`, 20 `ops`, 100 ledger entries and 10 denylist entries encodes to 10,358 bytes | S | measured directly from `Encode`, not from the cluster |
+
+**Gaps, not papered over:**
+
+- **Token rotation on 401.** No 401 occurred against the real cluster in
+  this run, so the client's "re-read the token file, retry once" path was
+  not exercised live. It is still verified only by the `httptest`-based
+  unit tests `TestTokenRefreshOn401` and `TestUnauthorizedAfterRetryIsTerminal`
+  (U — unverified against a real cluster).
+- **Service-account mount paths.** The job mints its token with `kubectl
+  create token` and writes it to a file on the runner (`test/kind/role.yaml`
+  plus the `store-kind` job steps), then builds `configmap.Config` by hand
+  pointing at that file; it does not run the client inside a pod with a
+  projected service-account volume. `InCluster`'s real reads of
+  `KUBERNETES_SERVICE_HOST`/`PORT` and
+  `/var/run/secrets/kubernetes.io/serviceaccount/{token,ca.crt,namespace}`
+  were therefore not exercised live either (U).
+- **The 1 MiB ConfigMap size limit.** Never approached: the largest
+  encoded document measured (10,358 bytes, above) is far below both the
+  256 KiB `Encode` guard and the server's 1 MiB object limit, so this
+  stays a documented API fact (`docs/adr/0004-state-persistence.md`'s own
+  Risks section), not a live-tested one (U).
+
+No RBAC surprise and no unexpected 409 otherwise: everything on the real
+cluster behaved exactly as `specs/core/040-D-state-store/spec.md`'s Design
+and contracts section assumed.
