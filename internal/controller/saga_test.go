@@ -38,7 +38,7 @@ func recvEvent(t *testing.T, c *Controller) (Event, bool) {
 	select {
 	case e := <-c.events:
 		return e, true
-	case <-time.After(time.Second):
+	case <-time.After(150 * time.Millisecond):
 		return Event{}, false
 	}
 }
