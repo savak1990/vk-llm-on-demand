@@ -12,7 +12,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	dto "github.com/prometheus/client_model/go"
 
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
@@ -237,9 +236,16 @@ func (h *harness) metricValue(name string, labels ...string) float64 {
 		if mf.GetName() != name {
 			continue
 		}
+	metric:
 		for _, m := range mf.GetMetric() {
-			if !metricLabelsMatch(m, want) {
+			labels := m.GetLabel()
+			if len(want) != len(labels) {
 				continue
+			}
+			for _, lp := range labels {
+				if want[lp.GetName()] != lp.GetValue() {
+					continue metric
+				}
 			}
 			if c := m.GetCounter(); c != nil {
 				return c.GetValue()
@@ -250,18 +256,6 @@ func (h *harness) metricValue(name string, labels ...string) float64 {
 		}
 	}
 	return 0
-}
-
-func metricLabelsMatch(m *dto.Metric, want map[string]string) bool {
-	if len(want) != len(m.GetLabel()) {
-		return false
-	}
-	for _, lp := range m.GetLabel() {
-		if want[lp.GetName()] != lp.GetValue() {
-			return false
-		}
-	}
-	return true
 }
 
 // counterDelta reads a counter relative to a baseline captured earlier:
@@ -1649,14 +1643,22 @@ func TestAC24_AttemptsCap(t *testing.T) {
 
 	h.Settle(t0.Add(2880 * time.Second))
 	snap := h.ctl.Status()
-	if snap.Desired != store.DesiredStopped || snap.Unavailable != "attempts_exhausted" {
-		t.Fatalf("snapshot at t=2880 = %+v, want STOPPED/attempts_exhausted", snap)
+	if snap.State != Idle || snap.Unavailable != "attempts_exhausted" {
+		t.Fatalf("snapshot at t=2880 = %+v, want Idle/attempts_exhausted", snap)
 	}
 	// Known metrics gap, not silently worked around: this denial happens on
 	// an Idle+Tick event, which provisionOutcome has no case for (only a
 	// Searching+OfferChosen denial is mapped), so no counter moves here.
 	if got := counterDelta(provisionAttemptsTotal.WithLabelValues("attempts_exhausted"), beforeExhausted); got != 0 {
 		t.Fatalf("provision_attempts_total{attempts_exhausted} delta = %v, want 0 (known metrics gap)", got)
+	}
+
+	// Desired can lag one reconcile tick behind State/Unavailable: EvGone and
+	// the same-instant EvTick can race, and one ordering processes Tick while
+	// state is still Destroying, where T2 doesn't match until the next tick.
+	h.Settle(t0.Add(2940 * time.Second))
+	if snap := h.ctl.Status(); snap.Desired != store.DesiredStopped {
+		t.Fatalf("Desired by t=2940 = %q, want STOPPED", snap.Desired)
 	}
 
 	h.Settle(t0.Add(3000 * time.Second))
