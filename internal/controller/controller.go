@@ -117,6 +117,9 @@ type Controller struct {
 	failing    bool
 	since      time.Time
 
+	activityPending bool
+	activityAt      time.Time
+
 	timersMu sync.Mutex
 	timers   map[timerKind]time.Time
 
