@@ -475,7 +475,7 @@ func TestFailedDestroyRetryWakesLoopAndRetries(t *testing.T) {
 	waitFor(t, "retry armed", func() bool { _, ok := timerAt(c, timerDestroyRetry); return ok })
 	select {
 	case <-c.wake:
-	default:
+	case <-time.After(time.Second):
 		t.Fatal("arming the retry from the destroy goroutine did not wake the loop")
 	}
 	clk.Advance(20 * time.Second)
@@ -594,5 +594,33 @@ func TestDestroyRefusedByLabelFence(t *testing.T) {
 	}
 	if at, ok := timerAt(c, timerDestroyRetry); !ok || !at.After(clk.Now()) {
 		t.Fatalf("timerDestroyRetry = %v, %v, want re-armed", at, ok)
+	}
+}
+
+// An instance that never reaches running must be destroyed at the startup
+// deadline; the clock steps in 5s increments so a waiter Run registers
+// late is still fired by the next Advance.
+func TestRunStartupTimeoutDestroysStuckBooting(t *testing.T) {
+	c, prov, clk, _, _ := newTestController(t)
+	c.deps.Config.StartupTimeout = 15 * time.Minute
+	c.state = Searching
+	putDoc(t, c, func(d *store.Document) { d.Desired = store.DesiredRunning })
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:1", Status: provider.StatusOther})
+	never := make([]provider.InstanceStatus, 1000)
+	prov.SetStatusSequence(9, never...)
+	start := clk.Now()
+	runLoop(t, c)
+	c.postEvent(Event{Kind: EvOfferChosen, Offer: provider.Offer{ID: 11, MachineID: 42, Hourly: 600000}})
+	waitFor(t, "Booting", func() bool { return c.stateNow() == Booting })
+
+	for i := 0; i < 400 && prov.Calls("destroy") == 0; i++ {
+		clk.Advance(5 * time.Second)
+		time.Sleep(time.Millisecond)
+	}
+	if prov.Calls("destroy") == 0 {
+		t.Fatalf("no destroy by %v after a 15m startup timeout; state=%v", clk.Now().Sub(start), c.stateNow())
+	}
+	if elapsed := clk.Now().Sub(start); elapsed < 15*time.Minute {
+		t.Fatalf("destroyed after %v, before the 15m startup timeout", elapsed)
 	}
 }

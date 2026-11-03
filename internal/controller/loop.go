@@ -204,14 +204,14 @@ func (c *Controller) syncTimers(prev, next State, doc store.Document) {
 	}
 
 	if next == Draining && prev != Draining {
+		// Armed under mu so a RequestEnd's "drain now" can't be overwritten by a stale full deadline.
 		c.mu.Lock()
-		idle := c.inFlight == 0
-		c.mu.Unlock()
-		if idle {
-			c.armTimer(timerDrain, now)
-		} else {
-			c.armTimer(timerDrain, now.Add(c.deps.Config.ShutdownDrainTimeout))
+		at := now.Add(c.deps.Config.ShutdownDrainTimeout)
+		if c.inFlight == 0 {
+			at = now
 		}
+		c.armTimer(timerDrain, at)
+		c.mu.Unlock()
 	} else if next != Draining {
 		c.clearTimer(timerDrain)
 	}
@@ -469,14 +469,20 @@ func (c *Controller) handleEvent(ctx context.Context, ev Event) {
 	}
 }
 
+func (c *Controller) currentGen() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation
+}
+
 func (c *Controller) fireTimer(ctx context.Context, k timerKind) {
 	switch k {
 	case timerIdle:
 		c.clearTimer(timerIdle)
-		c.handleEvent(ctx, Event{Kind: EvIdleTimer})
+		c.handleEvent(ctx, Event{Kind: EvIdleTimer, Gen: c.currentGen()})
 	case timerStartup, timerDrain:
 		c.clearTimer(k)
-		c.handleEvent(ctx, Event{Kind: EvDeadlineExpired})
+		c.handleEvent(ctx, Event{Kind: EvDeadlineExpired, Gen: c.currentGen()})
 	case timerDestroyRetry:
 		c.clearTimer(timerDestroyRetry)
 		c.fireDestroyRetry(ctx)
