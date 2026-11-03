@@ -21,11 +21,20 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	case isProvisioningOrServing(state) && ev.Kind == EvStart && f.Doc.Desired == store.DesiredRunning:
 		return state, nil, nil
 
-	// A backoff wait is a pacing delay, not a denial: nothing below
-	// should deny, search, or revive until it elapses.
-	case (state == Idle || state == Draining || state == Destroying) &&
-		(ev.Kind == EvStart || ev.Kind == EvTick || ev.Kind == EvGone) && ev.Reason == "backoff":
+	// A backoff wait at Idle is a pacing delay, not a denial: a Tick
+	// or Gone must not search again until it elapses. A Start still
+	// records the desire right away, with no search of its own, so
+	// the next eligible Tick starts the search on its own.
+	case state == Idle && (ev.Kind == EvTick || ev.Kind == EvGone) && ev.Reason == "backoff":
 		return state, nil, nil
+	case state == Idle && ev.Kind == EvStart && ev.Reason == "backoff":
+		return Idle, func(d *store.Document) error {
+			if d.Instance != nil {
+				return errStale
+			}
+			d.Desired = store.DesiredRunning
+			return nil
+		}, nil
 
 	// T2: Start denied by the gate, or a stale wanted Tick/Gone newly
 	// denied while Idle — write desired=STOPPED (idempotent if already
@@ -54,8 +63,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		}, []Effect{effSearch{filter: searchFilter(f)}}
 
 	// T4: Start revives a not-yet-destroyed instance (Creating still
-	// desired=STOPPED, or Draining/Destroying); T2 above already took
-	// precedence when the gate denied it.
+	// desired=STOPPED, or Draining/Destroying); a gate denial is
+	// already handled above for the states where that's possible.
 	case ((state == Creating && f.Doc.Desired == store.DesiredStopped) || state == Draining || state == Destroying) &&
 		ev.Kind == EvStart:
 		return state, func(d *store.Document) error {
@@ -91,7 +100,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		return Idle, nil, nil
 
 	// T5: an offer was chosen while Searching — commit the op and the
-	// label before any provider call (C-2), then create.
+	// label before any provider call, so a crash after this CAS never
+	// leaves a create in flight that nothing on record is tracking.
 	case state == Searching && ev.Kind == EvOfferChosen && f.Doc.Desired == store.DesiredRunning:
 		nextGen := f.Doc.Generation + 1
 		label := fmt.Sprintf("vkllm:%s:%d", f.Doc.InstallationID, nextGen)
@@ -173,9 +183,16 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 
 	// T11: the provider says our label already exists — destroy every
 	// instance under that exact label, using the document's own label
-	// rather than a write here, since this generation never got one.
+	// rather than a new one, since this attempt never got an id.
 	case state == Creating && ev.Kind == EvCreateFailed && ev.Duplicate:
-		return Destroying, nil, nil
+		return Destroying, func(d *store.Document) error {
+			if d.Instance == nil || d.Generation != ev.Gen {
+				return errStale
+			}
+			d.Instance.State = Destroying.String()
+			finishOp(d, createOpKey(d.Generation), "duplicate_label", f.Now)
+			return nil
+		}, nil
 
 	// T12: the instance is running with an address — dial it, using
 	// only this observation's host/port, never the document.
@@ -193,6 +210,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	case state == Booting && ev.Kind == EvLinkUp:
 		return Loading, func(d *store.Document) error {
 			if d.Instance == nil || d.Generation != ev.Gen {
+				return errStale
+			}
+			if d.Instance.State != Booting.String() {
 				return errStale
 			}
 			d.Instance.State = Loading.String()
@@ -252,7 +272,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		}, nil
 
 	// T17: Stop/BudgetExhausted before the id is known — stay in
-	// Creating; T8 (once Created arrives) or saga step 4 resolves it.
+	// Creating; there's nothing to destroy yet, so this only records
+	// the desire to stop and lets a later event finish the job.
 	case (ev.Kind == EvStop || ev.Kind == EvBudgetExhausted) &&
 		state == Creating && f.Doc.Instance != nil && f.Doc.Instance.ProviderID == "":
 		return Creating, func(d *store.Document) error {
@@ -267,8 +288,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		}, nil
 
 	// T20: idle deadline reached while Ready and nothing in flight —
-	// drain. The Conn itself closes later, at the drain deadline (T26)
-	// or when in-flight reaches zero (T25), not here.
+	// drain. The Conn itself closes later, once draining finishes,
+	// not here.
 	case state == Ready && (ev.Kind == EvIdleTimer || ev.Kind == EvTick) && f.InFlight == 0 && idleRuleFires(f):
 		return Draining, func(d *store.Document) error {
 			if d.Instance == nil || d.Instance.State != Ready.String() {
@@ -327,8 +348,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		}, nil
 
 	// T24: two non-Ready probes, or a host-key mismatch, while
-	// Ready/Serving — destroy. (Closing the tunnel is Task 6's generic
-	// "leaving a Conn-holding state" hook, not this row's job.)
+	// Ready/Serving — destroy. (Closing the tunnel is a generic hook
+	// for leaving any Conn-holding state, not this row's own job.)
 	case (state == Ready || state == Serving) && ev.Kind == EvWorkerFailed:
 		return Destroying, func(d *store.Document) error {
 			if d.Instance == nil || d.Generation != ev.Gen {
@@ -376,8 +397,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		return Destroying, nil, nil
 
 	// T29: the provider confirms the instance is gone — close the
-	// ledger entry and return to Idle; if desired is still RUNNING
-	// (T4 revived it), the next Tick/Gone takes T1.
+	// ledger entry and return to Idle; desired is left untouched, so
+	// a revival that happened mid-destroy still searches again soon.
 	case state == Destroying && ev.Kind == EvGone:
 		return Idle, func(d *store.Document) error {
 			if d.Instance == nil || d.Generation != ev.Gen {
@@ -407,6 +428,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance == nil || d.Generation != ev.Gen {
 				return errStale
 			}
+			if d.Instance.State != Loading.String() {
+				return errStale
+			}
 			d.Instance.State = Ready.String()
 			ready := f.Now
 			d.Instance.ReadyAt = &ready
@@ -418,8 +442,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			return nil
 		}, nil
 
-	// R1: any (state, event) pair not listed above leaves the state
-	// unchanged — the spec's own invariant, not a gap in this table.
+	// Any (state, event) pair not listed above leaves the state
+	// unchanged — that is itself the intended behavior, not a gap.
 	default:
 		return state, nil, nil
 	}

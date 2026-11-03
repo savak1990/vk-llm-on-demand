@@ -104,7 +104,7 @@ type Event struct {
 	Gen  int64
 
 	Offer      provider.Offer
-	Reason     string // "no_offer" | "budget_exhausted" | "balance_low" | "attempts_exhausted"
+	Reason     string // "" (gate ok) | "backoff" (pacing, not a denial) | "no_offer" | "budget_exhausted" | "balance_low" | "attempts_exhausted"
 	ProviderID provider.InstanceID
 	Err        error
 	Class      provider.Class
