@@ -14,7 +14,7 @@ adrs: ["0012", "0010", "0011", "0009"]
 **Risk:** medium — a management token can rent a GPU, so auth, rate limit and idempotency guard money
 **Estimated effort:** one to two sessions (5–8 h), half of it the contract and 403-matrix tests
 **Recommended model:** standard — a thin HTTP layer over the controller interface of ADR 0012 §2
-**Depends on:** [CORE-040](../040-D-state-store/spec.md), [CORE-050](../050-P-gpu-lifecycle-controller/spec.md)
+**Depends on:** [CORE-040](../040-D-state-store/spec.md), [CORE-050](../050-D-gpu-lifecycle-controller/spec.md)
 
 ## Outcome
 

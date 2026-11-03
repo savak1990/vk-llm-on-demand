@@ -16,7 +16,7 @@ timeout (ADR 0011) and separate management credentials (ADR 0012).
 **Risk:** medium — every exit path of an admitted request must call `RequestEnd` exactly once, because that call is what moves the idle deadline
 **Estimated effort:** two sessions (6–8 h)
 **Recommended model:** strong — streaming, cancellation, shutdown and auth in one package
-**Depends on:** [CORE-040](../040-D-state-store/spec.md), [CORE-050](../050-P-gpu-lifecycle-controller/spec.md)
+**Depends on:** [CORE-040](../040-D-state-store/spec.md), [CORE-050](../050-D-gpu-lifecycle-controller/spec.md)
 
 ## Outcome
 
