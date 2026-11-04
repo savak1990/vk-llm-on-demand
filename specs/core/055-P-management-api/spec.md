@@ -1,6 +1,6 @@
 ---
 id: "CORE-055"
-status: "DRAFT"
+status: "READY"
 updated: "2026-11-01"
 depends_on: ["CORE-040", "CORE-050"]
 adrs: ["0012", "0010", "0011", "0009"]
@@ -56,9 +56,9 @@ Port 9090 never serves it (ADR 0012 §6).
 
 | Method, path | Request body | Success | Failure |
 |---|---|---|---|
-| `POST /api/v1/gpu/start` | empty or `{}` | 200 status document if state `READY`; else 202 status document (`ALLOCATING`…`LOADING_MODEL`, or `DRAINING`/`DELETING`/`FAILED` with `desired=RUNNING` recorded) | 503 `gpu_unavailable` + `reason`; 400; 401; 403; 413; 429; 500 |
+| `POST /api/v1/gpu/start` | empty or `{}` | 200 status document + `result: "already_running"` if state `READY`; 202 status document + `result: "accepted"` otherwise (`ALLOCATING`…`LOADING_MODEL`, or `DRAINING`/`DELETING`/`FAILED` with `desired=RUNNING` recorded) | 503 `gpu_unavailable` + `reason`; 400; 401; 403; 413; 429; 500 |
 | `GET /api/v1/gpu/status` | none | 200 status document | 401; 403; 429; 500 |
-| `POST /api/v1/gpu/stop` | empty, `{}`, `{"force": false}` or `{"force": true}` | 200 status document if state `STOPPED`; else 202 status document (`DRAINING`, `DELETING`, or a provisioning state being cancelled) | 400 `force_not_enabled`; 400; 401; 403; 413; 429; 500 |
+| `POST /api/v1/gpu/stop` | empty, `{}`, `{"force": false}` or `{"force": true}` | 200 status document + `result: "already_stopped"` if state `STOPPED`; 202 status document + `result: "accepted"` otherwise (`DRAINING`, `DELETING`, or a provisioning state being cancelled) | 400 `force_not_enabled`; 400; 401; 403; 413; 429; 500 |
 | `GET /api/v1/gpu/cost` | none | 200 cost document | 401; 403; 429; 500 |
 | any other path or method under `/api/v1/` | — | — | 404 `not_found` / 405 `method_not_allowed`, after auth |
 
@@ -93,6 +93,7 @@ carries no `Retry-After`.
 | `lastInferenceFinishedAt` | snapshot | rendered as given; `null` when the snapshot's value is zero |
 | `idleDeadline` | snapshot | `null` unless `state` is `READY` |
 | `secondsUntilIdleShutdown` | derived | `max(0, idleDeadline − now)` whole seconds; `null` when `idleDeadline` is `null` |
+| `nextCreateAt` | snapshot | RFC 3339 UTC timestamp, `null` unless a future next-allowed-create time exists (render `null` if the stored time is in the past) |
 | `cost` | snapshot cost block (CORE-100) | estimates |
 | `unavailable` | snapshot | `""` or a reason below |
 | `installationId`, `labelPrefix` | snapshot | |
@@ -130,6 +131,9 @@ beyond `uptimeSeconds`.
 | 429 | `rate_limit_exceeded` | token bucket empty; `Retry-After` = seconds to one token, minimum 1 |
 | 500 | `internal_error` | any other controller error |
 | 503 | `gpu_unavailable` | start denied; `reason` ∈ `budget_exhausted, attempts_exhausted, no_offer, balance_low` |
+
+The reason enum is these four values only; an unknown provider balance is
+folded into `balance_low` by `Budget.Allow`.
 
 The 64 KiB limit is a package constant `maxBodyBytes = 65536`, not a
 config key: management bodies are at most `{"force":true}`.
@@ -283,11 +287,12 @@ CORE-080 and CORE-150.
 
 ## Open questions
 
-| Question | Why it matters | Settled by | Default |
+| Question | Why it matters | Settled by | Resolution |
 |---|---|---|---|
 | Exact `controller.Snapshot` field names (public state, desired, instance block, `LastInferenceFinishedAt`, `IdleDeadline`, cost block, `Unavailable`) and the Start-denial error value | mgmt maps them field by field | CORE-050 | snapshot carries the public state string per ADR 0011 §6; denial error wraps `controller.ErrUnavailable` |
-| Is `no_offer` known synchronously on `Start`, or only later in status? | FR-2.6 wants 503, FR-2.5 wants < 200 ms | CORE-050 | 503 only when the snapshot already holds `no_offer` from the last search; otherwise 202 and `unavailable` in status |
-| Should 2xx bodies carry a `result` field (`accepted`, `already_running`, `already_stopped`)? | ADR 0012 §1 lists the codes but no field | CORE-150 | no field; the HTTP status carries it |
+| Is `no_offer` known synchronously on `Start`, or only later in status? | FR-2.6 wants 503, FR-2.5 wants < 200 ms | CORE-050 | 503 only when the snapshot already holds `no_offer` from the last search; otherwise 202 and `unavailable` in status; 202 may also be returned during a create-retry backoff (distinct from `no_offer`-based denial) |
+| Should 2xx bodies carry a `result` field (`accepted`, `already_running`, `already_stopped`)? | ADR 0012 §1 lists the codes but no field | 055 | start/stop responses carry `result`: 200 → `"already_running"`/`"already_stopped"`; 202 → `"accepted"`; status and cost responses do not |
+| `nextCreateAt` field on status document | mgmt needs to advertise when start will be allowed again | 055 | nullable RFC 3339 timestamp, rendered `null` unless the controller currently holds a future next-allowed-create time |
 | `uptimeSeconds`: since `createdAt` or `readyAt`? | ADR 0012's example does not say | ADR 0012 clarification | `createdAt` (billed time, research §1.5) |
 | Start/stop on `FAILED` | ADR 0011 §6 has it, ADR 0012 §1 does not | CORE-050 | treated like `DELETING`: 202 |
 | Cost field names | CORE-100 is being rewritten | CORE-100 | the list above |
