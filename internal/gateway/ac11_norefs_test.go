@@ -30,6 +30,16 @@ func TestNoProvisioningCalls(t *testing.T) {
 			t.Fatalf("parse %s: %v", e.Name(), err)
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
+			// A dialed address or hostname/port means this package tried to
+			// reach the worker directly instead of through the controller.
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if sel.Sel.Name == "SSHHost" || sel.Sel.Name == "SSHPort" {
+					t.Errorf("%s: forbidden selector .%s found", e.Name(), sel.Sel.Name)
+				}
+				if ident, ok := sel.X.(*ast.Ident); ok && ident.Name == "net" && strings.HasPrefix(sel.Sel.Name, "Dial") {
+					t.Errorf("%s: forbidden call net.%s( found", e.Name(), sel.Sel.Name)
+				}
+			}
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
@@ -45,6 +55,32 @@ func TestNoProvisioningCalls(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// TestNoTunnelImport guards against this package reaching the worker
+// through its own tunnel dialer instead of the Controller interface.
+func TestNoTunnelImport(t *testing.T) {
+	const forbidden = `"github.com/savak1990/vk-llm-on-demand/internal/tunnel"`
+	fset := token.NewFileSet()
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || strings.HasSuffix(e.Name(), "_test.go") || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(".", e.Name()), nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("parse %s: %v", e.Name(), err)
+		}
+		for _, imp := range f.Imports {
+			if imp.Path.Value == forbidden {
+				t.Errorf("%s: imports %s, which this package must never dial directly", e.Name(), forbidden)
+			}
+		}
 	}
 }
 

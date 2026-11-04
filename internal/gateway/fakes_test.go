@@ -18,13 +18,14 @@ type firstTokenCall struct {
 type fakeController struct {
 	mu sync.Mutex
 
-	admitErr    error
-	admitRT     http.RoundTripper
-	admitCalls  []int64
-	endCalls    []int64
-	firstToken  []firstTokenCall
-	upstreamErr []int64
-	status      controller.Snapshot
+	admitErr      error
+	admitRT       http.RoundTripper
+	admitCalls    []int64
+	endCalls      []int64
+	firstToken    []firstTokenCall
+	upstreamErr   []int64
+	status        controller.Snapshot
+	panicOnStatus bool
 }
 
 func (f *fakeController) Admit(gen int64) (http.RoundTripper, error) {
@@ -58,6 +59,9 @@ func (f *fakeController) ReportUpstreamFailure(gen int64) {
 func (f *fakeController) Status() controller.Snapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.panicOnStatus {
+		panic("fakeController.Status: should never be called by handleModels")
+	}
 	return f.status
 }
 

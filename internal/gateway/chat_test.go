@@ -102,3 +102,38 @@ func TestBackendUnavailable(t *testing.T) {
 		}
 	}
 }
+
+// TestBackendUnavailableAcrossEveryState confirms a pre-admission
+// backend_unavailable response never depends on which state the
+// worker is in: Admit's own error decides it, not State itself.
+func TestBackendUnavailableAcrossEveryState(t *testing.T) {
+	states := []controller.State{
+		controller.Idle,
+		controller.Searching,
+		controller.Creating,
+		controller.Booting,
+		controller.Loading,
+	}
+	for _, state := range states {
+		d := testDeps(t)
+		fc := &fakeController{admitErr: controller.ErrBackendUnavailable, status: controller.Snapshot{State: state}}
+		d.Controller = fc
+		g, err := New(d)
+		if err != nil {
+			t.Fatalf("%v: New: %v", state, err)
+		}
+
+		rec := httptest.NewRecorder()
+		g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%v: status = %d, want 503", state, rec.Code)
+		}
+		if rec.Body.String() != backendUnavailableBody {
+			t.Fatalf("%v: body = %q, want %q", state, rec.Body.String(), backendUnavailableBody)
+		}
+		if _, endCalls := fc.snapshot(); len(endCalls) != 0 {
+			t.Fatalf("%v: RequestEnd called, want 0 calls", state)
+		}
+	}
+}

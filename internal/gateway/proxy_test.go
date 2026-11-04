@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 	"github.com/savak1990/vk-llm-on-demand/internal/worker"
@@ -59,6 +61,41 @@ func TestProxyPlain(t *testing.T) {
 	}
 	if _, endCalls := fc.snapshot(); len(endCalls) != 1 || endCalls[0] != 7 {
 		t.Fatalf("RequestEnd calls = %v, want [7]", endCalls)
+	}
+}
+
+// TestProxyOverhead answers instantly from the fake upstream, so total
+// handler time reduces to this gateway's own overhead, which p99
+// must keep under 5ms.
+func TestProxyOverhead(t *testing.T) {
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader([]byte(`{"choices":[{"message":{"content":"hi"}}]}`)))}, nil
+	})
+	d := testDeps(t)
+	d.Config.RateLimitPerKeyRPM = 1_000_000 // isolate overhead from the rate limiter, covered separately in ratelimit_test.go
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h := g.Handler()
+
+	const n = 10000
+	durations := make([]time.Duration, n)
+	for i := 0; i < n; i++ {
+		rec := httptest.NewRecorder()
+		start := time.Now()
+		h.ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+		durations[i] = time.Since(start)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("iteration %d: status = %d, want 200", i, rec.Code)
+		}
+	}
+	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
+	p99 := durations[9899] // 9900th-fastest of 10000
+	if p99 > 5*time.Millisecond {
+		t.Fatalf("p99 overhead = %v, want under 5ms", p99)
 	}
 }
 

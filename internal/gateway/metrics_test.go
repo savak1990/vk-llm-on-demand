@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -225,6 +226,72 @@ func TestLogRedaction(t *testing.T) {
 
 	logged := buf.String()
 	forbidden := []string{"sk-vkllm-aaaaaaaa1111", "the secret prompt", "Bearer "}
+	for _, f := range forbidden {
+		if strings.Contains(logged, f) {
+			t.Errorf("log output contains forbidden substring %q: %s", f, logged)
+		}
+	}
+}
+
+// TestLogRedactionFullSuite runs a batch of request scenarios against
+// one Gateway sharing one log buffer, then sweeps the whole
+// accumulated output for the same forbidden substrings.
+func TestLogRedactionFullSuite(t *testing.T) {
+	var buf bytes.Buffer
+	d := testDeps(t)
+	d.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(r.Body)
+		switch {
+		case strings.Contains(string(raw), "trigger-500"):
+			return &http.Response{StatusCode: 500, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+		case strings.Contains(string(raw), `"stream":true`):
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"the secret reply\"}}]}\n\ndata: [DONE]\n\n"))}, nil
+		default:
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"the secret reply"}}]}`))}, nil
+		}
+	})
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	h := g.Handler()
+
+	secretReq := chatReq(`{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"the secret prompt"}]}`)
+	secretReq.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	h.ServeHTTP(httptest.NewRecorder(), secretReq)
+
+	badAuthReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	badAuthReq.Header.Set("Authorization", "Bearer sk-vkllm-doesnotexist")
+	h.ServeHTTP(httptest.NewRecorder(), badAuthReq)
+
+	mismatchReq := chatReq(`{"model":"gpt-4o","messages":[{"role":"user","content":"the secret prompt"}]}`)
+	mismatchReq.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	h.ServeHTTP(httptest.NewRecorder(), mismatchReq)
+
+	mgmtReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	mgmtReq.Header.Set("Authorization", "Bearer sk-vkllm-mgmtmgmt9999")
+	h.ServeHTTP(httptest.NewRecorder(), mgmtReq)
+
+	basicReq := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	basicReq.Header.Set("Authorization", "Basic xyz")
+	h.ServeHTTP(httptest.NewRecorder(), basicReq)
+
+	streamReq := chatReq(`{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"the secret prompt"}],"stream":true}`)
+	streamReq.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	h.ServeHTTP(httptest.NewRecorder(), streamReq)
+
+	upstream500Req := chatReq(`{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"trigger-500"}]}`)
+	upstream500Req.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	h.ServeHTTP(httptest.NewRecorder(), upstream500Req)
+
+	logged := buf.String()
+	if logged == "" {
+		t.Fatal("log buffer is empty after the request batch")
+	}
+	forbidden := []string{"sk-vkllm-aaaaaaaa1111", "sk-vkllm-doesnotexist", "sk-vkllm-mgmtmgmt9999", "the secret prompt", "the secret reply", "Bearer "}
 	for _, f := range forbidden {
 		if strings.Contains(logged, f) {
 			t.Errorf("log output contains forbidden substring %q: %s", f, logged)

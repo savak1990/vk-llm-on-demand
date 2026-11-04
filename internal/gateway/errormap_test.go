@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -17,12 +19,13 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 		state          controller.State
 		rt             fakeRoundTripper
 		wantStatus     int
+		wantCode       string
 		wantFailureInc bool
 	}{
 		{
 			name:  "500 response",
 			state: controller.Ready,
-			rt: func(r *http.Request) (*http.Response, error) {
+			rt: func(_ *http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 500, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(nil))}, nil
 			},
 			wantStatus:     http.StatusBadGateway,
@@ -31,7 +34,7 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 		{
 			name:  "401 from worker",
 			state: controller.Ready,
-			rt: func(r *http.Request) (*http.Response, error) {
+			rt: func(_ *http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 401, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(nil))}, nil
 			},
 			wantStatus:     http.StatusBadGateway,
@@ -40,7 +43,7 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 		{
 			name:  "transport error while Serving",
 			state: controller.Serving,
-			rt: func(r *http.Request) (*http.Response, error) {
+			rt: func(_ *http.Request) (*http.Response, error) {
 				return nil, errors.New("connection reset")
 			},
 			wantStatus:     http.StatusBadGateway,
@@ -49,7 +52,7 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 		{
 			name:  "transport error while Draining",
 			state: controller.Draining,
-			rt: func(r *http.Request) (*http.Response, error) {
+			rt: func(_ *http.Request) (*http.Response, error) {
 				return nil, errors.New("connection reset")
 			},
 			wantStatus:     http.StatusServiceUnavailable,
@@ -58,10 +61,20 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 		{
 			name:  "transport error while Destroying (failing=false still counts as cutoff)",
 			state: controller.Destroying,
-			rt: func(r *http.Request) (*http.Response, error) {
+			rt: func(_ *http.Request) (*http.Response, error) {
 				return nil, errors.New("connection reset")
 			},
 			wantStatus:     http.StatusServiceUnavailable,
+			wantFailureInc: false,
+		},
+		{
+			name:  "context deadline exceeded",
+			state: controller.Ready,
+			rt: func(_ *http.Request) (*http.Response, error) {
+				return nil, context.DeadlineExceeded
+			},
+			wantStatus:     http.StatusGatewayTimeout,
+			wantCode:       "upstream_timeout",
 			wantFailureInc: false,
 		},
 	}
@@ -80,6 +93,14 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 
 		if rec.Code != c.wantStatus {
 			t.Errorf("%s: status = %d, want %d (body %q)", c.name, rec.Code, c.wantStatus, rec.Body.String())
+		}
+		if c.wantCode != "" {
+			var body errorBody
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Errorf("%s: body %q does not parse as errorBody: %v", c.name, rec.Body.String(), err)
+			} else if body.Error.Code != c.wantCode {
+				t.Errorf("%s: body code = %q, want %q", c.name, body.Error.Code, c.wantCode)
+			}
 		}
 		fc.mu.Lock()
 		gotFailure := len(fc.upstreamErr) == 1
@@ -100,7 +121,7 @@ func TestDrainCutoffIgnoresPublicStringAndFailingFlag(t *testing.T) {
 
 	d := testDeps(t)
 	fc := &fakeController{
-		admitRT: fakeRoundTripper(func(r *http.Request) (*http.Response, error) { return nil, errors.New("connection reset") }),
+		admitRT: fakeRoundTripper(func(_ *http.Request) (*http.Response, error) { return nil, errors.New("connection reset") }),
 		status:  controller.Snapshot{Generation: 1, State: controller.Destroying, Public: "FAILED"},
 	}
 	d.Controller = fc

@@ -2,11 +2,13 @@ package gateway
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 )
@@ -77,6 +79,113 @@ func TestSSEPassThrough(t *testing.T) {
 	fc.mu.Unlock()
 	if len(ft) != 1 || ft[0].gen != 3 {
 		t.Fatalf("ObserveFirstToken calls = %v, want exactly one with gen=3", ft)
+	}
+}
+
+// channelChunkedBody delivers one chunk per receive on ch, letting a
+// test control exactly when each SSE chunk becomes readable; closing ch
+// ends the stream with io.EOF, like a real upstream finishing cleanly.
+type channelChunkedBody struct {
+	ch chan []byte
+}
+
+func (c *channelChunkedBody) Read(p []byte) (int, error) {
+	chunk, ok := <-c.ch
+	if !ok {
+		return 0, io.EOF
+	}
+	return copy(p, chunk), nil
+}
+func (c *channelChunkedBody) Close() error { return nil }
+
+// TestSSELatencyPerChunk releases 20 SSE chunks one at a time over a
+// channel the test controls and asserts each is observed by a real
+// client within a tight bound of its release.
+func TestSSELatencyPerChunk(t *testing.T) {
+	const n = 20
+	ch := make(chan []byte)
+	body := &channelChunkedBody{ch: ch}
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body:       body,
+		}, nil
+	})
+
+	d := testDeps(t)
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	srv := httptest.NewServer(g.Handler())
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/v1/chat/completions", strings.NewReader(`{"model":"qwen3.6-35b-a3b","messages":[],"stream":true}`))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	req.Header.Set("Content-Type", "application/json")
+
+	// releases carries each chunk's send time to the matching loop
+	// below; advance gates the next send on this chunk's arrival being
+	// confirmed, so a stuck flush blocks progress instead of racing it.
+	releases := make(chan time.Time, 1)
+	advance := make(chan struct{})
+	go func() {
+		for i := 0; i < n; i++ {
+			releases <- time.Now()
+			ch <- []byte(fmt.Sprintf("data: {\"i\":%d}\n\n", i))
+			if i < n-1 {
+				<-advance
+			}
+		}
+		close(ch)
+	}()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	lines := make(chan string)
+	go func() {
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			if line := sc.Text(); strings.HasPrefix(line, "data: {") {
+				lines <- line
+			}
+		}
+		close(lines)
+	}()
+
+	for i := 0; i < n; i++ {
+		release := <-releases
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				t.Fatalf("chunk %d: stream ended early", i)
+			}
+			if want := fmt.Sprintf("data: {\"i\":%d}", i); line != want {
+				t.Fatalf("chunk %d = %q, want %q", i, line, want)
+			}
+			if lag := time.Since(release); lag > 50*time.Millisecond {
+				t.Errorf("chunk %d arrived %v after release, want under 50ms", i, lag)
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatalf("chunk %d: never arrived within 200ms of release", i)
+		}
+		if i < n-1 {
+			advance <- struct{}{}
+		}
 	}
 }
 
