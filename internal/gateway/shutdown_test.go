@@ -268,12 +268,16 @@ func TestShutdownCancelsActiveStreamAtCutoff(t *testing.T) {
 	}()
 	<-reached
 
-	ctx, cancel := context.WithDeadline(context.Background(), clk.Now().Add(30*time.Second))
+	start := clk.Now()
+	ctx, cancel := context.WithDeadline(context.Background(), start.Add(30*time.Second))
 	defer cancel()
 	shutdownErr := make(chan error, 1)
 	go func() { shutdownErr <- g.Shutdown(ctx) }()
 
 	clk.BlockUntil(1)
+	if next, ok := clk.NextDeadline(); !ok || !next.Equal(start.Add(25*time.Second)) {
+		t.Fatalf("NextDeadline = %v, %v; want %v, true (pins the cutoff at exactly 25s)", next, ok, start.Add(25*time.Second))
+	}
 	clk.Advance(25 * time.Second)
 
 	select {

@@ -264,6 +264,12 @@ func TestBackendUnavailableAcrossEveryState(t *testing.T) {
 			if rec.Body.String() != backendUnavailableBody {
 				t.Fatalf("%v/%v/stream=%v: body = %q, want %q", c.state, c.err, stream, rec.Body.String(), backendUnavailableBody)
 			}
+			if rec.Header().Get("Retry-After") != "" {
+				t.Fatalf("%v/%v/stream=%v: Retry-After set, want unset", c.state, c.err, stream)
+			}
+			if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+				t.Fatalf("%v/%v/stream=%v: Content-Type = %q, want application/json, never text/event-stream", c.state, c.err, stream, ct)
+			}
 			fc.mu.Lock()
 			endCalls, firstToken, upstreamErr := len(fc.endCalls), len(fc.firstToken), len(fc.upstreamErr)
 			fc.mu.Unlock()
