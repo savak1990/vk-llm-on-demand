@@ -431,6 +431,47 @@ left to be rediscovered. None blocks DONE.
    from `callerEvent`'s own `errStale` retry loop) returns no error and no
    reason to its caller; this needs 8 consecutive write conflicts and is very
    low probability.
+9. **T5/T6 gate-recheck, fixed in the final review round.** An offer arriving
+   after a search was already dispatched never had its own budget/attempts
+   recheck: `gateReason` only computed a result for `Start`/`Tick`/`Gone`, so
+   a budget denial that landed while the search was in flight let the create
+   go ahead anyway (bounded — the next reconcile's `EvBudgetExhausted`
+   destroyed it within about 60 s — but the recheck the spec describes
+   didn't run). `gateReason` now also evaluates the same budget and
+   attempts-cap checks for an offer arriving while `Searching`, so the
+   create itself is now denied rather than merely unwound afterward.
+10. **`vkllm_gpu_uptime_seconds_total` records in one lump sum, not
+    incrementally.** The counter is added to once, when an instance returns
+    to Idle (or Destroying, from Searching), covering its whole
+    `createdAt`-to-now span in a single `Add`. The spec's text reads as
+    "recorded at each wake"; the shipped behavior gets the same total either
+    way, so this is a timing-of-recording difference, not a correctness gap.
+11. **The reconcile table's T15/T26 "still runs on a tick" wording is
+    imprecise.** In the shipped code, T15 (startup timeout) and T26 (drain
+    deadline) fire only on `EvDeadlineExpired`, never on a periodic `EvTick`,
+    so the table's text overstates what actually triggers them. This is
+    practically unreachable as a behavioral gap — `procMu` serializes every
+    transition, so the one row that matters (T25, the `EvTick`-driven
+    drain-complete check) and these two never race each other — so it is
+    recorded here as a textual imprecision, not a bug.
+12. **`ErrStoreReset` recovery reruns only the reconcile pass, not a full
+    re-mapping of in-memory state.** On `ErrStoreReset`, `processEvent`
+    dispatches a reconcile pass against the freshly reloaded document but
+    does not re-derive `c.state`/`c.generation`/the armed timers from it, so
+    memory can stay briefly inconsistent with the store until the next
+    natural transition or a process restart. This matches the spec's own
+    literal instruction to rerun step 3, and stays cost-safe either way: the
+    orphan-detection path still destroys anything untracked.
+13. **A future `CORE-100` `Budget.Allow` must map into this package's own
+    4-string vocabulary.** `isDenial` treats any non-empty, non-`"backoff"`
+    reason as a denial, so a raw or unmapped string from a real
+    `budget.Checker` would still deny correctly. But `Snapshot.Unavailable`
+    only ever gets set from `isUnavailableReason`'s closed set
+    (`no_offer`/`budget_exhausted`/`balance_low`/`attempts_exhausted`), and
+    `provisionDenialOutcome` only counts those same four — an unmapped
+    string would deny spend correctly but leave `Unavailable` empty and
+    `provision_attempts_total` undercounted for that denial. `CORE-100` must
+    map its own denial reasons into this vocabulary, not invent new ones.
 
 ## Evidence
 
