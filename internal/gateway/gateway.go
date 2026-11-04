@@ -76,6 +76,7 @@ func New(d Deps) (*Gateway, error) {
 	g := &Gateway{deps: d, startedAt: d.Clock.Now()}
 	g.mux = http.NewServeMux()
 	g.mux.HandleFunc("GET /v1/models", g.handleModels)
+	g.mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
 	g.rl = auth.NewLimiter(d.Config.RateLimitPerKeyRPM, d.Clock)
 	return g, nil
 }
