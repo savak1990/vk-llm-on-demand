@@ -32,6 +32,12 @@ func (c *Controller) Status() Snapshot {
 	snap.Desired = doc.Desired
 	snap.AttemptsThisHour = doc.AttemptsThisHour.Count
 	snap.SpendMTDUSD = c.deps.Budget.EstimatedMTD(doc)
+	c.balanceMu.Lock()
+	if c.lastBalanceKnown {
+		usd := c.lastBalance.USD()
+		snap.ProviderBalanceUSD = &usd
+	}
+	c.balanceMu.Unlock()
 	snap.NextCreateAt = nextCreateAllowedAt(doc.Ops)
 	recordDocGauges(doc, state, inFlight, c.deps.Clock.Now())
 
