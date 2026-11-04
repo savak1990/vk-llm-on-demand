@@ -9,7 +9,11 @@ adrs: ["0010", "0011", "0012", "0002", "0006", "0009", "0007"]
 # 060 — Gateway: OpenAI-compatible API
 
 **Status note:** DONE 2026-11-04 — `internal/gateway` implemented and tested
-against fakes (52 tests, race-clean); AC1-AC20 pass. AC21 (optional SDK
+against fakes (64 tests, race-clean); AC1-AC15 and AC17-AC20 pass in full,
+AC16 is covered for correctness (chunks before the cutoff, the in-stream
+`backend_unavailable` + `[DONE]` row, one `RequestEnd`, no `Retry-After` on
+the plain variant) through channel synchronization rather than a literal
+fake-clock t=0s/t=60s simulation — see Evidence. AC21 (optional SDK
 compatibility job) deliberately deferred. `internal/auth` is consumed from
 CORE-055 (built there first) rather than built here, superseding this spec's
 own sketch of that package — see Evidence. One DoD item is knowingly
@@ -381,7 +385,7 @@ None of this is compiled into the MVP paths.
 
 ## Definition of done
 
-- [x] AC1–AC20 pass (`go test ./internal/gateway/... -v -race`, 52/52). AC21 (`sdk-compat` job) deliberately deferred — spec marks it optional/non-blocking; not built this round.
+- [x] AC1–AC15, AC17–AC20 pass in full (`go test ./internal/gateway/... -v -race`, 64/64); AC16 is covered for correctness, not for its literal fake-clock timing shape — see Evidence. AC21 (`sdk-compat` job) deliberately deferred — spec marks it optional/non-blocking; not built this round.
 - [x] `main` loads and periodically reloads `auth.Load`/`gateway.LoadWorkerSeed`, and `/readyz` includes both their readiness checks.
 - [ ] `main` wires `gateway.New`, `Shutdown`, and mounts `/v1/` on `apiMux` — **not done**. No branch (CORE-050, CORE-055, or this one) has constructed a real `*controller.Controller` inside `cmd/gpu-on-demand/main.go` yet; that construction is this item's prerequisite and belongs to whichever follow-up task does it first. See Evidence.
 - [x] Status flipped to DONE in the same PR, folder renamed to `060-D-gateway-openai-api`.
@@ -400,7 +404,7 @@ None of this is compiled into the MVP paths.
 
 ## Evidence
 
-**Tests:** `go test ./internal/gateway/... -v -count=1 -race` — 52/52 pass, clean under the race detector. `go build ./...`, whole-repo `go test ./...`, and `go vet` are all clean. `make go-lint` (`golangci-lint run ./...`) reports 0 issues, including a config fix (`issues.max-same-issues: 0` in `.golangci.yml`) made durable during this spec's own closure so a future set of 4+ identical findings is never silently capped again.
+**Tests:** `go test ./internal/gateway/... -v -count=1 -race` — 64/64 pass, clean under the race detector. `go build ./...`, whole-repo `go test ./...`, and `go vet` are all clean. `make go-lint` (`golangci-lint run ./...`) reports 0 issues, including a config fix (`issues.max-same-issues: 0` in `.golangci.yml`) made durable during this spec's own closure so a future set of 4+ identical findings is never silently capped again.
 
 **Deviations from this spec's literal text**, each a deliberate choice, not an oversight:
 
@@ -409,8 +413,13 @@ None of this is compiled into the MVP paths.
 3. **`gateway.New` takes a `Deps` struct, not 5 positional arguments.** Matches the `Deps`-struct convention `internal/controller.New` and `internal/config.LoadController` already established in this repo, rather than being the one positional constructor in the codebase.
 4. **The request-id/status-recorder/access-log middleware lives in `internal/gateway`, not `internal/obs`.** `internal/obs` was (and remains) an empty stub; building that shared middleware there would have meant designing a shared package two independent in-flight specs might consume differently. A later observability spec can extract it if `internal/mgmt` needs the identical stack.
 5. **`internal/gateway.Controller`'s `Status()` returns `controller.Snapshot` directly** (a type import from `internal/controller`), rather than this spec's own sketch of the interface.
+6. **`vkllm_gateway_requests_total`'s `code` label buckets any upstream status outside the spec's enumerated set to `"2xx"`/`"4xx"`/`"5xx"`**, rather than passing the raw upstream status through. The client still receives the upstream's exact status code; only the metric label is bucketed, so a single unusual upstream response (e.g. 422) can never grow the series unbounded.
+7. **A body-read failure in `handleChatCompletions` that is not `*http.MaxBytesError` maps to 499 (client already gone) or 400 `invalid_request`**, not unconditionally to 413. Only a confirmed size-limit error gets 413 now.
+8. **The access log's `max_tokens_requested` field reports `max_tokens`'s original value when present, else `max_completion_tokens`'s, else 0** (both fields are logged together only in the sense that whichever was clamped flips `max_tokens_clamped`); the spec does not say which of the two to prefer when both are sent.
 
 **AC coverage, closed during spec review rather than left as gaps:** several ACs needed strengthening beyond their first-draft tests — AC8's SSE-latency assertion was redesigned from a static fixture to a lockstep release/ack protocol after mutation testing showed the original could pass under a broken flush (2/5 false-negative runs); AC1's "Admit never called on a non-2xx" check was moved from `GET /v1/models` (which never calls `Admit` regardless of correctness) to `POST /v1/chat/completions`; AC17's SSRF grep and AC18's plain-request shutdown path were added after being found missing from an earlier coverage pass. All additions were re-verified by an independent task reviewer tracing the actual code, not just re-running the suite.
+
+**Final whole-branch review (this fix wave):** an independent review of the branch found the "AC1-AC20 pass" claim above was false on three points, now fixed and covered by new tests: the Auth table's `code` values were the metric reason strings instead of `invalid_api_key`/`permission_denied` (C1); an unknown `/v1/` path or method returned `net/http`'s plain-text 404/405 instead of the error schema (C2); the access log was missing `duration_ms`, `stream`, `instance_gen`, `outcome`, `max_tokens_clamped` and `max_tokens_requested`, and `max_tokens: -1`/`0` reached the worker unclamped, a real cost-safety gap (C3, I2). The same wave closed AC4, AC5, AC8, AC16 (for correctness; see the Status note for what is not fake-clock-timed), AC18 and AC19 with real tests rather than partial or missing coverage, replaced the two remaining `time.Sleep` calls in `cancel_test.go` with channel synchronization (R19), and fixed a metric-cardinality leak (I3) and a plain-request tokens/s gap (I4). See the fix wave's own report for the full list, including the minor findings (`ErrAbortHandler` propagation, `copyUpstream4xx` normalization, `WorkerSeed.reload`'s last-good-value guard, `LoadGateway`'s new non-positive guards, and `main.go`'s `api` server timeouts).
 
 **Real-host findings:** none — this spec never touched a real Vast.ai instance; `Admit`/`RequestEnd`/`ObserveFirstToken`/`ReportUpstreamFailure` are exercised only against `internal/controller`'s real public surface via fakes, never a live backend.
 
