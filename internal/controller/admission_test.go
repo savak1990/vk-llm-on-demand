@@ -84,11 +84,16 @@ func TestAdmitVsDrainRace(t *testing.T) {
 	var admitted, ended int64
 	var mu sync.Mutex
 
+	// Event-driven so the drain flip cannot miss every window inFlight>0.
+	firstAdmit := make(chan struct{})
+	var firstAdmitOnce sync.Once
+
 	for i := 0; i < 1000; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if rt, err := c.Admit(3); err == nil && rt != nil {
+				firstAdmitOnce.Do(func() { close(firstAdmit) })
 				mu.Lock()
 				admitted++
 				mu.Unlock()
@@ -103,22 +108,13 @@ func TestAdmitVsDrainRace(t *testing.T) {
 	drainWG.Add(1)
 	go func() {
 		defer drainWG.Done()
-		// Poll instead of a fixed sleep: flips to Draining as soon as the
-		// first Admit has landed, so the flip can never win the race by
-		// running before any goroutine gets a chance to be admitted.
-		for {
-			c.mu.Lock()
-			n := c.inFlight
-			c.mu.Unlock()
-			if n > 0 {
-				break
-			}
-		}
+		<-firstAdmit
 		c.mu.Lock()
 		c.state = Draining
 		c.mu.Unlock()
 	}()
 	wg.Wait()
+	firstAdmitOnce.Do(func() { close(firstAdmit) })
 	drainWG.Wait()
 	if admitted != ended {
 		t.Fatalf("admitted=%d ended=%d, every admitted request must end", admitted, ended)
