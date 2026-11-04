@@ -106,7 +106,6 @@ func TestPlainTokensPerSecondObserved(t *testing.T) {
 // shutdown after headers already went out).
 type failAfterNBody struct {
 	remaining []byte
-	failed    bool
 }
 
 func (b *failAfterNBody) Read(p []byte) (int, error) {

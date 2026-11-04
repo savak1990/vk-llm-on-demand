@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -162,7 +163,7 @@ func (g *Gateway) recoverMiddleware(next http.Handler) http.Handler {
 				// http.ErrAbortHandler is net/http's own signal to abandon
 				// the response silently; stdlib convention is to let it
 				// keep propagating, never turn it into an error response.
-				if rec == http.ErrAbortHandler {
+				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(rec)
 				}
 				g.deps.Log.Error("gateway: panic", "panic", true, "request_id", r.Context().Value(ctxKeyRequestID))

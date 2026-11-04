@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -134,7 +135,9 @@ func TestRecoverLetsErrAbortHandlerPropagate(t *testing.T) {
 
 	func() {
 		defer func() {
-			if r := recover(); r != http.ErrAbortHandler {
+			r := recover()
+			err, ok := r.(error)
+			if !ok || !errors.Is(err, http.ErrAbortHandler) {
 				t.Fatalf("recover() = %v, want http.ErrAbortHandler to propagate", r)
 			}
 		}()
