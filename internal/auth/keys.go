@@ -91,7 +91,7 @@ func readKeySet(path string) (keySet, time.Time, error) {
 		}
 		digest := sha256.Sum256([]byte(line))
 		keyID := line
-		if idx := strings.Index(line, "sk-vkllm-"); idx == 0 && len(line) > len("sk-vkllm-")+8 {
+		if idx := strings.Index(line, "sk-vkllm-"); idx == 0 && len(line) >= len("sk-vkllm-")+8 {
 			keyID = line[len("sk-vkllm-") : len("sk-vkllm-")+8]
 		}
 		set[digest] = keyID

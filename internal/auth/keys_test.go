@@ -129,3 +129,23 @@ func TestRunReloadsEvery10sAndKeepsOldSetsOnFailure(t *testing.T) {
 		t.Fatal("want a keys_reload_failed log line after the bad reload")
 	}
 }
+
+func TestKeyIDExactlyEightChars(t *testing.T) {
+	dir := t.TempDir()
+	// Exactly 17 characters total: sk-vkllm- (9) + abcdefgh (8) = 17
+	exactKey := "sk-vkllm-abcdefgh"
+	clientPath := writeKeyFile(t, dir, "client-keys", exactKey)
+	mgmtPath := writeKeyFile(t, dir, "management-tokens", "sk-vkllm-mgmttoken1")
+	clk := fakeclock.New(time.Unix(0, 0))
+	k, err := Load(clientPath, mgmtPath, clk, noopLogger())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	keyID, err := k.Check("Bearer "+exactKey, Inference)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if keyID != "abcdefgh" {
+		t.Fatalf("Check keyID = %q, want \"abcdefgh\"", keyID)
+	}
+}
