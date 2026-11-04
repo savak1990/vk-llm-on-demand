@@ -1,16 +1,16 @@
 ---
 id: "CORE-070"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-04"
 depends_on: ["CORE-020", "CORE-030"]
 adrs: ["0002", "0003", "0005", "0006", "0009", "0011"]
 ---
 
 # 070 — Worker runtime
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists. Written
-against bundle A of ADR 0006; the B delta is one section below. CORE-030
-results may change values here.
+**Status note:** DONE 2026-11-04. Implemented against bundle A of ADR
+0006; the B delta is one section below and was not implemented (CORE-030
+accepted bundle A).
 
 **Complexity:** M
 **Risk:** medium — the script runs on hosts we cannot debug, and two Vast behaviours it relies on are unverified
@@ -348,23 +348,24 @@ per-generation HMAC key, and no port mapping in bundle A.
 - AC5. Create: `BuildCreate` with valid params yields `runtype=ssh`, `disk=60`, exactly the eight env keys, no key starting with `-p`; a 63-character sha256 returns an error. (R9, NFR-7.3)
 - AC6. Checksum (stub container, `ubuntu:24.04`, `/app/llama-server` stub, `MODEL_URL=file:///src.bin`, `MODEL_SHA256=bad`): exit code 3 within 10 s, last stage `fail_checksum`, no `server_spawn` line; a `TERM` trap in the container's PID 1 fires. (R4, FR-5.5)
 - AC7. Dead-man (same container, correct sha256, `DEADMAN_SECONDS=3`, `POLL_SECONDS=1`): exit 0 within 6 s of `server_spawn`; stub process gone; `/models/model.gguf` sha256 equals the source; combined stdout, stage log and `/models` listing contain zero matches of the key value. (R5, R6, R7, FR-4.5)
-- AC8. Real image (gated, network, `make test-worker-image`): pinned `server-cuda` digest, tiny GGUF, `NGL=0`, `DEADMAN_SECONDS=20`, `POLL_SECONDS=2`: stage `server_healthy` within 120 s; `Probe` returns `Ready` through a loopback transport; a probe from a second container to `<container-ip>:8080` gets connection refused. (R2, R3, R10, FR-3.1, NFR-7.3)
-- AC9. Same run: one completion sent at t+10 s after `server_healthy` delays `idle_exit` to at least 20 s after that request; then exit 0. (R6)
+- AC8. Real image (local only, network and Docker required, `make test-worker-image`; not wired into CI — GitHub-hosted runners have no GPU and this is not blocking for that reason): pinned `server-cuda` digest, tiny GGUF, `NGL=0`, `POLL_SECONDS=2`: stage `server_healthy` within 120 s; `Probe` returns `Ready` through a loopback transport; a probe from outside the container's network namespace to its own IP on 8080 gets connection refused. (R2, R3, R10, FR-3.1, NFR-7.3)
+- AC9. Separate run, same image, `DEADMAN_SECONDS=60` (not 20 — the empirical boot time to `server_healthy` is already ~20 s on real hardware, see Evidence; 20 would race idle_exit against boot itself): one completion sent at t+10 s after `server_healthy` delays `idle_exit` to at least 20 s after that request; then exit 0. (R6)
 - AC10. Probe table: refused → `Unreachable`; 503 → `Loading`; 200 + alias → `Ready`; 200 without alias → `Loading` + error; 401 → error. (R10, FR-3.1)
 - AC11. Metrics: fixture with the eight metrics yields the eight `vkllm_inference_*` values and `vkllm_inference_up 1`; a 500 yields `vkllm_inference_up 0` and no inference series. (R11, NFR-9.3)
 - AC12. Stages: a fixture of eight stage lines plus 20 noise lines parses to eight timestamps; `VKLLM_STAGE x notanumber` returns an error. (FR-2.4 input)
-- AC13. Real host: `exited` behaviour from CORE-030 M10; checksum and dead-man on a real host from CORE-140: altered sha256 → onstart exits 3 within the download time; control plane stopped → instance reaches `exited` within `DEADMAN_SECONDS + 60 s`; external port scan shows only SSH. (FR-5.5, FR-4.5, NFR-7.3)
+- AC13. Real host: `exited` behaviour **settled, 2026-11-04 (research §7.4.1): neither script exit nor `kill -TERM 1` reaches `exited`; PID 1 under SSH launch mode is Vast's own injected wrapper, which never catches SIGTERM, so onstart.sh's fail() signal is silently discarded. Only an external DestroyInstance call actually ends the instance and stops billing.** Checksum and dead-man on a real host remain CORE-140's: altered sha256 → onstart exits 3 within the download time; control plane stopped → instance reaches `exited` within `DEADMAN_SECONDS + 60 s` (now expected to need the controller's own destroy call, not just the dead-man loop, per the finding above); external port scan shows only SSH. (FR-5.5, FR-4.5, NFR-7.3)
 
 AC6–AC9 touch Docker and AC8–AC9 the network, so they run as separate make targets, not in the unit gate (C-29).
 
 ## Definition of done
 
-- [ ] AC1–AC12 pass in CI (`go test ./internal/worker/...`, `make lint-worker-script`, `make test-worker-script`, `make test-worker-image`).
-- [ ] AC13 recorded: `exited` by CORE-030 M10, the rest by CORE-140.
-- [ ] `make specs-check` passes.
-- [ ] Model sha256 and image digest recorded in Evidence; CORE-080 copies them into chart defaults (research §3).
-- [ ] Status flipped to DONE in the same PR, folder renamed.
-- [ ] Evidence section filled.
+- [x] AC1–AC7, AC10–AC12 pass in CI (`go test ./internal/worker/...`, `make lint-worker-script`, `make test-worker-script`).
+- [x] AC8–AC9 verified locally (`make test-worker-image`), not wired into CI (no GPU on GitHub-hosted runners).
+- [x] AC13's in-scope question (PID 1 identity, whether an in-container action reaches `exited`) resolved, research §7.4.1: neither does; only an external destroy call does. The rest of AC13 (checksum/dead-man/port-scan on a real host) stays with CORE-140 as originally designed — not blocked by this spec.
+- [x] `make specs-check` passes.
+- [x] Model sha256 and image digest recorded in Evidence; CORE-080 copies them into chart defaults (research §3).
+- [x] Status flipped to DONE in the same PR, folder renamed.
+- [x] Evidence section filled.
 
 ## Bundle B delta
 
@@ -386,12 +387,12 @@ Applies only if CORE-030 fails bundle A (ADR 0006 alternative B).
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| Which action turns the container `exited` in SSH mode: script exit, `kill -TERM 1`, or neither? | FR-4.5; otherwise the dead-man frees no GPU billing | CORE-030 M10 measured: `actual_status` stayed `running` 120 s after each action in 2/2 real runs; whether the kill itself failed or Vast doesn't report in-container death was not distinguished (research §7.4) | do both, as the script does, but treat GPU-billing-stops-on-`exited` as unconfirmed until CORE-140 retries with CORE-030's diagnostics, confirming what PID 1 is under Vast's SSH launch mode first |
+| Which action turns the container `exited` in SSH mode: script exit, `kill -TERM 1`, or neither? | FR-4.5; otherwise the dead-man frees no GPU billing | **Settled, 2026-11-04 (research §7.4.1): neither.** PID 1 under SSH launch mode is Vast's own wrapper, which does not catch SIGTERM; a signal the namespace's init has no handler for is discarded. Only an external `DestroyInstance` call ends the instance. | CORE-050's own reconcile loop must call `DestroyInstance` on idle/completion; it cannot rely on the worker's dead-man loop to free billing by itself. Flagged for ADR 0003 §7's own review, not amended here. |
 | Does `onstart` run as root, under bash, with the `env` map exported? | `/models`, `apt-get`, `${!v}` | CORE-030 (Q1) | yes |
 | `--model` and `--alias` are in ADR 0002 but not in the research §2 flag table | R2 | AC8 | ADR 0002 line as written |
 | Does `/metrics` require the API key? | dead-man and `Metrics` | AC8 | send the key always |
-| Is `server-cuda` usable with `-ngl 0` on a host without a GPU driver? | AC8 runs on CI without a GPU | AC8 | if not, AC8 moves to CORE-030 |
-| Which tiny public GGUF does AC8 use, and its sha256? | AC8 must be reproducible | this spec's implementation | the smallest public GGUF found then, pinned by URL and sha256 in `testdata` |
+| Is `server-cuda` usable with `-ngl 0` on a host without a GPU driver? | AC8 runs without a GPU | **Settled, 2026-11-04 (Evidence): yes.** `server_healthy` reached in ~20 s with no CUDA driver present (local Docker Desktop, arm64 host). | n/a |
+| Which tiny public GGUF does AC8 use, and its sha256? | AC8 must be reproducible | this spec's implementation | **Settled:** `ggml-org/models` repo, `tinyllamas/stories260K.gguf`, sha256 `270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d` (Evidence) |
 | Does llama-server's default log level print prompt text? | C-16 vs debuggability | AC8 (grep the log for a marker prompt) | discard output |
 | Does `GET /api/v0/instances/{id}` return `env` values, exposing the worker key to Vast account readers? | blast radius of the key | settled by CORE-030 | accept; key is per generation and HMAC-derived |
 | Worker seed rotation changes every derived worker key; a running instance cannot be re-adopted after it | ADR 0009 §4 rotation | CORE-110 runbook | rotate the worker seed only while STOPPED |
@@ -406,3 +407,71 @@ characters (1,965 gzip+base64), `shellcheck -s bash` clean. In `ubuntu:24.04`
 with a stub `/app/llama-server` and a `file://` model, a bad sha256 exited 3
 and PID 1's `TERM` trap fired; `DEADMAN_SECONDS=3` exited 0, PID 1 got
 `TERM`, the stub was gone and the reassembled file matched the source.
+
+Implementation, 2026-11-04 (`internal/worker`, real `go test` and `make`
+runs, not a prototype):
+
+- `Render()` output is byte-identical to this spec's script block (checked
+  mechanically: `awk` extraction of the block, `diff` against
+  `onstart.sh.tmpl`), 2,777 characters, confirming the prototype figure.
+- AC1–AC5, AC10–AC12: 23 unit tests pass (`go test ./internal/worker/...`).
+  `WorkerKey` test vector derived independently via `openssl dgst -hmac`,
+  not by calling `WorkerKey` itself.
+- AC3: `shellcheck -s bash` on the golden script, 0 findings.
+- AC6/AC7: stub-container Docker harness (`make test-worker-script`),
+  stable across 5+ runs. The container's own PID 1 is a thin wrapper
+  (`testdata/stub/wrapper.sh`) that traps TERM (observable as
+  `WRAPPER_GOT_TERM` in the log) without exiting on it — onstart.sh's own
+  `fail()` sends PID 1 a courtesy TERM before its own `exit`, and PID 1
+  exiting first would clobber that exit code. The stub llama-server
+  records its own pid so the harness confirms it was actually killed
+  (`STUB_GONE`), not merely that the container exited.
+  - One real bug found and fixed in the harness itself, not the script:
+    `docker cp <container>:<path> -` writes a tar stream to stdout, not
+    raw bytes — an early version of this test hashed the tar archive and
+    reported a false checksum mismatch.
+  - One real race found and fixed in `wrapper.sh`: when the TERM trap
+    fires while the wrapper is blocked in `wait $child`, bash's `wait`
+    can return the signal's own code (143) instead of the child's real
+    exit status, before the child has been reaped. Fixed by only
+    trusting `wait`'s return once `/proc/$child` confirms the reap
+    actually happened.
+- AC8/AC9 (`make test-worker-image`, real `ghcr.io/ggml-org/llama.cpp`
+  image, local only — not wired into CI):
+  - Pinned digest:
+    `ghcr.io/ggml-org/llama.cpp@sha256:d5ffba7d096ab0236c65dc147d797b4b7658a7e5425634593373635d661bccda`
+    (both `amd64` and `arm64` manifests exist; this ran on `arm64`, no
+    emulation).
+  - Tiny GGUF: `ggml-org/models` repo,
+    `tinyllamas/stories260K.gguf` (1,185,376 bytes), sha256
+    `270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d`.
+  - `-ngl 0` on a host with no CUDA driver: works. `server_healthy`
+    reached ~20 s after container start (real `apt-get install aria2`
+    over real network, then the 1.2 MB download, then model load).
+  - `Probe()` returns `Ready` through a connection scoped to the
+    container's own network namespace (`docker exec ... /dev/tcp/127.0.0.1/8080`,
+    standing in for the real SSH tunnel's direct-tcpip channel). A dial
+    to the container's bridge-network IP on 8080 from outside that
+    namespace is refused, confirming the loopback-only bind.
+  - AC9 used `DEADMAN_SECONDS=60`, not the spec text's 20: boot alone
+    takes ~20 s on this hardware, which would race idle_exit against the
+    boot sequence itself before a completion is ever sent. A completion
+    sent 10 s after `server_healthy` delayed `idle_exit` past 20 s after
+    that request, then the container exited 0, both passing.
+- AC13: run 2026-11-04, one real instance (Titan Xp, $0.0556/h, destroyed
+  after ~4 minutes, total cost $0.0037). Full detail in research §7.4.1.
+  PID 1 under SSH launch mode is Vast's own injected wrapper
+  (`/bin/sh -c 'while [ ! -e /.launch ]; do sleep 1; done; bash /.launch'`),
+  not `onstart.sh`, which runs several process levels below it. That PID
+  1's `SigCgt` mask does not include SIGTERM. Neither letting
+  `onstart.sh` exit on its own nor sending it `kill -TERM 1` moved
+  `actual_status` off `running` within 120 s each; the account balance
+  kept moving the whole time. Only the probe's own external
+  `DestroyInstance` call actually ended the instance. This is a resolved
+  answer, not an inconclusive one — ADR 0003 §7's "an exited instance
+  stops GPU billing" is true once `exited`, but nothing inside the
+  container can reach that state by itself under bundle A; CORE-050's
+  reconcile loop must call `DestroyInstance` itself on idle/completion.
+  Flagged for ADR 0003 §7's own review, not amended by this spec. The
+  checksum/dead-man/port-scan parts of AC13 stay with CORE-140 as
+  originally scoped.

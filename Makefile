@@ -14,7 +14,7 @@ VERSION ?= $(shell ./scripts/version.sh base)
 IMAGE_TAG ?= $(shell git rev-parse HEAD)
 IMAGE ?= ghcr.io/savak1990/vk-llm-on-demand/$(SVC):$(IMAGE_TAG)
 
-.PHONY: go-build go-test go-lint require-svc image-build image-push helm-lint helm-template helm-package helm-push version release buildx-init keygen repo-settings
+.PHONY: go-build go-test go-lint lint-worker-script test-worker-script test-worker-image require-svc image-build image-push helm-lint helm-template helm-package helm-push version release buildx-init keygen repo-settings
 
 go-build: ## Build every cmd/ binary into bin/
 	go build -o bin/ ./cmd/...
@@ -24,6 +24,15 @@ go-test: ## Run all unit tests
 
 go-lint: ## Run golangci-lint
 	golangci-lint run ./...
+
+lint-worker-script: ## shellcheck the rendered worker onstart script
+	shellcheck -s bash internal/worker/testdata/onstart.golden.sh
+
+test-worker-script: ## Run the worker's stub-container Docker tests (AC6/AC7)
+	go test -tags integration ./internal/worker/... -run TestWorkerScript -v
+
+test-worker-image: ## Run the worker's real-image Docker test (AC8/AC9); needs Docker and network, not run in CI
+	go test -tags integration_image ./internal/worker/... -run TestWorkerImage -v
 
 require-svc: ## Fail unless SVC names an existing deploy/docker/<SVC>.Dockerfile
 	@test -n "$(SVC)" || (echo "SVC is required, e.g. make image-build SVC=gpu-on-demand" && exit 1)

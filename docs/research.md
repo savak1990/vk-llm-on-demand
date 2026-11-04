@@ -355,6 +355,56 @@ PID 1 actually is under Vast's SSH launch mode — not assuming the
 in-container kill worked — then re-testing whether that action reaches
 `exited`.
 
+### 7.4.1 PID 1 identity under SSH launch mode (CORE-070 follow-up, 2026-11-04)
+
+The follow-up this spec's §7.4 asked for: one real instance (Titan Xp,
+$0.0556/h, destroyed after ~4 minutes, total cost $0.0037), inspected before
+sending any signal.
+
+**PID 1 is Vast's own injected wrapper, not the script.** `cat
+/proc/1/cmdline`:
+
+```
+/bin/sh -c while [ ! -e /.launch ]; do sleep 1; done; bash /.launch
+```
+
+`onstart.sh` runs several levels below that (PID 255, under `/.launch` at
+PID 251, itself under the `/bin/sh` wrapper at PID 1). `grep -E
+'Sig(Cgt|Ign)' /proc/1/status` on that `/bin/sh`: `SigCgt:
+0000000000010002` — bit 1 (SIGINT) and bit 16 (SIGCHLD) are caught; bit 14
+(SIGTERM, value `0x4000`) is **not** in that mask. Per `pid_namespaces(7)`,
+a signal the namespace's own init has no handler for is simply discarded
+when sent from inside the namespace (SIGKILL/SIGSTOP excepted).
+
+**This resolves §7.4's open question: neither action reaches `exited`, and
+now we know why.** Repeating M10's two steps against this PID 1:
+
+- Script exit alone (`touch /tmp/ac13_exit`, letting `onstart.sh` run its
+  own `exit 0`): `actual_status` stayed `running` for the full 120 s poll.
+- `kill -TERM 1` afterward: also stayed `running` for the full 120 s poll —
+  consistent with the signal mask above; PID 1 never receives it.
+- The account balance moved by $0.0037 between before and after — the
+  instance kept billing the whole time. Only the probe's own external
+  `DestroyInstance` call (unconditional, not gated on any in-container
+  state) actually freed it, confirmed by a follow-up list call finding
+  zero instances under its label.
+
+**ADR 0003 §7's premise does not hold under bundle A's SSH launch mode.**
+"An exited instance stops GPU billing" is true once an instance is
+`exited`, but nothing `onstart.sh` can do from inside the container — not
+its own exit, not a self-sent signal to PID 1 — makes that happen. Only an
+external destroy call does. The dead-man script (FR-4.5) still matters as
+a billing *ceiling* (so a wedged instance isn't rented forever if someone
+is watching for it), but it cannot be the control plane's only mechanism
+for ending an idle instance: CORE-050's own reconcile loop, calling
+`DestroyInstance` itself on idle/completion, is what actually stops
+billing, not anything `onstart.sh`'s dead-man loop does to the container
+from inside. This is a design-validity finding for CORE-050 and for ADR
+0003 §7's own wording, not a code bug in CORE-070 — `onstart.sh`'s `fail()`
+sending `kill -TERM 1` is harmless (silently ignored) but was never going
+to be sufficient on its own, and the spec's `onstart.sh` was never the
+layer responsible for actually freeing the GPU.
+
 ### 7.5 Cost and safety
 
 | | A1 | A2 | Combined |
