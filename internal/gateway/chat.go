@@ -234,11 +234,61 @@ func inStreamError(code, message string) string {
 	return "data: " + string(b) + "\n\n"
 }
 
-// streamUpstream is completed in a follow-up task; for now it delegates
-// to the plain 2xx copier so a stream:true request still gets a body.
+// streamUpstream streams a confirmed 2xx SSE response to the client,
+// observing the first-token latency and forwarding every error after
+// the 200/text-event-stream headers go out through writeInStreamOutcome.
 func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen int64, r *http.Request, start time.Time) {
-	_ = gen
-	_ = r
-	_ = start
-	g.copyUpstream2xx(w, resp)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	rc := http.NewResponseController(w)
+
+	firstByte := true
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if firstByte {
+				g.deps.Controller.ObserveFirstToken(gen, g.deps.Clock.Now().Sub(start))
+				firstByte = false
+			}
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			_ = rc.Flush()
+		}
+		if err != nil {
+			if err != io.EOF {
+				outcome := g.classify(r, err)
+				if outcome == outcomeUpstreamError {
+					g.deps.Controller.ReportUpstreamFailure(gen)
+				}
+				g.writeInStreamOutcome(w, rc, outcome)
+			}
+			return
+		}
+	}
+}
+
+// writeInStreamOutcome writes the in-stream error row for an outcome
+// discovered after headers already went out; a second WriteHeader call
+// would be silently ignored by net/http, so setCodeOverride is how the real status reaches metrics.
+func (g *Gateway) writeInStreamOutcome(w http.ResponseWriter, rc *http.ResponseController, outcome upstreamOutcome) {
+	switch outcome {
+	case outcomeClientGone:
+		setCodeOverride(w, "499")
+		return // nothing to write, the client is already gone
+	case outcomeShuttingDown:
+		setCodeOverride(w, "stream_error")
+		_, _ = io.WriteString(w, inStreamError("shutting_down", "the server is shutting down")+"data: [DONE]\n\n")
+	case outcomeTimeout:
+		setCodeOverride(w, "stream_error")
+		_, _ = io.WriteString(w, inStreamError("upstream_timeout", "the worker did not respond in time")+"data: [DONE]\n\n")
+	case outcomeDrainCutoff:
+		setCodeOverride(w, "stream_error")
+		_, _ = io.WriteString(w, backendUnavailableSSE())
+	default:
+		setCodeOverride(w, "stream_error")
+		_, _ = io.WriteString(w, inStreamError("upstream_error", "connection to the worker was lost")+"data: [DONE]\n\n")
+	}
+	_ = rc.Flush()
 }
