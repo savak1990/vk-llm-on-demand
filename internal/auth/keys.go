@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -89,11 +90,11 @@ func readKeySet(path string) (keySet, time.Time, error) {
 		if line == "" {
 			continue
 		}
-		digest := sha256.Sum256([]byte(line))
-		keyID := line
-		if idx := strings.Index(line, "sk-vkllm-"); idx == 0 && len(line) >= len("sk-vkllm-")+8 {
-			keyID = line[len("sk-vkllm-") : len("sk-vkllm-")+8]
+		if !strings.HasPrefix(line, "sk-vkllm-") || len(line) < len("sk-vkllm-")+8 {
+			return nil, time.Time{}, fmt.Errorf("auth: %s: a key must start with sk-vkllm- and have at least 8 trailing characters", path)
 		}
+		digest := sha256.Sum256([]byte(line))
+		keyID := line[len("sk-vkllm-") : len("sk-vkllm-")+8]
 		set[digest] = keyID
 	}
 	if err := scanner.Err(); err != nil {

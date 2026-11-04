@@ -87,10 +87,19 @@ func TestCheckMissingAndMalformed(t *testing.T) {
 
 func TestLoadRejectsKeyInBothLists(t *testing.T) {
 	dir := t.TempDir()
-	clientPath := writeKeyFile(t, dir, "client-keys", "sk-vkllm-shared")
-	mgmtPath := writeKeyFile(t, dir, "management-tokens", "sk-vkllm-shared")
+	clientPath := writeKeyFile(t, dir, "client-keys", "sk-vkllm-sharedkey1")
+	mgmtPath := writeKeyFile(t, dir, "management-tokens", "sk-vkllm-sharedkey1")
 	if _, err := Load(clientPath, mgmtPath, fakeclock.New(time.Unix(0, 0)), noopLogger()); err == nil {
 		t.Fatal("Load: want error when a value is present in both lists")
+	}
+}
+
+func TestLoadRejectsNonConformingKey(t *testing.T) {
+	dir := t.TempDir()
+	clientPath := writeKeyFile(t, dir, "client-keys", "not-a-valid-key-shape")
+	mgmtPath := writeKeyFile(t, dir, "management-tokens", "sk-vkllm-mgmttoken1")
+	if _, err := Load(clientPath, mgmtPath, fakeclock.New(time.Unix(0, 0)), noopLogger()); err == nil {
+		t.Fatal("Load: want error for a key that does not match the sk-vkllm- shape")
 	}
 }
 
