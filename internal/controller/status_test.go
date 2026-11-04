@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
@@ -45,5 +46,23 @@ func TestStatusNeverCallsProvider(t *testing.T) {
 	_ = c.Status()
 	if prov.Calls("get")+prov.Calls("list")+prov.Calls("search")+prov.Calls("create")+prov.Calls("destroy") != 0 {
 		t.Fatal("Status must never call the provider")
+	}
+}
+
+func TestStatusProviderBalanceUnknownUntilFirstRead(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	c.balanceMu.Lock()
+	c.lastBalanceKnown = false
+	c.balanceMu.Unlock()
+	snap := c.Status()
+	if snap.ProviderBalanceUSD != nil {
+		t.Fatalf("ProviderBalanceUSD = %v, want nil before any successful balance read", snap.ProviderBalanceUSD)
+	}
+	c.balanceMu.Lock()
+	c.lastBalance, c.lastBalanceKnown = provider.Money(12_500_000), true
+	c.balanceMu.Unlock()
+	snap = c.Status()
+	if snap.ProviderBalanceUSD == nil || *snap.ProviderBalanceUSD != 12.5 {
+		t.Fatalf("ProviderBalanceUSD = %v, want 12.5", snap.ProviderBalanceUSD)
 	}
 }

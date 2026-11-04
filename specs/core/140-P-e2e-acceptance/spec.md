@@ -22,7 +22,7 @@ tier 3); a bug here can both overspend and leave a GPU running
 `VKLLM_E2E_BUDGET_USD` (default $10) and ≤ 90 min wall clock
 **Recommended model:** strong — live results are judged against seventeen
 ordered, stateful scenarios and the FR/NFR gates they prove
-**Depends on:** [CORE-055](../055-P-management-api/spec.md) (management
+**Depends on:** [CORE-055](../055-D-management-api/spec.md) (management
 API), [CORE-070](../070-D-worker-runtime/spec.md) (worker contract),
 CORE-080 (chart), CORE-100 (budget and cost ledger), CORE-150 (`vk-llm`
 CLI binary), CORE-160 (`gpu-control.yml`)
