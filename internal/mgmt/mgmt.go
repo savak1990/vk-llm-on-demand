@@ -53,11 +53,3 @@ func New(d Deps) http.Handler {
 	s.routes()
 	return withMiddleware(s, d)
 }
-
-// withMiddleware is a placeholder that passes the handler through
-// unchanged until auth and rate-limiting wrap it.
-func withMiddleware(h http.Handler, d Deps) http.Handler { return h }
-
-// registerMetrics is a placeholder; it registers nothing until
-// metrics are defined.
-func registerMetrics(reg prometheus.Registerer) {}
