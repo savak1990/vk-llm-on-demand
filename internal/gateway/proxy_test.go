@@ -63,7 +63,7 @@ func TestProxyPlain(t *testing.T) {
 }
 
 func TestAtomicAdmissionAtDeadline(t *testing.T) {
-	rtA := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+	rtA := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader([]byte(`{}`)))}, nil
 	})
 
@@ -122,7 +122,7 @@ func TestUpstream4xxMapping(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
 			return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(c.body))}, nil
 		})
 		d := testDeps(t)

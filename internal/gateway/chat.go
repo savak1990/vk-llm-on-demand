@@ -236,6 +236,8 @@ func inStreamError(code, message string) string {
 // streamUpstream is completed in a follow-up task; for now it delegates
 // to the plain 2xx copier so a stream:true request still gets a body.
 func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen int64, r *http.Request, start time.Time) {
+	_ = gen
+	_ = r
 	_ = start
 	g.copyUpstream2xx(w, resp)
 }
