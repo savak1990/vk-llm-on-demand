@@ -5,19 +5,21 @@
 # own exit, and PID 1 exiting first would short-circuit that exit code.
 trap 'echo WRAPPER_GOT_TERM' TERM
 
-/onstart.sh &
+rm -f /tmp/onstart.rc
+( /onstart.sh; echo $? > /tmp/onstart.rc ) &
 child=$!
-rc=
-while true; do
-  if wait "$child"; then rc=0; else rc=$?; fi
-  # A wait() interrupted by our TERM trap returns early without
-  # reaping the child, so rc can be the signal's own 128+15 instead of
-  # the child's real status. Only trust rc once /proc/$child is gone,
-  # which only happens once a wait() call actually reaped it.
-  if [ ! -e "/proc/$child" ]; then
-    break
-  fi
+
+# Don't trust wait()'s own return value: a TERM arriving while this call
+# is blocked can make bash report the signal's pseudo-status (128+15)
+# instead of the child's real exit code, even once the child has truly
+# been reaped. The subshell above writes the real code to a file right
+# after onstart.sh itself exits, independent of any signal racing this
+# wait call, so that file is the only value this script trusts.
+wait "$child" 2>/dev/null || true
+while [ ! -f /tmp/onstart.rc ]; do
+  sleep 0.1
 done
+rc=$(cat /tmp/onstart.rc)
 
 if [ -f /tmp/stub.pid ]; then
   if kill -0 "$(cat /tmp/stub.pid)" 2>/dev/null; then
@@ -27,4 +29,4 @@ if [ -f /tmp/stub.pid ]; then
   fi
 fi
 
-exit "${rc:-1}"
+exit "$rc"
