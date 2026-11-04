@@ -83,8 +83,10 @@ func TestRecoverReturns500(t *testing.T) {
 	g.mux.HandleFunc("GET /v1/test-panic", func(_ http.ResponseWriter, _ *http.Request) {
 		panic("boom")
 	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/test-panic", nil)
+	req.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
 	rec := httptest.NewRecorder()
-	g.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/test-panic", nil))
+	g.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}

@@ -78,12 +78,13 @@ func New(d Deps) (*Gateway, error) {
 	return g, nil
 }
 
-// Handler returns the full /v1 handler; auth, rate-limiting and the
+// Handler returns the full /v1 handler; rate-limiting and the
 // body-limit wrapper attach to this chain later.
 func (g *Gateway) Handler() http.Handler {
 	return chain(g.mux,
 		g.requestIDMiddleware,
 		g.recoverMiddleware,
+		g.authMiddleware,
 		g.loggingMiddleware,
 	)
 }
