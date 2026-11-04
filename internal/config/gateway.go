@@ -19,8 +19,8 @@ func LoadGateway() (Gateway, error) {
 	var g Gateway
 	var err error
 
-	// Same default as config.LoadMgmt's own VKLLM_MODEL_ALIAS read
-	// (CORE-055) — both loaders must agree on the unset case.
+	// Two loaders reading the same env var must agree on the unset case,
+	// or the gateway could report a different model id than the management API.
 	g.ModelAlias = envString("VKLLM_MODEL_ALIAS", "qwen3.6-35b-a3b")
 
 	maxBody, err := envInt("VKLLM_GATEWAY_MAX_BODY_BYTES", 1<<20)
