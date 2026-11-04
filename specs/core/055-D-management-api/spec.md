@@ -8,7 +8,7 @@ adrs: ["0012", "0010", "0011", "0009"]
 
 # 055 — Management API
 
-**Status note:** READY 2026-11-04. Written 2026-11-01 before any code exists; the result field, nextCreateAt and the 4-value reason enum were clarified before promotion.
+**Status note:** DONE 2026-11-04. Written 2026-11-01 before any code exists; the result field, nextCreateAt and the 4-value reason enum were clarified before promotion.
 
 **Complexity:** M
 **Risk:** medium — a management token can rent a GPU, so auth, rate limit and idempotency guard money
@@ -336,7 +336,7 @@ criteria (`TestAC5_IdleDeadlineUntouchedAcross210Calls` through
 `TestAC12_RedactionAcrossAllRoutes`) pass; `-race` reports no data races.
 
 `internal/controller` gained the field `ProviderBalanceUSD *float64` on
-`Snapshot` (commit `<to-be-determined>`), carrying the provider's account
+`Snapshot` (commit `248631b`), carrying the provider's account
 balance from the most recent balance read so `mgmt` can render it in the
 cost document (FR-6.8) — a merged-package touch in the same category as
 CORE-050's own `internal/clock/fake.NextDeadline()` addition.
