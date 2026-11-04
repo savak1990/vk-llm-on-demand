@@ -80,12 +80,12 @@ func New(d Deps) (*Gateway, error) {
 	return g, nil
 }
 
-// Handler returns the full /v1 handler; the body-limit wrapper
-// attaches to this chain later.
+// Handler returns the full /v1 handler with all middleware chained.
 func (g *Gateway) Handler() http.Handler {
 	return chain(g.mux,
 		g.requestIDMiddleware,
 		g.recoverMiddleware,
+		g.bodyLimitMiddleware,
 		g.authMiddleware,
 		g.rateLimitMiddleware,
 		g.loggingMiddleware,
