@@ -23,7 +23,7 @@ tier 3); a bug here can both overspend and leave a GPU running
 **Recommended model:** strong — live results are judged against seventeen
 ordered, stateful scenarios and the FR/NFR gates they prove
 **Depends on:** [CORE-055](../055-D-management-api/spec.md) (management
-API), [CORE-070](../070-P-worker-runtime/spec.md) (worker contract),
+API), [CORE-070](../070-D-worker-runtime/spec.md) (worker contract),
 CORE-080 (chart), CORE-100 (budget and cost ledger), CORE-150 (`vk-llm`
 CLI binary), CORE-160 (`gpu-control.yml`)
 

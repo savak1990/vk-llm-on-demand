@@ -66,7 +66,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [050](core/050-D-gpu-lifecycle-controller/spec.md) | GPU lifecycle controller, 30-minute rolling idle, immediate stop, reconcile loop | 020, 040 |
 | [055](core/055-D-management-api/spec.md) | Management API `/api/v1/gpu/*`, management tokens | 050 |
 | [060](core/060-P-gateway-openai-api/spec.md) | OpenAI-compatible gateway, inference keys, streaming, `backend_unavailable` | 040, 050 |
-| [070](core/070-P-worker-runtime/spec.md) | Worker onstart, model download, llama-server contract | 030 |
+| [070](core/070-D-worker-runtime/spec.md) | Worker onstart, model download, llama-server contract | 030 |
 | [080](core/080-P-helm-chart/spec.md) | Helm chart `gpu-on-demand` | 060 |
 | [090](core/090-P-observability/spec.md) | Metrics catalog, logs, dashboard, alerts | 050, 060 |
 | [100](core/100-P-cost-controls/spec.md) | Budget, limits, orphan sweep, cost visibility | 050 |
