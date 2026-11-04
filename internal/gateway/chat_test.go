@@ -49,8 +49,8 @@ func TestClampMaxTokensPure(t *testing.T) {
 		{"within cap", `{"max_tokens": 10}`, false, 10, true, 0, false},
 		{"negative treated as absent", `{"max_tokens": -1}`, true, 8192, true, 0, false},
 		{"zero treated as absent", `{"max_tokens": 0}`, true, 8192, true, 0, false},
-		{"only max_completion_tokens above cap", `{"max_completion_tokens": 100000}`, true, 0, false, 8192, true},
-		{"only max_completion_tokens within cap, not renamed", `{"max_completion_tokens": 10}`, false, 0, false, 10, true},
+		{"only max_completion_tokens above cap", `{"max_completion_tokens": 100000}`, true, 8192, true, 8192, true},
+		{"only max_completion_tokens within cap, also mirrored to max_tokens", `{"max_completion_tokens": 10}`, false, 10, true, 10, true},
 		{"both present, only one over cap", `{"max_tokens": 10, "max_completion_tokens": 100000}`, true, 10, true, 8192, true},
 	}
 	for _, c := range cases {
@@ -225,37 +225,52 @@ func TestBackendUnavailable(t *testing.T) {
 	}
 }
 
-// TestBackendUnavailableAcrossEveryState confirms a pre-admission
-// backend_unavailable response never depends on which state the
-// worker is in: Admit's own error decides it, not State itself.
+// TestBackendUnavailableAcrossEveryState: a pre-admission 503 never
+// depends on the reported state, plain or streamed, and the fake
+// records no call besides Status and Admit.
 func TestBackendUnavailableAcrossEveryState(t *testing.T) {
-	states := []controller.State{
-		controller.Idle,
-		controller.Searching,
-		controller.Creating,
-		controller.Booting,
-		controller.Loading,
+	cases := []struct {
+		state controller.State
+		err   error
+	}{
+		{controller.Idle, controller.ErrBackendUnavailable},
+		{controller.Searching, controller.ErrBackendUnavailable},
+		{controller.Creating, controller.ErrBackendUnavailable},
+		{controller.Booting, controller.ErrBackendUnavailable},
+		{controller.Loading, controller.ErrBackendUnavailable},
+		{controller.Draining, controller.ErrDraining},
+		{controller.Destroying, controller.ErrBackendUnavailable},
 	}
-	for _, state := range states {
-		d := testDeps(t)
-		fc := &fakeController{admitErr: controller.ErrBackendUnavailable, status: controller.Snapshot{State: state}}
-		d.Controller = fc
-		g, err := New(d)
-		if err != nil {
-			t.Fatalf("%v: New: %v", state, err)
-		}
+	for _, c := range cases {
+		for _, stream := range []bool{false, true} {
+			d := testDeps(t)
+			fc := &fakeController{admitErr: c.err, status: controller.Snapshot{State: c.state}}
+			d.Controller = fc
+			g, err := New(d)
+			if err != nil {
+				t.Fatalf("%v/%v/stream=%v: New: %v", c.state, c.err, stream, err)
+			}
 
-		rec := httptest.NewRecorder()
-		g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+			body := `{"model":"qwen3.6-35b-a3b","messages":[]}`
+			if stream {
+				body = `{"model":"qwen3.6-35b-a3b","messages":[],"stream":true}`
+			}
+			rec := httptest.NewRecorder()
+			g.Handler().ServeHTTP(rec, chatReq(body))
 
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("%v: status = %d, want 503", state, rec.Code)
-		}
-		if rec.Body.String() != backendUnavailableBody {
-			t.Fatalf("%v: body = %q, want %q", state, rec.Body.String(), backendUnavailableBody)
-		}
-		if _, endCalls := fc.snapshot(); len(endCalls) != 0 {
-			t.Fatalf("%v: RequestEnd called, want 0 calls", state)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("%v/%v/stream=%v: status = %d, want 503", c.state, c.err, stream, rec.Code)
+			}
+			if rec.Body.String() != backendUnavailableBody {
+				t.Fatalf("%v/%v/stream=%v: body = %q, want %q", c.state, c.err, stream, rec.Body.String(), backendUnavailableBody)
+			}
+			fc.mu.Lock()
+			endCalls, firstToken, upstreamErr := len(fc.endCalls), len(fc.firstToken), len(fc.upstreamErr)
+			fc.mu.Unlock()
+			if endCalls != 0 || firstToken != 0 || upstreamErr != 0 {
+				t.Fatalf("%v/%v/stream=%v: RequestEnd/ObserveFirstToken/ReportUpstreamFailure = %d/%d/%d, want 0/0/0",
+					c.state, c.err, stream, endCalls, firstToken, upstreamErr)
+			}
 		}
 	}
 }

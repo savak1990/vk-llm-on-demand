@@ -26,9 +26,15 @@ func clampMaxTokens(body map[string]json.RawMessage, maxCap int) (clamped bool, 
 	if err != nil {
 		return false, 0, err
 	}
-	if !mtPresent && !mctPresent {
+	switch {
+	case !mtPresent && !mctPresent:
 		body["max_tokens"] = json.RawMessage(strconv.Itoa(maxCap))
 		return true, 0, nil
+	case !mtPresent:
+		// llama-server's support for max_completion_tokens is unconfirmed
+		// (open question), so also send max_tokens with the same already
+		// clamped value rather than leaving the cap unenforceable.
+		body["max_tokens"] = body["max_completion_tokens"]
 	}
 	requested = mctVal
 	if mtPresent {

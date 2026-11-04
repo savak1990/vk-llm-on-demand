@@ -30,6 +30,7 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 				return &http.Response{StatusCode: 500, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(nil))}, nil
 			},
 			wantStatus:     http.StatusBadGateway,
+			wantCode:       "upstream_error",
 			wantFailureInc: true,
 		},
 		{
@@ -39,6 +40,7 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 				return &http.Response{StatusCode: 401, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(nil))}, nil
 			},
 			wantStatus:     http.StatusBadGateway,
+			wantCode:       "upstream_error",
 			wantFailureInc: true,
 		},
 		{
@@ -48,6 +50,7 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 				return nil, errors.New("connection reset")
 			},
 			wantStatus:     http.StatusBadGateway,
+			wantCode:       "upstream_error",
 			wantFailureInc: true,
 		},
 		{
@@ -115,11 +118,9 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 	}
 }
 
-// TestUpstreamErrorMappingMidStreamReset: a mid-stream reset while the
-// backend is READY (not draining) must produce an in-stream
-// upstream_error row followed by [DONE], with exactly one
-// ReportUpstreamFailure call — the streaming sibling of the 500/401
-// plain-response cases above.
+// TestUpstreamErrorMappingMidStreamReset: a mid-stream reset while
+// READY must produce an in-stream upstream_error row then [DONE],
+// with exactly one ReportUpstreamFailure call.
 func TestUpstreamErrorMappingMidStreamReset(t *testing.T) {
 	failNow := make(chan struct{})
 	body := &drainBody{failNow: failNow}

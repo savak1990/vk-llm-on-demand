@@ -175,11 +175,8 @@ func (b *releaseBody) Read(_ []byte) (int, error) {
 func (b *releaseBody) Close() error { return nil }
 
 // TestShutdownReturnsCtxErrOnExpiry confirms Shutdown reports its own
-// deadline expiring instead of masking it as success: a caller relying
-// on the return value to know draining fully finished must see the error.
-// The active handler is held open past Shutdown's return (via a
-// test-owned release, not ctx) so the final select has exactly one
-// ready case, never a race between it and the drain finishing.
+// deadline expiring instead of masking it as success. The handler is
+// held open past Shutdown's return so the result isn't racy.
 func TestShutdownReturnsCtxErrOnExpiry(t *testing.T) {
 	reached := make(chan struct{}, 1)
 	release := make(chan struct{})
