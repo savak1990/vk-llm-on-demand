@@ -46,6 +46,7 @@ type Gateway struct {
 	deps      Deps
 	mux       *http.ServeMux
 	startedAt time.Time
+	rl        *auth.Limiter
 
 	// shuttingDown will gate admission once draining logic exists;
 	// declared now so that logic can be added without touching this struct.
@@ -75,16 +76,18 @@ func New(d Deps) (*Gateway, error) {
 	g := &Gateway{deps: d, startedAt: d.Clock.Now()}
 	g.mux = http.NewServeMux()
 	g.mux.HandleFunc("GET /v1/models", g.handleModels)
+	g.rl = auth.NewLimiter(d.Config.RateLimitPerKeyRPM, d.Clock)
 	return g, nil
 }
 
-// Handler returns the full /v1 handler; rate-limiting and the
-// body-limit wrapper attach to this chain later.
+// Handler returns the full /v1 handler; the body-limit wrapper
+// attaches to this chain later.
 func (g *Gateway) Handler() http.Handler {
 	return chain(g.mux,
 		g.requestIDMiddleware,
 		g.recoverMiddleware,
 		g.authMiddleware,
+		g.rateLimitMiddleware,
 		g.loggingMiddleware,
 	)
 }

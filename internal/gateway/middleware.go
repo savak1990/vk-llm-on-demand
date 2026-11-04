@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
 )
@@ -26,5 +28,18 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		default:
 			writeError(w, http.StatusUnauthorized, "authentication_error", "unknown_key", "the api key is not recognized")
 		}
+	})
+}
+
+func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keyID, _ := r.Context().Value(ctxKeyKeyID).(string)
+		ok, retryAfter := g.rl.Allow(keyID)
+		if !ok {
+			w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retryAfter.Seconds()))))
+			writeError(w, http.StatusTooManyRequests, "rate_limit_error", "rate_limit_exceeded", "rate limit exceeded")
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
