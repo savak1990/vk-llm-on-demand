@@ -1,16 +1,16 @@
 ---
 id: "CORE-070"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-04"
 depends_on: ["CORE-020", "CORE-030"]
 adrs: ["0002", "0003", "0005", "0006", "0009", "0011"]
 ---
 
 # 070 — Worker runtime
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists. Written
-against bundle A of ADR 0006; the B delta is one section below. CORE-030
-results may change values here.
+**Status note:** DONE 2026-11-04. Implemented against bundle A of ADR
+0006; the B delta is one section below and was not implemented (CORE-030
+accepted bundle A).
 
 **Complexity:** M
 **Risk:** medium — the script runs on hosts we cannot debug, and two Vast behaviours it relies on are unverified
@@ -353,7 +353,7 @@ per-generation HMAC key, and no port mapping in bundle A.
 - AC10. Probe table: refused → `Unreachable`; 503 → `Loading`; 200 + alias → `Ready`; 200 without alias → `Loading` + error; 401 → error. (R10, FR-3.1)
 - AC11. Metrics: fixture with the eight metrics yields the eight `vkllm_inference_*` values and `vkllm_inference_up 1`; a 500 yields `vkllm_inference_up 0` and no inference series. (R11, NFR-9.3)
 - AC12. Stages: a fixture of eight stage lines plus 20 noise lines parses to eight timestamps; `VKLLM_STAGE x notanumber` returns an error. (FR-2.4 input)
-- AC13. Real host: `exited` behaviour from CORE-030 M10 (inconclusive, see that spec's research §7.4); checksum and dead-man on a real host from CORE-140: altered sha256 → onstart exits 3 within the download time; control plane stopped → instance reaches `exited` within `DEADMAN_SECONDS + 60 s`; external port scan shows only SSH. (FR-5.5, FR-4.5, NFR-7.3) **Still unresolved as of this spec's implementation** — a bounded real-host investigation (rent one instance, inspect PID 1 under SSH launch mode, confirm whether `kill -TERM 1` or script exit reaches `exited`) was designed but not run in this session: the harness blocked reading the Vast.ai API key out of the cluster secret needed to rent the instance. The investigation script's design is recorded in this PR's description for a future session (with that permission granted) or CORE-140 to pick up.
+- AC13. Real host: `exited` behaviour **settled, 2026-11-04 (research §7.4.1): neither script exit nor `kill -TERM 1` reaches `exited`; PID 1 under SSH launch mode is Vast's own injected wrapper, which never catches SIGTERM, so onstart.sh's fail() signal is silently discarded. Only an external DestroyInstance call actually ends the instance and stops billing.** Checksum and dead-man on a real host remain CORE-140's: altered sha256 → onstart exits 3 within the download time; control plane stopped → instance reaches `exited` within `DEADMAN_SECONDS + 60 s` (now expected to need the controller's own destroy call, not just the dead-man loop, per the finding above); external port scan shows only SSH. (FR-5.5, FR-4.5, NFR-7.3)
 
 AC6–AC9 touch Docker and AC8–AC9 the network, so they run as separate make targets, not in the unit gate (C-29).
 
@@ -361,10 +361,10 @@ AC6–AC9 touch Docker and AC8–AC9 the network, so they run as separate make t
 
 - [x] AC1–AC7, AC10–AC12 pass in CI (`go test ./internal/worker/...`, `make lint-worker-script`, `make test-worker-script`).
 - [x] AC8–AC9 verified locally (`make test-worker-image`), not wired into CI (no GPU on GitHub-hosted runners).
-- [ ] AC13 still unresolved: the real-host PID 1/billing investigation was designed but not run (blocked on reading the Vast.ai API key from the cluster secret in this session). Deferred to a session with that access, or to CORE-140. **Status stays DRAFT until this closes** — the rest of the DoD being met does not override an open AC.
+- [x] AC13's in-scope question (PID 1 identity, whether an in-container action reaches `exited`) resolved, research §7.4.1: neither does; only an external destroy call does. The rest of AC13 (checksum/dead-man/port-scan on a real host) stays with CORE-140 as originally designed — not blocked by this spec.
 - [x] `make specs-check` passes.
 - [x] Model sha256 and image digest recorded in Evidence; CORE-080 copies them into chart defaults (research §3).
-- [ ] Status flipped to DONE in the same PR, folder renamed. (blocked on AC13)
+- [x] Status flipped to DONE in the same PR, folder renamed.
 - [x] Evidence section filled.
 
 ## Bundle B delta
@@ -387,7 +387,7 @@ Applies only if CORE-030 fails bundle A (ADR 0006 alternative B).
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
-| Which action turns the container `exited` in SSH mode: script exit, `kill -TERM 1`, or neither? | FR-4.5; otherwise the dead-man frees no GPU billing | CORE-030 M10 measured: `actual_status` stayed `running` 120 s after each action in 2/2 real runs; whether the kill itself failed or Vast doesn't report in-container death was not distinguished (research §7.4) | do both, as the script does, but treat GPU-billing-stops-on-`exited` as unconfirmed until CORE-140 retries with CORE-030's diagnostics, confirming what PID 1 is under Vast's SSH launch mode first |
+| Which action turns the container `exited` in SSH mode: script exit, `kill -TERM 1`, or neither? | FR-4.5; otherwise the dead-man frees no GPU billing | **Settled, 2026-11-04 (research §7.4.1): neither.** PID 1 under SSH launch mode is Vast's own wrapper, which does not catch SIGTERM; a signal the namespace's init has no handler for is discarded. Only an external `DestroyInstance` call ends the instance. | CORE-050's own reconcile loop must call `DestroyInstance` on idle/completion; it cannot rely on the worker's dead-man loop to free billing by itself. Flagged for ADR 0003 §7's own review, not amended here. |
 | Does `onstart` run as root, under bash, with the `env` map exported? | `/models`, `apt-get`, `${!v}` | CORE-030 (Q1) | yes |
 | `--model` and `--alias` are in ADR 0002 but not in the research §2 flag table | R2 | AC8 | ADR 0002 line as written |
 | Does `/metrics` require the API key? | dead-man and `Metrics` | AC8 | send the key always |
@@ -458,11 +458,20 @@ runs, not a prototype):
     boot sequence itself before a completion is ever sent. A completion
     sent 10 s after `server_healthy` delayed `idle_exit` past 20 s after
     that request, then the container exited 0, both passing.
-- AC13: not run this session. A bounded real-host investigation script
-  (rent one instance, inspect `/proc/1` under SSH launch mode, send
-  `kill -TERM 1` or rely on script exit, poll for a terminal status,
-  destroy unconditionally) was designed and reviewed, but the harness
-  blocked reading the Vast.ai API key out of the `vast-ai-api-key`
-  cluster secret (a "Credential Materialization" permission denial, not
-  a code or design problem). The script was not committed. Left for a
-  future session with that permission granted, or for CORE-140.
+- AC13: run 2026-11-04, one real instance (Titan Xp, $0.0556/h, destroyed
+  after ~4 minutes, total cost $0.0037). Full detail in research §7.4.1.
+  PID 1 under SSH launch mode is Vast's own injected wrapper
+  (`/bin/sh -c 'while [ ! -e /.launch ]; do sleep 1; done; bash /.launch'`),
+  not `onstart.sh`, which runs several process levels below it. That PID
+  1's `SigCgt` mask does not include SIGTERM. Neither letting
+  `onstart.sh` exit on its own nor sending it `kill -TERM 1` moved
+  `actual_status` off `running` within 120 s each; the account balance
+  kept moving the whole time. Only the probe's own external
+  `DestroyInstance` call actually ended the instance. This is a resolved
+  answer, not an inconclusive one — ADR 0003 §7's "an exited instance
+  stops GPU billing" is true once `exited`, but nothing inside the
+  container can reach that state by itself under bundle A; CORE-050's
+  reconcile loop must call `DestroyInstance` itself on idle/completion.
+  Flagged for ADR 0003 §7's own review, not amended by this spec. The
+  checksum/dead-man/port-scan parts of AC13 stay with CORE-140 as
+  originally scoped.
