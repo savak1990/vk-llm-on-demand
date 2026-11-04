@@ -92,8 +92,7 @@ func TestShutdownDrains(t *testing.T) {
 
 // TestShutdownDrainsPlain covers the plain (non-stream) half of a
 // Shutdown cutoff: a plain request blocks inside the round trip
-// itself, not inside a body read, so it needs its own fake round
-// tripper rather than reachedBody.
+// itself, not inside a body read like reachedBody.
 func TestShutdownDrainsPlain(t *testing.T) {
 	reached := make(chan struct{}, 1)
 	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
