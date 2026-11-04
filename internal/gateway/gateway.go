@@ -134,8 +134,7 @@ func (g *Gateway) recoverMiddleware(next http.Handler) http.Handler {
 
 // statusRecorder wraps the response writer so outer middleware can read
 // the real status after a handler returns. codeOverride lets a handler
-// record a metric label a numeric status can't express, such as a
-// client-closed request or an in-stream failure after headers are sent.
+// record a metric label a plain numeric status can't express.
 type statusRecorder struct {
 	http.ResponseWriter
 	status       int
