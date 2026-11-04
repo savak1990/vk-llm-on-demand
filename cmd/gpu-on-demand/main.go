@@ -122,8 +122,6 @@ func main() {
 	readinessChecks = append(readinessChecks, seed.Loaded)
 
 	// gw, and mounting it on apiMux, wait on a real *controller.Controller existing.
-	_ = keys
-	_ = seed
 
 	apiMux := http.NewServeMux()
 	// apiMux.Handle("/v1/", gw.Handler()) once ctl is constructed here.
