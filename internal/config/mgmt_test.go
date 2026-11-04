@@ -63,3 +63,13 @@ func TestLoadMgmtMalformedFloat(t *testing.T) {
 		t.Fatal("LoadMgmt: want error for malformed float, got nil")
 	}
 }
+
+func TestLoadMgmtRejectsNonPositiveRateLimit(t *testing.T) {
+	for _, v := range []string{"0", "-1"} {
+		clearMgmtEnv(t)
+		t.Setenv("VKLLM_MGMT_RATE_LIMIT_RPM", v)
+		if _, err := LoadMgmt(); err == nil {
+			t.Fatalf("LoadMgmt with RPM=%s: want error, got nil", v)
+		}
+	}
+}

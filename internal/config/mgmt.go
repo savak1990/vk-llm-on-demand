@@ -1,5 +1,7 @@
 package config
 
+import "fmt"
+
 // Mgmt is internal/mgmt's own env-parsed configuration.
 type Mgmt struct {
 	ProviderName       string
@@ -10,10 +12,9 @@ type Mgmt struct {
 	RateLimitPerKeyRPM int
 }
 
-// LoadMgmt reads internal/mgmt's configuration. ShutdownAllowForce
-// reads the same env var as config.Controller's own field — mgmt must
-// reject a disallowed force request itself, before ever calling
-// Controller.Stop, so it needs its own copy, not a shared struct.
+// LoadMgmt reads internal/mgmt's configuration; ShutdownAllowForce
+// needs its own copy since mgmt rejects a disallowed force request
+// itself, before ever calling Controller.Stop.
 func LoadMgmt() (Mgmt, error) {
 	var m Mgmt
 	var err error
@@ -31,6 +32,9 @@ func LoadMgmt() (Mgmt, error) {
 	}
 	if m.RateLimitPerKeyRPM, err = envInt("VKLLM_MGMT_RATE_LIMIT_RPM", 60); err != nil {
 		return Mgmt{}, err
+	}
+	if m.RateLimitPerKeyRPM <= 0 {
+		return Mgmt{}, fmt.Errorf("config: VKLLM_MGMT_RATE_LIMIT_RPM must be positive, got %d", m.RateLimitPerKeyRPM)
 	}
 	return m, nil
 }
