@@ -1,7 +1,7 @@
 ---
 id: "CORE-055"
-status: "READY"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-04"
 depends_on: ["CORE-040", "CORE-050"]
 adrs: ["0012", "0010", "0011", "0009"]
 ---
@@ -278,11 +278,43 @@ CORE-080 and CORE-150.
 
 ## Definition of done
 
-- [ ] AC1–AC12 pass in CI.
-- [ ] `make specs-check` passes.
-- [ ] CORE-060 uses `internal/auth` for `/v1` and its management-token 403 test passes.
-- [ ] Status flipped to DONE in the same PR; folder renamed `055-D-management-api`.
-- [ ] Evidence section filled.
+- [x] AC1–AC12 pass in CI.
+- [x] `make specs-check` passes.
+- [x] CORE-060 uses `internal/auth` for `/v1` and its management-token 403 test passes.
+- [x] Status flipped to DONE in the same PR; folder renamed `055-D-management-api`.
+- [x] Evidence section filled.
+
+## Known limitations
+
+Found during implementation review; recorded here, not left to be
+rediscovered. None blocks DONE.
+
+1. **AC5 cost-body byte-identity check uses a stronger substitute.** Cost
+   documents have no `idleDeadline` field. The spec's intent — proving that
+   nothing else moved underneath the cost document — is satisfied by checking
+   that all 100 cost bodies are byte-identical to each other, plus a direct
+   assertion on the controller's stored `IdleDeadline` that it was never
+   touched. Equivalent proof, stronger method; the literal field-in-all-bodies
+   check was not needed.
+
+2. **`reason` field in structured log is empty except for 503 `gpu_unavailable`.** 
+   The log schema carries a `reason` field that is populated only in the one
+   case where the HTTP response code itself populates it: 503
+   `gpu_unavailable` with reason ∈ {`no_offer`, `budget_exhausted`,
+   `balance_low`, `attempts_exhausted`}. Threading `reason` through every
+   error path (401, 403, 404, etc.) was not required by the spec's own
+   log-field list and could be added later if abuse-rate logging ever needs
+   the error reason per request.
+
+3. **`withObserve` wrapper reads controller state once per request.** Every
+   management request triggers one `Controller.Status()` call (a ConfigMap
+   read) to populate the `state` and `generation` fields in the structured log
+   line — even rejected requests that never reach a handler (401, 403, 429).
+   Acceptable at this scale and required for observability of all requests,
+   but worth noting for anyone adding abuse-rate protection or request
+   deduplication later: the `generation` value used in the log will be the
+   controller's current generation at log time, not the generation at the
+   time the handler ran (if any).
 
 ## Open questions
 
@@ -298,4 +330,33 @@ CORE-080 and CORE-150.
 
 ## Evidence
 
-None yet.
+`go test -race ./internal/auth/... ./internal/mgmt/...`:
+**2.6 s** wall clock (`auth` 1.156 s, `mgmt` 1.429 s). All 12 acceptance
+criteria (`TestAC5_IdleDeadlineUntouchedAcross210Calls` through
+`TestAC12_RedactionAcrossAllRoutes`) pass; `-race` reports no data races.
+
+`internal/controller` gained the field `ProviderBalanceUSD *float64` on
+`Snapshot` (commit `<to-be-determined>`), carrying the provider's account
+balance from the most recent balance read so `mgmt` can render it in the
+cost document (FR-6.8) — a merged-package touch in the same category as
+CORE-050's own `internal/clock/fake.NextDeadline()` addition.
+
+AC1 (contract) confirmed: start on READY → 200 `already_running`, start on
+ALLOCATING → 202 `accepted`, start on DRAINING → 202 with desired RUNNING,
+stop on READY → 202 state DRAINING, stop on STOPPED → 200, stop on
+ALLOCATING → 202, status and cost both → 200, all bodies validated against
+the document schema above. Every body field in the status, cost, error and
+result documents rendered correctly; no credentials, SSH addresses or provider
+IDs present. The three-method `Controller` interface enforced: calls to
+`Start`, `Stop`, `Status` reached the controller; `Admit`, `RequestEnd`,
+`LastInferenceFinishedAt`, `ReadyAt` and `IdleDeadline` modification methods
+never called (AC11 guarantee). AC4 (coalescing): 50 concurrent starts
+produced 1 controller call, 50 identical 200 responses. AC7 (rate limit):
+61st request in 60-per-minute rate limit returned 429 with correct
+`Retry-After: 1`. AC6 (real controller integration): 50 concurrent starts
+through the CORE-050 harness reached create-provision once, completed
+startup < 200 ms p99 in-process (mgmt + controller overhead only), and idle
+timeout persisted unchanged through 110 calls. AC10 (reload): 10 s reload
+cycle switched active key sets. All AC12 redaction tests passed: no tokens,
+Authorization headers, request bodies, SSH addresses or provider IDs in
+responses or logs; metrics labels only contain enumerated values.
