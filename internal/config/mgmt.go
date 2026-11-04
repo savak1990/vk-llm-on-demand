@@ -2,12 +2,12 @@ package config
 
 // Mgmt is internal/mgmt's own env-parsed configuration.
 type Mgmt struct {
-	ProviderName        string
-	ModelAlias          string
-	ModelContextSize    int
-	ShutdownAllowForce  bool
-	BudgetMonthUSD      float64
-	RateLimitPerKeyRPM  int
+	ProviderName       string
+	ModelAlias         string
+	ModelContextSize   int
+	ShutdownAllowForce bool
+	BudgetMonthUSD     float64
+	RateLimitPerKeyRPM int
 }
 
 // LoadMgmt reads internal/mgmt's configuration. ShutdownAllowForce
