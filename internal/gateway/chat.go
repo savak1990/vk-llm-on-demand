@@ -1,13 +1,17 @@
 package gateway
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/worker"
 )
 
 // clampMaxTokens returns the value to send upstream for max_tokens:
@@ -88,14 +92,150 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	g.proxyChat(w, r, gen, rt, body, stream)
 }
 
-// proxyChat does not call upstream yet; it exists only so admission
-// above it (already returning 503 correctly) has somewhere to hand
-// off to once streaming and upstream error handling land here.
 func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, rt http.RoundTripper, body map[string]json.RawMessage, stream bool) {
-	_ = r
-	_ = gen
-	_ = rt
-	_ = body
-	_ = stream
-	writeError(w, http.StatusInternalServerError, "server_error", "internal_error", "upstream proxying not yet implemented")
+	payload, err := json.Marshal(body)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "internal_error", "internal error")
+		return
+	}
+
+	timeout := g.deps.Config.GenerationTimeout
+	if timeout == 0 {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	key := worker.WorkerKey(g.deps.Seed.Bytes(), g.deps.InstallationID, gen)
+
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://worker/v1/chat/completions", bytes.NewReader(payload))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "server_error", "internal_error", "internal error")
+		return
+	}
+	upstreamReq.Header.Set("Content-Type", "application/json")
+	upstreamReq.Header.Set("Authorization", "Bearer "+key)
+	if stream {
+		upstreamReq.Header.Set("Accept", "text/event-stream")
+	}
+
+	client := &http.Client{Transport: rt, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	start := g.deps.Clock.Now() // captured before the round trip, so ttft_seconds measures the real wait, not just time inside streamUpstream
+	resp, err := client.Do(upstreamReq)
+	if err != nil {
+		// No response headers have been sent to the client yet, so
+		// this is always a plain status — never SSE, regardless of
+		// stream — even for a request that asked to stream.
+		outcome := g.classify(r, err)
+		if outcome == outcomeUpstreamError {
+			g.deps.Controller.ReportUpstreamFailure(gen)
+		}
+		g.writePreHeaderOutcome(w, outcome)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden, resp.StatusCode >= 500:
+		// The upstream answered, but with a status this gateway never
+		// forwards as-is. Headers still haven't been sent to the
+		// client, so this is plain too, regardless of stream.
+		g.deps.Controller.ReportUpstreamFailure(gen)
+		writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "the worker rejected the request")
+	case resp.StatusCode >= 400:
+		g.copyUpstream4xx(w, resp)
+	case stream:
+		g.streamUpstream(w, resp, gen, r, start)
+	default:
+		g.copyUpstream2xx(w, resp)
+	}
+}
+
+// copyUpstream2xx passes a confirmed 2xx plain response straight through.
+func (g *Gateway) copyUpstream2xx(w http.ResponseWriter, resp *http.Response) {
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// copyUpstream4xx passes through a client-error body that already looks
+// like this gateway's own {"error":...} shape unchanged; any other 4xx
+// body is wrapped so the client still gets a parseable error.
+func (g *Gateway) copyUpstream4xx(w http.ResponseWriter, resp *http.Response) {
+	raw, _ := io.ReadAll(resp.Body)
+	var probe errorBody
+	if json.Unmarshal(raw, &probe) == nil && probe.Error.Message != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = w.Write(raw)
+		return
+	}
+	writeError(w, resp.StatusCode, "invalid_request_error", "upstream_rejected", "the worker rejected the request")
+}
+
+type upstreamOutcome int
+
+const (
+	outcomeClientGone upstreamOutcome = iota
+	outcomeShuttingDown
+	outcomeTimeout
+	outcomeDrainCutoff
+	outcomeUpstreamError
+)
+
+// classify decides why an upstream call failed, checking a disconnected
+// client, this gateway's own shutdown, the deadline, and a drain cutoff
+// before falling back to a genuine upstream failure worth reporting.
+func (g *Gateway) classify(r *http.Request, err error) upstreamOutcome {
+	if r.Context().Err() != nil {
+		return outcomeClientGone
+	}
+	if g.shuttingDown.Load() {
+		return outcomeShuttingDown
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return outcomeTimeout
+	}
+	if g.isDrainCutoff() {
+		return outcomeDrainCutoff
+	}
+	return outcomeUpstreamError
+}
+
+// isDrainCutoff checks the internal State enum, never the Public string:
+// PublicState(Destroying, failing=true) reports "FAILED", which a
+// "DRAINING"/"DELETING" string compare would silently miss.
+func (g *Gateway) isDrainCutoff() bool {
+	state := g.deps.Controller.Status().State
+	return state == controller.Draining || state == controller.Destroying
+}
+
+// writePreHeaderOutcome writes a plain status for an outcome that
+// happened before any response headers were sent to the client.
+func (g *Gateway) writePreHeaderOutcome(w http.ResponseWriter, outcome upstreamOutcome) {
+	switch outcome {
+	case outcomeClientGone:
+		w.WriteHeader(499)
+	case outcomeShuttingDown:
+		w.Header().Set("Retry-After", "30")
+		writeError(w, http.StatusServiceUnavailable, "server_error", "shutting_down", "the server is shutting down")
+	case outcomeTimeout:
+		writeError(w, http.StatusGatewayTimeout, "server_error", "upstream_timeout", "the worker did not respond in time")
+	case outcomeDrainCutoff:
+		writeBackendUnavailable(w)
+	default:
+		writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "failed to reach the worker")
+	}
+}
+
+func inStreamError(code, message string) string {
+	b, _ := json.Marshal(errorBody{Error: errorDetail{Message: message, Type: "server_error", Code: code}})
+	return "data: " + string(b) + "\n\n"
+}
+
+// streamUpstream is completed in a follow-up task; for now it delegates
+// to the plain 2xx copier so a stream:true request still gets a body.
+func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen int64, r *http.Request, start time.Time) {
+	_ = start
+	g.copyUpstream2xx(w, resp)
 }

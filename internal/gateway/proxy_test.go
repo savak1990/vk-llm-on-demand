@@ -1,0 +1,152 @@
+package gateway
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/worker"
+)
+
+func TestProxyPlain(t *testing.T) {
+	var gotReq *http.Request
+	var gotBody []byte
+	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		gotReq = r
+		gotBody, _ = io.ReadAll(r.Body)
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte(`{"choices":[{"message":{"content":"hi"}}],"usage":{"completion_tokens":3}}`))),
+		}, nil
+	})
+
+	d := testDeps(t)
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 7}}
+	d.Controller = fc
+	d.InstallationID = "test-install"
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"hi"}]}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if gotReq.URL.Host != "worker" {
+		t.Fatalf("upstream host = %q, want %q", gotReq.URL.Host, "worker")
+	}
+	wantKey := "Bearer " + worker.WorkerKey(d.Seed.Bytes(), "test-install", 7)
+	if got := gotReq.Header.Get("Authorization"); got != wantKey {
+		t.Fatalf("upstream Authorization = %q, want %q", got, wantKey)
+	}
+	var sentBody map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &sentBody); err != nil {
+		t.Fatalf("unmarshal sent body: %v", err)
+	}
+	var maxTokens int
+	_ = json.Unmarshal(sentBody["max_tokens"], &maxTokens)
+	if maxTokens != 8192 {
+		t.Fatalf("upstream max_tokens = %d, want 8192 (clamp did not reach the proxy)", maxTokens)
+	}
+	if _, endCalls := fc.snapshot(); len(endCalls) != 1 || endCalls[0] != 7 {
+		t.Fatalf("RequestEnd calls = %v, want [7]", endCalls)
+	}
+}
+
+func TestAtomicAdmissionAtDeadline(t *testing.T) {
+	rtA := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader([]byte(`{}`)))}, nil
+	})
+
+	d := testDeps(t)
+	fc := &fakeController{admitRT: rtA, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	recA := httptest.NewRecorder()
+	g.Handler().ServeHTTP(recA, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	if recA.Code != http.StatusOK {
+		t.Fatalf("request A: status = %d, want 200", recA.Code)
+	}
+
+	fc.mu.Lock()
+	fc.admitErr = controller.ErrBackendUnavailable
+	fc.mu.Unlock()
+
+	recB := httptest.NewRecorder()
+	g.Handler().ServeHTTP(recB, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	if recB.Code != http.StatusServiceUnavailable {
+		t.Fatalf("request B: status = %d, want 503", recB.Code)
+	}
+
+	admitCalls, endCalls := fc.snapshot()
+	if len(admitCalls) != 2 {
+		t.Fatalf("Admit calls = %d, want 2", len(admitCalls))
+	}
+	if len(endCalls) != 1 {
+		t.Fatalf("RequestEnd calls = %d, want 1", len(endCalls))
+	}
+}
+
+func TestUpstream4xxMapping(t *testing.T) {
+	cases := []struct {
+		name           string
+		body           string
+		wantStatus     int
+		wantCode       string
+		wantFailureInc bool
+	}{
+		{
+			name:       "openai-shaped 4xx passes through unchanged",
+			body:       `{"error":{"message":"bad request","type":"invalid_request_error","code":"invalid_request"}}`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "invalid_request",
+		},
+		{
+			name:       "non-conforming 4xx body gets wrapped as upstream_rejected",
+			body:       `plain text, not json`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "upstream_rejected",
+		},
+	}
+	for _, c := range cases {
+		rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(c.body))}, nil
+		})
+		d := testDeps(t)
+		fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+		d.Controller = fc
+		g, err := New(d)
+		if err != nil {
+			t.Fatalf("%s: New: %v", c.name, err)
+		}
+
+		rec := httptest.NewRecorder()
+		g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+
+		if rec.Code != c.wantStatus {
+			t.Errorf("%s: status = %d, want %d", c.name, rec.Code, c.wantStatus)
+		}
+		if !strings.Contains(rec.Body.String(), c.wantCode) {
+			t.Errorf("%s: body %q does not contain code %q", c.name, rec.Body.String(), c.wantCode)
+		}
+		fc.mu.Lock()
+		gotFailure := len(fc.upstreamErr) != 0
+		fc.mu.Unlock()
+		if gotFailure {
+			t.Errorf("%s: ReportUpstreamFailure called, want 0 calls (a 4xx-with-body is not reported, only 401/403/5xx and transport failures are)", c.name)
+		}
+	}
+}
