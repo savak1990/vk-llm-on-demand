@@ -17,7 +17,7 @@ it is pointed at, and every call it makes is already idempotent and
 budget-gated by CORE-050/100; the only sharp edge is leaking the token.
 **Estimated effort:** half a session (2–4 h)
 **Recommended model:** standard — a bash script and a workflow file.
-**Depends on:** [CORE-055](../055-P-management-api/spec.md) (the four
+**Depends on:** [CORE-055](../055-D-management-api/spec.md) (the four
 `/api/v1/gpu/*` routes and their status/error documents)
 
 ## Outcome

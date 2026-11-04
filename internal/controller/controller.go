@@ -73,8 +73,9 @@ type Snapshot struct {
 	Uptime            time.Duration
 	UntilIdleShutdown time.Duration
 
-	SpendInstanceUSD float64
-	SpendMTDUSD      float64
+	SpendInstanceUSD   float64
+	SpendMTDUSD        float64
+	ProviderBalanceUSD *float64
 
 	Stages           map[string]time.Duration
 	LastError        string

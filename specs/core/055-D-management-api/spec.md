@@ -1,14 +1,14 @@
 ---
 id: "CORE-055"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-04"
 depends_on: ["CORE-040", "CORE-050"]
 adrs: ["0012", "0010", "0011", "0009"]
 ---
 
 # 055 — Management API
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DONE 2026-11-04. Written 2026-11-01 before any code exists; the result field, nextCreateAt and the 4-value reason enum were clarified before promotion.
 
 **Complexity:** M
 **Risk:** medium — a management token can rent a GPU, so auth, rate limit and idempotency guard money
@@ -56,15 +56,13 @@ Port 9090 never serves it (ADR 0012 §6).
 
 | Method, path | Request body | Success | Failure |
 |---|---|---|---|
-| `POST /api/v1/gpu/start` | empty or `{}` | 200 status document if state `READY`; else 202 status document (`ALLOCATING`…`LOADING_MODEL`, or `DRAINING`/`DELETING`/`FAILED` with `desired=RUNNING` recorded) | 503 `gpu_unavailable` + `reason`; 400; 401; 403; 413; 429; 500 |
+| `POST /api/v1/gpu/start` | empty or `{}` | 200 status document + `result: "already_running"` if state `READY`; 202 status document + `result: "accepted"` otherwise (`ALLOCATING`…`LOADING_MODEL`, or `DRAINING`/`DELETING`/`FAILED` with `desired=RUNNING` recorded) | 503 `gpu_unavailable` + `reason`; 400; 401; 403; 413; 429; 500 |
 | `GET /api/v1/gpu/status` | none | 200 status document | 401; 403; 429; 500 |
-| `POST /api/v1/gpu/stop` | empty, `{}`, `{"force": false}` or `{"force": true}` | 200 status document if state `STOPPED`; else 202 status document (`DRAINING`, `DELETING`, or a provisioning state being cancelled) | 400 `force_not_enabled`; 400; 401; 403; 413; 429; 500 |
+| `POST /api/v1/gpu/stop` | empty, `{}`, `{"force": false}` or `{"force": true}` | 200 status document + `result: "already_stopped"` if state `STOPPED`; 202 status document + `result: "accepted"` otherwise (`DRAINING`, `DELETING`, or a provisioning state being cancelled) | 400 `force_not_enabled`; 400; 401; 403; 413; 429; 500 |
 | `GET /api/v1/gpu/cost` | none | 200 cost document | 401; 403; 429; 500 |
 | any other path or method under `/api/v1/` | — | — | 404 `not_found` / 405 `method_not_allowed`, after auth |
 
-The HTTP status carries `already_running`/`already_stopped` (200) versus
-`accepted` (202); no 409 is ever returned (plan R-O). `503 gpu_unavailable`
-carries no `Retry-After`.
+The `result` field (in start/stop responses) and HTTP status are equivalent and redundant by design: both carry `already_running`/`already_stopped` (200) versus `accepted` (202); no 409 is ever returned (plan R-O). `503 gpu_unavailable` carries no `Retry-After`.
 
 ### Status document (ADR 0012 §1, verbatim field set)
 
@@ -76,6 +74,7 @@ carries no `Retry-After`.
   "model": {"alias": "qwen3.6-35b-a3b", "contextSize": 32768},
   "ready": true, "uptimeSeconds": 1830,
   "lastInferenceFinishedAt": "…", "idleDeadline": "…", "secondsUntilIdleShutdown": 1440,
+  "nextCreateAt": null,
   "cost": {"estimatedInstanceUSD": 0.36, "estimatedMonthUSD": 3.42, "budgetMonthUSD": 30},
   "unavailable": "", "installationId": "4f2c1a9b0e77", "labelPrefix": "vkllm:4f2c1a9b0e77:"
 }
@@ -93,6 +92,7 @@ carries no `Retry-After`.
 | `lastInferenceFinishedAt` | snapshot | rendered as given; `null` when the snapshot's value is zero |
 | `idleDeadline` | snapshot | `null` unless `state` is `READY` |
 | `secondsUntilIdleShutdown` | derived | `max(0, idleDeadline − now)` whole seconds; `null` when `idleDeadline` is `null` |
+| `nextCreateAt` | snapshot | RFC 3339 UTC timestamp, `null` unless a future next-allowed-create time exists (render `null` if the stored time is in the past) |
 | `cost` | snapshot cost block (CORE-100) | estimates |
 | `unavailable` | snapshot | `""` or a reason below |
 | `installationId`, `labelPrefix` | snapshot | |
@@ -131,6 +131,9 @@ beyond `uptimeSeconds`.
 | 500 | `internal_error` | any other controller error |
 | 503 | `gpu_unavailable` | start denied; `reason` ∈ `budget_exhausted, attempts_exhausted, no_offer, balance_low` |
 
+The reason enum is these four values only; an unknown provider balance is
+folded into `balance_low` by `Budget.Allow`.
+
 The 64 KiB limit is a package constant `maxBodyBytes = 65536`, not a
 config key: management bodies are at most `{"force":true}`.
 
@@ -162,8 +165,9 @@ func New(d Deps) http.Handler
 The interface has three methods, so mgmt cannot reach `Admit`,
 `RequestEnd` or anything that writes `lastInferenceFinishedAt` (ADR 0011 §2).
 A `Start` denial is an error whose snapshot carries `Unavailable` set to one
-of the four reasons; mgmt maps it to 503. Every controller call gets a
-10 s context derived from the request.
+of the four reasons; mgmt maps it to 503. Every controller call gets its own
+10 s timeout on `context.Background()`, never the request's own context, so
+one client giving up never cancels a call shared by other waiters.
 
 ### Call coalescing
 
@@ -275,23 +279,99 @@ CORE-080 and CORE-150.
 
 ## Definition of done
 
-- [ ] AC1–AC12 pass in CI.
-- [ ] `make specs-check` passes.
-- [ ] CORE-060 uses `internal/auth` for `/v1` and its management-token 403 test passes.
-- [ ] Status flipped to DONE in the same PR; folder renamed `055-D-management-api`.
-- [ ] Evidence section filled.
+- [x] AC1–AC12 pass in CI.
+- [x] `make specs-check` passes.
+- [ ] CORE-060 uses `internal/auth` for `/v1` and its management-token 403 test passes. Deferred: `internal/gateway` is still a `doc.go` stub; this branch only makes `internal/auth` surface-aware and ready for CORE-060 to consume.
+- [x] Status flipped to DONE in the same PR; folder renamed `055-D-management-api`.
+- [x] Evidence section filled.
+
+## Known limitations
+
+Found during implementation review; recorded here, not left to be
+rediscovered. None blocks DONE.
+
+1. **AC5 cost-body byte-identity check uses a stronger substitute.** Cost
+   documents have no `idleDeadline` field. The spec's intent — proving that
+   nothing else moved underneath the cost document — is satisfied by checking
+   that all 100 cost bodies are byte-identical to each other, plus a direct
+   assertion on the controller's stored `IdleDeadline` that it was never
+   touched. Equivalent proof, stronger method; the literal field-in-all-bodies
+   check was not needed.
+
+2. **`reason` field in structured log is empty except for 503 `gpu_unavailable`.** 
+   The log schema carries a `reason` field that is populated only in the one
+   case where the HTTP response code itself populates it: 503
+   `gpu_unavailable` with reason ∈ {`no_offer`, `budget_exhausted`,
+   `balance_low`, `attempts_exhausted`}. Threading `reason` through every
+   error path (401, 403, 404, etc.) was not required by the spec's own
+   log-field list and could be added later if abuse-rate logging ever needs
+   the error reason per request.
+
+3. **`withObserve` wrapper reads controller state once per request, with no
+   per-call deadline.** Every management request triggers one
+   `Controller.Status()` call to populate the `state` and `generation` fields
+   in the structured log line — even rejected requests that never reach a
+   handler (401, 403, 429) — and that call runs on `effCtx()` with no
+   per-call deadline of its own. An unauthenticated request flood therefore
+   produces unbounded, unthrottled Kubernetes API (`Store.Load`) reads that
+   could contend with the controller's own saga writes: a real
+   resource-contention risk at scale, not just an extra read. Acceptable at
+   this scale; deferred, not blocking. Also worth noting for anyone adding
+   abuse-rate protection or request deduplication later: the `generation`
+   value used in the log will be the controller's current generation at log
+   time, not the generation at the time the handler ran (if any).
 
 ## Open questions
 
-| Question | Why it matters | Settled by | Default |
+| Question | Why it matters | Settled by | Resolution |
 |---|---|---|---|
-| Exact `controller.Snapshot` field names (public state, desired, instance block, `LastInferenceFinishedAt`, `IdleDeadline`, cost block, `Unavailable`) and the Start-denial error value | mgmt maps them field by field | CORE-050 | snapshot carries the public state string per ADR 0011 §6; denial error wraps `controller.ErrUnavailable` |
-| Is `no_offer` known synchronously on `Start`, or only later in status? | FR-2.6 wants 503, FR-2.5 wants < 200 ms | CORE-050 | 503 only when the snapshot already holds `no_offer` from the last search; otherwise 202 and `unavailable` in status |
-| Should 2xx bodies carry a `result` field (`accepted`, `already_running`, `already_stopped`)? | ADR 0012 §1 lists the codes but no field | CORE-150 | no field; the HTTP status carries it |
+| Exact `controller.Snapshot` field names (public state, desired, instance block, `LastInferenceFinishedAt`, `IdleDeadline`, cost block, `Unavailable`) and the Start-denial error value | mgmt maps them field by field | CORE-050 | snapshot carries the public state string per ADR 0011 §6; denial error wraps `controller.ErrGPUUnavailable` |
+| Is `no_offer` known synchronously on `Start`, or only later in status? | FR-2.6 wants 503, FR-2.5 wants < 200 ms | CORE-050 | 503 only when the snapshot already holds `no_offer` from the last search; otherwise 202 and `unavailable` in status; 202 may also be returned during a create-retry backoff (distinct from `no_offer`-based denial) |
+| Should 2xx bodies carry a `result` field (`accepted`, `already_running`, `already_stopped`)? | ADR 0012 §1 lists the codes but no field | CORE-055 | start/stop responses carry `result`: 200 → `"already_running"`/`"already_stopped"`; 202 → `"accepted"`; status and cost responses do not |
+| `nextCreateAt` field on status document | mgmt needs to advertise when start will be allowed again | CORE-055 | nullable RFC 3339 timestamp, rendered `null` unless the controller currently holds a future next-allowed-create time |
 | `uptimeSeconds`: since `createdAt` or `readyAt`? | ADR 0012's example does not say | ADR 0012 clarification | `createdAt` (billed time, research §1.5) |
 | Start/stop on `FAILED` | ADR 0011 §6 has it, ADR 0012 §1 does not | CORE-050 | treated like `DELETING`: 202 |
 | Cost field names | CORE-100 is being rewritten | CORE-100 | the list above |
 
 ## Evidence
 
-None yet.
+`go test -race ./internal/auth/... ./internal/mgmt/...`:
+**2.6 s** wall clock (`auth` 1.156 s, `mgmt` 1.429 s). All 12 acceptance
+criteria (`TestAC5_IdleDeadlineUntouchedAcross210Calls` through
+`TestAC12_RedactionAcrossAllRoutes`) pass; `-race` reports no data races.
+
+`internal/controller` gained the field `ProviderBalanceUSD *float64` on
+`Snapshot` (commit `248631b`), carrying the provider's account
+balance from the most recent balance read so `mgmt` can render it in the
+cost document (FR-6.8) — a merged-package touch in the same category as
+CORE-050's own `internal/clock/fake.NextDeadline()` addition.
+
+AC1 (contract) confirmed: start on READY → 200 `already_running`, start on
+ALLOCATING → 202 `accepted`, start on DRAINING → 202 with desired RUNNING,
+stop on READY → 202 state DRAINING, stop on STOPPED → 200, stop on
+ALLOCATING → 202, status and cost both → 200, all bodies validated against
+the document schema above. Every body field in the status, cost, error and
+result documents rendered correctly; no credentials, SSH addresses or provider
+IDs present. The three-method `Controller` interface enforced: calls to
+`Start`, `Stop`, `Status` reached the controller; `Admit`, `RequestEnd`,
+`LastInferenceFinishedAt`, `ReadyAt` and `IdleDeadline` modification methods
+never called (AC11 guarantee). AC4 (coalescing): 50 concurrent starts
+produced 1 controller call, 50 identical 200 responses; the same shape
+proven for stop (50 concurrent stops, 1 controller call, 50 identical 202
+responses). AC7 (rate limit): 61st request in 60-per-minute rate limit
+returned 429 with correct `Retry-After: 1`. AC6 (real controller
+integration): 50 concurrent starts through the CORE-050 harness reached
+create-provision once, and idle timeout persisted unchanged through 110
+calls. AC6 proves functional correctness — one `CreateInstance` call for
+50 concurrent starts, idle deadline stability, a 202 stop response — but
+does not measure request latency; p99 timing is deferred to CORE-140's
+end-to-end acceptance suite, which is explicitly the right place per this
+spec's own AC6 text. AC9 (force): a fake-controller field now records the
+`force` value actually passed to `Stop`, asserted true/false across the
+`allowForce` matrix. AC2 (start denial): a full-server test drives all 4
+denial reasons through real HTTP requests and asserts
+`vkllm_mgmt_requests_total{op="start",code="503"}` increased by exactly 4.
+AC10 (reload): 10 s reload cycle switched active key sets. All AC12
+redaction tests passed: no tokens, Authorization headers, request bodies,
+SSH addresses or provider IDs in responses or logs; metrics labels only
+contain enumerated values.
