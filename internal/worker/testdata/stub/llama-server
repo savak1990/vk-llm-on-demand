@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Stub for the Docker test harness: ignores every flag and never exits on
+# its own, so onstart.sh's dead-man loop is what ends the container.
+# Records its own pid (exec preserves it) so the wrapper can confirm it
+# was really killed, not just that the container exited.
+echo $$ > /tmp/stub.pid
+exec sleep infinity

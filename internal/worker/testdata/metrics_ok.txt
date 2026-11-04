@@ -1,0 +1,24 @@
+# HELP llamacpp:prompt_tokens_total Number of prompt tokens processed.
+# TYPE llamacpp:prompt_tokens_total counter
+llamacpp:prompt_tokens_total 1234
+# HELP llamacpp:prompt_seconds_total Prompt processing time.
+# TYPE llamacpp:prompt_seconds_total counter
+llamacpp:prompt_seconds_total 12.5
+# HELP llamacpp:tokens_predicted_total Number of generated tokens.
+# TYPE llamacpp:tokens_predicted_total counter
+llamacpp:tokens_predicted_total 5678
+# HELP llamacpp:tokens_predicted_seconds_total Generation time.
+# TYPE llamacpp:tokens_predicted_seconds_total counter
+llamacpp:tokens_predicted_seconds_total 34.2
+# HELP llamacpp:prompt_tokens_seconds Prompt processing throughput.
+# TYPE llamacpp:prompt_tokens_seconds gauge
+llamacpp:prompt_tokens_seconds 98.7
+# HELP llamacpp:predicted_tokens_seconds Generation throughput.
+# TYPE llamacpp:predicted_tokens_seconds gauge
+llamacpp:predicted_tokens_seconds 65.4
+# HELP llamacpp:requests_processing Number of requests processing.
+# TYPE llamacpp:requests_processing gauge
+llamacpp:requests_processing 1
+# HELP llamacpp:requests_deferred Number of requests deferred.
+# TYPE llamacpp:requests_deferred gauge
+llamacpp:requests_deferred 0
