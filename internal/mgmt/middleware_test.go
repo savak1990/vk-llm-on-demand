@@ -1,17 +1,21 @@
 package mgmt
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
@@ -151,5 +155,80 @@ func TestBodyLimit(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 401 {
 		t.Fatalf("same oversized body without a token: code = %d, want 401 (auth runs before body limit)", rec.Code)
+	}
+}
+
+// TestRejectedRequestsAreObserved proves the observe wrapper sits
+// outermost: a 401/403/429 — none of which ever reach a handler — must
+// still each produce one metric increment and one log line.
+func TestRejectedRequestsAreObserved(t *testing.T) {
+	cases := []struct {
+		name           string
+		header         string
+		rpm, preCalls  int
+		wantCode       int
+		wantKeyIDEmpty bool
+	}{
+		{name: "401 bad auth", header: "", rpm: 10000, wantCode: 401, wantKeyIDEmpty: true},
+		{name: "403 wrong surface", header: "Bearer sk-vkllm-clientkey1", rpm: 10000, wantCode: 403, wantKeyIDEmpty: true},
+		{name: "429 rate limited", header: "Bearer sk-vkllm-mgmttoken1", rpm: 1, preCalls: 1, wantCode: 429, wantKeyIDEmpty: false},
+	}
+	const op = "status"
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clk := fakeclock.New(time.Unix(0, 0))
+			keys := authKeys(t, "sk-vkllm-clientkey1", "sk-vkllm-mgmttoken1")
+			fc := newFakeController()
+			fc.statusSnap = controller.Snapshot{Public: "READY"}
+			limiter := auth.NewLimiter(tc.rpm, clk)
+			reg := prometheus.NewRegistry()
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+			h := New(Deps{Controller: fc, Keys: keys, Limiter: limiter, Clock: clk, Config: config.Mgmt{}, Reg: reg, Log: logger})
+
+			newReq := func() *http.Request {
+				req := httptest.NewRequest("GET", "/api/v1/gpu/status", nil)
+				if tc.header != "" {
+					req.Header.Set("Authorization", tc.header)
+				}
+				return req
+			}
+			for i := 0; i < tc.preCalls; i++ {
+				h.ServeHTTP(httptest.NewRecorder(), newReq())
+			}
+			logBuf.Reset() // only the call under test's line matters
+
+			before := testutil.ToFloat64(mgmtRequestsTotal.WithLabelValues(op, strconv.Itoa(tc.wantCode)))
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, newReq())
+			if rec.Code != tc.wantCode {
+				t.Fatalf("code = %d, want %d", rec.Code, tc.wantCode)
+			}
+			after := testutil.ToFloat64(mgmtRequestsTotal.WithLabelValues(op, strconv.Itoa(tc.wantCode)))
+			if after-before != 1 {
+				t.Fatalf("mgmtRequestsTotal{op=%s,code=%d} increased by %v, want 1", op, tc.wantCode, after-before)
+			}
+
+			lines := strings.Split(strings.TrimSpace(logBuf.String()), "\n")
+			if len(lines) != 1 {
+				t.Fatalf("got %d log lines, want 1: %q", len(lines), logBuf.String())
+			}
+			var entry struct {
+				Msg        string `json:"msg"`
+				Op         string `json:"op"`
+				StatusCode int    `json:"status_code"`
+				KeyID      string `json:"key_id"`
+			}
+			if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+				t.Fatalf("Unmarshal log line: %v (%q)", err, lines[0])
+			}
+			if entry.Msg != "mgmt_request" || entry.Op != op || entry.StatusCode != tc.wantCode {
+				t.Fatalf("log line = %+v, want msg=mgmt_request op=%s status_code=%d", entry, op, tc.wantCode)
+			}
+			if (entry.KeyID == "") != tc.wantKeyIDEmpty {
+				t.Fatalf("log line key_id = %q, want empty=%v", entry.KeyID, tc.wantKeyIDEmpty)
+			}
+		})
 	}
 }

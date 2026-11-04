@@ -6,28 +6,30 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"path"
 	"strconv"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
 )
 
-type keyIDContextKey struct{}
+// keyIDSinkKey holds a *string that withAuth fills in on success; a
+// pointer survives the chain because withObserve, now outermost, never
+// sees the per-layer request copies auth and rate-limit construct.
+type keyIDSinkKey struct{}
 
-func withKeyID(ctx context.Context, keyID string) context.Context {
-	return context.WithValue(ctx, keyIDContextKey{}, keyID)
+func withKeyIDSink(ctx context.Context, sink *string) context.Context {
+	return context.WithValue(ctx, keyIDSinkKey{}, sink)
 }
 
-func keyIDFrom(ctx context.Context) string {
-	keyID, _ := ctx.Value(keyIDContextKey{}).(string)
-	return keyID
+func keyIDSink(ctx context.Context) *string {
+	sink, _ := ctx.Value(keyIDSinkKey{}).(*string)
+	return sink
 }
 
-// withMiddleware orders auth before rate limiting before the body
-// limit, so a request is authenticated before its body is read; the
-// metrics/logging wrapper sits innermost, next to the mux.
+// withMiddleware puts observe outermost so every request — including
+// one auth, rate-limit or body-limit rejects — still gets one metric
+// increment and one log line, not just the ones a handler sees.
 func withMiddleware(h http.Handler, d Deps) http.Handler {
-	return withAuth(d.Keys, withRateLimit(d.Limiter, withBodyLimit(withObserve(h, d))))
+	return withObserve(withAuth(d.Keys, withRateLimit(d.Limiter, withBodyLimit(h))), d)
 }
 
 func withAuth(keys *auth.Keys, next http.Handler) http.Handler {
@@ -35,7 +37,10 @@ func withAuth(keys *auth.Keys, next http.Handler) http.Handler {
 		keyID, err := keys.Check(r.Header.Get("Authorization"), auth.Management)
 		switch {
 		case err == nil:
-			next.ServeHTTP(w, r.WithContext(withKeyID(r.Context(), keyID)))
+			if sink := keyIDSink(r.Context()); sink != nil {
+				*sink = keyID
+			}
+			next.ServeHTTP(w, r)
 		case errors.Is(err, auth.ErrWrongSurface):
 			writeError(w, http.StatusForbidden, "permission_denied", "", "")
 		default:
@@ -46,7 +51,10 @@ func withAuth(keys *auth.Keys, next http.Handler) http.Handler {
 
 func withRateLimit(limiter *auth.Limiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		keyID := keyIDFrom(r.Context())
+		keyID := ""
+		if sink := keyIDSink(r.Context()); sink != nil {
+			keyID = *sink
+		}
 		if ok, retryAfter := limiter.Allow(keyID); !ok {
 			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())))
 			writeError(w, http.StatusTooManyRequests, "rate_limit_exceeded", "", "")
@@ -81,16 +89,17 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
-// withObserve records the one metrics/logging line per request, read
-// after routing has set the request's matched Pattern.
+// withObserve wraps the whole chain; op comes from the path alone
+// since an inner layer may reject the request before routing runs.
 func withObserve(next http.Handler, d Deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := d.Clock.Now()
+		op := opForPath(r.URL.Path)
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
+		keyID := new(string)
+		next.ServeHTTP(rec, r.WithContext(withKeyIDSink(r.Context(), keyID)))
 		duration := d.Clock.Now().Sub(start)
 
-		op := opFor(r.Pattern)
 		code, reason := errorFields(rec.body.Bytes())
 		snap := d.Controller.Status()
 
@@ -105,7 +114,7 @@ func withObserve(next http.Handler, d Deps) http.Handler {
 				"code", code,
 				"reason", reason,
 				"duration_ms", duration.Milliseconds(),
-				"key_id", keyIDFrom(r.Context()),
+				"key_id", *keyID,
 				"state", snap.Public,
 				"generation", snap.Generation,
 			)
@@ -113,10 +122,16 @@ func withObserve(next http.Handler, d Deps) http.Handler {
 	})
 }
 
-func opFor(pattern string) string {
-	switch path.Base(pattern) {
-	case "start", "status", "stop", "cost":
-		return path.Base(pattern)
+func opForPath(p string) string {
+	switch p {
+	case "/api/v1/gpu/start":
+		return "start"
+	case "/api/v1/gpu/status":
+		return "status"
+	case "/api/v1/gpu/stop":
+		return "stop"
+	case "/api/v1/gpu/cost":
+		return "cost"
 	default:
 		return "other"
 	}
