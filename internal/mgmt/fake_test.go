@@ -19,7 +19,7 @@ func newFakeController() *fakeController { return &fakeController{} }
 
 var _ Controller = (*fakeController)(nil)
 
-func (f *fakeController) Start(ctx context.Context) (controller.Snapshot, error) {
+func (f *fakeController) Start(_ context.Context) (controller.Snapshot, error) {
 	f.mu.Lock()
 	f.startCalls++
 	block, snap, err := f.startBlock, f.startSnap, f.startErr
@@ -30,7 +30,7 @@ func (f *fakeController) Start(ctx context.Context) (controller.Snapshot, error)
 	return snap, err
 }
 
-func (f *fakeController) Stop(ctx context.Context, force bool) (controller.Snapshot, error) {
+func (f *fakeController) Stop(_ context.Context, _ bool) (controller.Snapshot, error) {
 	f.mu.Lock()
 	f.stopCalls++
 	snap, err := f.stopSnap, f.stopErr
