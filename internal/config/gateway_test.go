@@ -42,6 +42,36 @@ func TestLoadGatewayDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadGatewayRejectsNonPositiveMaxBodyBytes(t *testing.T) {
+	for _, v := range []string{"0", "-1"} {
+		clearGatewayEnv(t)
+		t.Setenv("VKLLM_GATEWAY_MAX_BODY_BYTES", v)
+		if _, err := LoadGateway(); err == nil {
+			t.Fatalf("LoadGateway with MAX_BODY_BYTES=%s: want error, got nil", v)
+		}
+	}
+}
+
+func TestLoadGatewayRejectsNonPositiveMaxTokensCap(t *testing.T) {
+	for _, v := range []string{"0", "-1"} {
+		clearGatewayEnv(t)
+		t.Setenv("VKLLM_GATEWAY_MAX_TOKENS_CAP", v)
+		if _, err := LoadGateway(); err == nil {
+			t.Fatalf("LoadGateway with MAX_TOKENS_CAP=%s: want error, got nil", v)
+		}
+	}
+}
+
+func TestLoadGatewayRejectsNonPositiveRateLimit(t *testing.T) {
+	for _, v := range []string{"0", "-1"} {
+		clearGatewayEnv(t)
+		t.Setenv("VKLLM_GATEWAY_RATE_LIMIT_PER_KEY_RPM", v)
+		if _, err := LoadGateway(); err == nil {
+			t.Fatalf("LoadGateway with RATE_LIMIT_PER_KEY_RPM=%s: want error, got nil", v)
+		}
+	}
+}
+
 func TestLoadGatewayRespectsModelAliasOverride(t *testing.T) {
 	clearGatewayEnv(t)
 	t.Setenv("VKLLM_MODEL_ALIAS", "custom-alias")

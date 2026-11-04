@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/worker"
 )
 
 func TestStatusLabelBucketsUnenumeratedCodes(t *testing.T) {
@@ -294,8 +295,10 @@ func TestLogRedaction(t *testing.T) {
 // accumulated output for the same forbidden substrings.
 func TestLogRedactionFullSuite(t *testing.T) {
 	var buf bytes.Buffer
+	reg := prometheus.NewRegistry()
 	d := testDeps(t)
 	d.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	d.Reg = reg
 	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
 		raw, _ := io.ReadAll(r.Body)
 		switch {
@@ -347,10 +350,25 @@ func TestLogRedactionFullSuite(t *testing.T) {
 	if logged == "" {
 		t.Fatal("log buffer is empty after the request batch")
 	}
-	forbidden := []string{"sk-vkllm-aaaaaaaa1111", "sk-vkllm-doesnotexist", "sk-vkllm-mgmtmgmt9999", "the secret prompt", "the secret reply", "Bearer "}
+	workerKey := worker.WorkerKey(d.Seed.Bytes(), d.InstallationID, 1)
+	forbidden := []string{
+		"sk-vkllm-aaaaaaaa1111", "sk-vkllm-doesnotexist", "sk-vkllm-mgmtmgmt9999",
+		"the secret prompt", "the secret reply", "Bearer ",
+		string(d.Seed.Bytes()), workerKey,
+	}
 	for _, f := range forbidden {
 		if strings.Contains(logged, f) {
 			t.Errorf("log output contains forbidden substring %q: %s", f, logged)
 		}
+	}
+
+	if got := testutil.ToFloat64(g.metrics.pendingRequests); got != 0 {
+		t.Errorf("pending_requests = %v, want 0 (on-demand-only metric, explicit mode never touches it)", got)
+	}
+	// coldStartOutcomesTotal is a CounterVec with no label values
+	// recorded yet; ToFloat64 would panic on zero children, so the
+	// sample count itself is the right assertion for "always 0".
+	if got, err := testutil.GatherAndCount(reg, "vkllm_gateway_cold_start_outcomes_total"); err != nil || got != 0 {
+		t.Errorf("cold_start_outcomes_total sample count = %d, err = %v, want 0 (on-demand-only metric)", got, err)
 	}
 }

@@ -108,6 +108,9 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 		if gotFailure != c.wantFailureInc {
 			t.Errorf("%s: ReportUpstreamFailure called=%v, want %v", c.name, gotFailure, c.wantFailureInc)
 		}
+		if c.state == controller.Draining && rec.Header().Get("Retry-After") != "" {
+			t.Errorf("%s: Retry-After set, want unset (backend_unavailable never carries one)", c.name)
+		}
 	}
 }
 

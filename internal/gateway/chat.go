@@ -243,19 +243,41 @@ func (g *Gateway) copyUpstream2xx(w http.ResponseWriter, resp *http.Response, r 
 	}
 }
 
-// copyUpstream4xx passes through a client-error body that already looks
-// like this gateway's own {"error":...} shape unchanged; any other 4xx
-// body is wrapped so the client still gets a parseable error.
+// upstream4xxProbe tolerates a non-string type/code (e.g. llama-server
+// sending an integer code), which errorBody's strict string fields would
+// otherwise reject outright, losing the upstream message for no reason.
+type upstream4xxProbe struct {
+	Error struct {
+		Message string          `json:"message"`
+		Type    json.RawMessage `json:"type"`
+		Code    json.RawMessage `json:"code"`
+	} `json:"error"`
+}
+
+func isJSONString(raw json.RawMessage) bool {
+	var s string
+	return len(raw) > 0 && json.Unmarshal(raw, &s) == nil && s != ""
+}
+
+// copyUpstream4xx passes through a client-error body only when it already
+// matches R5's schema exactly (all three fields non-empty strings);
+// anything else is normalized, keeping the upstream message where there
+// is one, so the client always gets a parseable error either way.
 func (g *Gateway) copyUpstream4xx(w http.ResponseWriter, resp *http.Response) {
 	raw, _ := io.ReadAll(resp.Body)
-	var probe errorBody
-	if json.Unmarshal(raw, &probe) == nil && probe.Error.Message != "" {
+	var probe upstream4xxProbe
+	if json.Unmarshal(raw, &probe) == nil && probe.Error.Message != "" &&
+		isJSONString(probe.Error.Type) && isJSONString(probe.Error.Code) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(raw)
 		return
 	}
-	writeError(w, resp.StatusCode, "invalid_request_error", "upstream_rejected", "the worker rejected the request")
+	message := probe.Error.Message
+	if message == "" {
+		message = "the worker rejected the request"
+	}
+	writeError(w, resp.StatusCode, "invalid_request_error", "upstream_rejected", message)
 }
 
 type upstreamOutcome int

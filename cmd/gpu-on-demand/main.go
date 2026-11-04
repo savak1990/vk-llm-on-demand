@@ -126,7 +126,17 @@ func main() {
 	apiMux := http.NewServeMux()
 	// apiMux.Handle("/v1/", gw.Handler()) once ctl is constructed here.
 	// apiMux.Handle("/api/v1/gpu/", mg) is a separate, not-yet-made addition.
-	api := &http.Server{Addr: ":8080", Handler: apiMux, ReadHeaderTimeout: 10 * time.Second}
+	api := &http.Server{
+		Addr:              ":8080",
+		Handler:           apiMux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// Per-request contexts bound how long a stream can run instead
+		// of a server-wide write timeout, which would cut a slow but
+		// legitimate SSE response off mid-stream.
+		WriteTimeout: 0,
+	}
 
 	healthMux := http.NewServeMux()
 	healthMux.HandleFunc("/healthz", healthz)

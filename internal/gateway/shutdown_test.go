@@ -6,9 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 )
 
@@ -151,5 +153,123 @@ func TestShutdownDrainsPlain(t *testing.T) {
 	fc.mu.Unlock()
 	if gotFailure != 0 {
 		t.Fatalf("ReportUpstreamFailure called %d times, want 0", gotFailure)
+	}
+}
+
+// TestShutdownReturnsCtxErrOnExpiry confirms Shutdown reports its own
+// deadline expiring instead of masking it as success: a caller relying
+// on the return value to know draining fully finished must see the error.
+func TestShutdownReturnsCtxErrOnExpiry(t *testing.T) {
+	reached := make(chan struct{}, 1)
+	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: &reachedBody{ctx: r.Context(), reached: reached}}, nil
+	})
+
+	d := testDeps(t)
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		g.Handler().ServeHTTP(httptest.NewRecorder(), chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+		close(done)
+	}()
+	<-reached
+
+	// A context that is already expired skips the cutoff-wait branch and
+	// its Done() is already closed, so Shutdown's final select returns
+	// ctx.Err() immediately without ever cancelling the active handler.
+	ctx, cancel := context.WithTimeout(context.Background(), 0)
+	defer cancel()
+	<-ctx.Done()
+
+	if err := g.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown error = %v, want context.DeadlineExceeded", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handler never returned")
+	}
+}
+
+// shutdownStreamBody writes one SSE chunk, signals it was read, then
+// blocks on ctx like a real upstream connection noticing cancellation.
+type shutdownStreamBody struct {
+	ctx     context.Context
+	reached chan struct{}
+	sent    bool
+}
+
+func (b *shutdownStreamBody) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		n := copy(p, []byte("data: {\"delta\":\"x\"}\n\n"))
+		select {
+		case b.reached <- struct{}{}:
+		default:
+		}
+		return n, nil
+	}
+	<-b.ctx.Done()
+	return 0, errors.New("context canceled")
+}
+func (b *shutdownStreamBody) Close() error { return nil }
+
+// TestShutdownCancelsActiveStreamAtCutoff closes AC18 on a fake clock: an
+// open stream must get its in-stream shutting_down row exactly at the
+// cutoff (deadline - 5s), not merely "eventually" once cancelActive runs.
+func TestShutdownCancelsActiveStreamAtCutoff(t *testing.T) {
+	reached := make(chan struct{}, 1)
+	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: &shutdownStreamBody{ctx: r.Context(), reached: reached}}, nil
+	})
+
+	clk := fakeclock.New(time.Now())
+	d := testDeps(t)
+	d.Clock = clk
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	done := make(chan struct{})
+	rec := httptest.NewRecorder()
+	go func() {
+		g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[],"stream":true}`))
+		close(done)
+	}()
+	<-reached
+
+	ctx, cancel := context.WithDeadline(context.Background(), clk.Now().Add(30*time.Second))
+	defer cancel()
+	shutdownErr := make(chan error, 1)
+	go func() { shutdownErr <- g.Shutdown(ctx) }()
+
+	clk.BlockUntil(1)
+	clk.Advance(25 * time.Second)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handler never returned after the shutdown cutoff")
+	}
+	if err := <-shutdownErr; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "shutting_down") || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+		t.Fatalf("body = %q, want an in-stream shutting_down row followed by [DONE]", body)
+	}
+	if _, endCalls := fc.snapshot(); len(endCalls) != 1 {
+		t.Fatalf("RequestEnd calls = %d, want 1", len(endCalls))
 	}
 }

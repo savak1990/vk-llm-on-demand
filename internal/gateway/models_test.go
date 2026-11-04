@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestModelsNoController(t *testing.T) {
 		t.Fatalf("Admit called %d times, want 0", len(calls))
 	}
 	want := `"id":"qwen3.6-35b-a3b"`
-	if !contains(rec.Body.String(), want) {
+	if !strings.Contains(rec.Body.String(), want) {
 		t.Fatalf("body %q does not contain %q", rec.Body.String(), want)
 	}
 }
@@ -78,15 +79,4 @@ func TestModelsLatency(t *testing.T) {
 	if p99 > 50*time.Millisecond {
 		t.Fatalf("p99 latency = %v, want under 50ms", p99)
 	}
-}
-
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (func() bool {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	})()
 }

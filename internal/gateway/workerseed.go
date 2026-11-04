@@ -1,4 +1,3 @@
-// internal/gateway/workerseed.go
 package gateway
 
 import (
@@ -32,11 +31,16 @@ func LoadWorkerSeed(path string, clk clock.Clock) (*WorkerSeed, error) {
 
 // reload stores the file's bytes exactly as read — no trimming, no
 // encoding conversion — so this side and the sibling component that
-// derives a worker key from the same bytes always agree.
+// derives a worker key from the same bytes always agree. Once a good
+// 32-byte value is loaded, a reload that reads something else is
+// rejected rather than swapped in, per the doc comment on Run.
 func (w *WorkerSeed) reload() error {
 	raw, err := os.ReadFile(w.path)
 	if err != nil {
 		return fmt.Errorf("gateway: worker seed: %w", err)
+	}
+	if len(raw) != 32 && len(w.Bytes()) == 32 {
+		return fmt.Errorf("gateway: worker seed: reload read %d bytes, want 32; keeping the last good value", len(raw))
 	}
 	w.bytes.Store(&raw)
 	return nil

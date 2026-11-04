@@ -35,6 +35,9 @@ func (b *drainBody) Read(p []byte) (int, error) {
 }
 func (b *drainBody) Close() error { return nil }
 
+// Covers the drain-cutoff behavior for correctness, driven by channel
+// synchronization rather than a fake clock's t=0s/t=60s shape; the
+// gateway owns no drain timer, so that exact timing is not this test's job.
 func TestDrainCutoffMidStream(t *testing.T) {
 	failNow := make(chan struct{})
 	body := &drainBody{failNow: failNow}

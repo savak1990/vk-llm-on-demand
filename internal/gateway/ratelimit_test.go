@@ -39,8 +39,20 @@ func TestRateLimitMiddleware(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("61st request: status = %d, want 429", rec.Code)
 	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Fatal("61st request: Retry-After header not set")
+	if got := rec.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("61st request: Retry-After = %q, want %q", got, "1")
+	}
+
+	// Advancing the fake clock by exactly one second must refill one
+	// token, letting one more request through.
+	fc := d.Clock.(*fakeclock.Clock)
+	fc.Advance(time.Second)
+	req3 := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req3.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	rec3 := httptest.NewRecorder()
+	h.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("request after advancing 1s: status = %d, want 200", rec3.Code)
 	}
 
 	// A different key still has its own bucket.
@@ -89,5 +101,17 @@ func TestRateLimitMiddlewareChatCompletions(t *testing.T) {
 	}
 	if admitCalls, _ := fc.snapshot(); len(admitCalls) != 60 {
 		t.Fatalf("Admit calls after 61st request = %d, want still 60 (the 61st must never reach Admit)", len(admitCalls))
+	}
+
+	// Advancing the fake clock by exactly one second refills one token,
+	// so the next request reaches Admit again.
+	d.Clock.(*fakeclock.Clock).Advance(time.Second)
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("request after advancing 1s: status = %d, want 200 (body %q)", rec2.Code, rec2.Body.String())
+	}
+	if admitCalls, _ := fc.snapshot(); len(admitCalls) != 61 {
+		t.Fatalf("Admit calls after advancing 1s = %d, want 61", len(admitCalls))
 	}
 }

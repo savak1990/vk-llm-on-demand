@@ -56,6 +56,35 @@ func TestWorkerSeedBytesAreNeverTransformed(t *testing.T) {
 	}
 }
 
+// TestWorkerSeedReloadKeepsLastGoodValue closes the gap where a failed
+// reload (a truncated or empty file mid-rotation) used to overwrite a
+// good 32-byte seed with garbage instead of keeping serving the last one.
+func TestWorkerSeedReloadKeepsLastGoodValue(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/seed"
+	good := make([]byte, 32)
+	good[0] = 0xAA
+	if err := os.WriteFile(path, good, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	w, err := LoadWorkerSeed(path, nil)
+	if err != nil {
+		t.Fatalf("LoadWorkerSeed: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte("too short"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := w.reload(); err == nil {
+		t.Fatal("reload: want error for a non-32-byte file, got nil")
+	}
+
+	if got := w.Bytes(); len(got) != 32 || got[0] != 0xAA {
+		t.Fatalf("Bytes() = %v, want the last good 32-byte value kept", got)
+	}
+}
+
 func TestWorkerSeedReload(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/seed"

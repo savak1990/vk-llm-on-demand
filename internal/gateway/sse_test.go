@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,8 +30,13 @@ func (c *chunkedBody) Read(p []byte) (int, error) {
 func (c *chunkedBody) Close() error { return nil }
 
 func TestSSEPassThrough(t *testing.T) {
+	// Fixture chunks carry reasoning_content and tool_calls deltas, not
+	// just plain content, so a line-assembly bug that only handles the
+	// simple shape would still show up here (AC8).
 	chunks := [][]byte{
 		[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"),
+		[]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n"),
+		[]byte("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"f\",\"arguments\":\"{}\"}}]}}]}\n\n"),
 		[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n"),
 		[]byte("data: [DONE]\n\n"),
 	}
@@ -60,6 +66,14 @@ func TestSSEPassThrough(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", ct)
 	}
 
+	var want bytes.Buffer
+	for _, c := range chunks {
+		want.Write(c)
+	}
+	if rec.Body.String() != want.String() {
+		t.Fatalf("body = %q, want the upstream chunks copied byte for byte: %q", rec.Body.String(), want.String())
+	}
+
 	var lines []string
 	sc := bufio.NewScanner(strings.NewReader(rec.Body.String()))
 	for sc.Scan() {
@@ -67,11 +81,11 @@ func TestSSEPassThrough(t *testing.T) {
 			lines = append(lines, l)
 		}
 	}
-	if len(lines) != 3 {
-		t.Fatalf("got %d non-empty lines, want 3: %v", len(lines), lines)
+	if len(lines) != len(chunks) {
+		t.Fatalf("got %d non-empty lines, want %d: %v", len(lines), len(chunks), lines)
 	}
-	if lines[2] != "data: [DONE]" {
-		t.Fatalf("last line = %q, want %q", lines[2], "data: [DONE]")
+	if last := lines[len(lines)-1]; last != "data: [DONE]" {
+		t.Fatalf("last line = %q, want %q", last, "data: [DONE]")
 	}
 
 	fc.mu.Lock()

@@ -224,6 +224,7 @@ func TestUpstream4xxMapping(t *testing.T) {
 		wantCode       string
 		wantExactBody  bool
 		wantFailureInc bool
+		wantMessageIn  string // non-empty: the upstream message must survive normalization
 	}{
 		{
 			name:          "openai-shaped 4xx passes through unchanged",
@@ -237,6 +238,20 @@ func TestUpstream4xxMapping(t *testing.T) {
 			body:       `plain text, not json`,
 			wantStatus: http.StatusBadRequest,
 			wantCode:   "upstream_rejected",
+		},
+		{
+			name:          "message with integer code is normalized, message kept",
+			body:          `{"error":{"message":"bad field","type":"invalid_request_error","code":400}}`,
+			wantStatus:    http.StatusBadRequest,
+			wantCode:      "upstream_rejected",
+			wantMessageIn: "bad field",
+		},
+		{
+			name:          "message with no type or code is normalized, message kept",
+			body:          `{"error":{"message":"bad field"}}`,
+			wantStatus:    http.StatusBadRequest,
+			wantCode:      "upstream_rejected",
+			wantMessageIn: "bad field",
 		},
 	}
 	for _, c := range cases {
@@ -262,6 +277,9 @@ func TestUpstream4xxMapping(t *testing.T) {
 		}
 		if c.wantExactBody && rec.Body.String() != c.body {
 			t.Errorf("%s: body = %q, want upstream body passed through unchanged: %q", c.name, rec.Body.String(), c.body)
+		}
+		if c.wantMessageIn != "" && !strings.Contains(rec.Body.String(), c.wantMessageIn) {
+			t.Errorf("%s: body %q does not contain upstream message %q", c.name, rec.Body.String(), c.wantMessageIn)
 		}
 		fc.mu.Lock()
 		gotFailure := len(fc.upstreamErr) != 0

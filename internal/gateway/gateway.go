@@ -143,6 +143,9 @@ func newRequestID() string {
 
 func (g *Gateway) requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Theoretically races Shutdown's Wait() if a new request's Add(1)
+		// lands exactly when the counter is momentarily zero; in practice
+		// the listener that feeds this handler is already closed by then.
 		g.activeWG.Add(1)
 		defer g.activeWG.Done()
 		rid := newRequestID()
@@ -156,6 +159,12 @@ func (g *Gateway) recoverMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
+				// http.ErrAbortHandler is net/http's own signal to abandon
+				// the response silently; stdlib convention is to let it
+				// keep propagating, never turn it into an error response.
+				if rec == http.ErrAbortHandler {
+					panic(rec)
+				}
 				g.deps.Log.Error("gateway: panic", "panic", true, "request_id", r.Context().Value(ctxKeyRequestID))
 				// A panic after headers are already sent cannot be turned
 				// into a fresh status line; the only safe move left is to
@@ -260,9 +269,10 @@ func (g *Gateway) Shutdown(ctx context.Context) error {
 	go func() { g.activeWG.Wait(); close(done) }()
 	select {
 	case <-done:
+		return nil
 	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return nil
 }
 
 func (g *Gateway) registerActive(cancel context.CancelFunc) (id int) {

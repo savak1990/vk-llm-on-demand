@@ -117,6 +117,32 @@ func TestWrongMethodOnKnownPathGetsJSON405(t *testing.T) {
 	}
 }
 
+// TestRecoverLetsErrAbortHandlerPropagate confirms recoverMiddleware
+// does not swallow net/http's own abort signal into a 500; the stdlib
+// convention is that only the caller (net/http's own server loop) handles it.
+func TestRecoverLetsErrAbortHandlerPropagate(t *testing.T) {
+	g, err := New(testDeps(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	g.mux.HandleFunc("GET /v1/test-abort", func(_ http.ResponseWriter, _ *http.Request) {
+		panic(http.ErrAbortHandler)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/test-abort", nil)
+	req.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	rec := httptest.NewRecorder()
+
+	func() {
+		defer func() {
+			if r := recover(); r != http.ErrAbortHandler {
+				t.Fatalf("recover() = %v, want http.ErrAbortHandler to propagate", r)
+			}
+		}()
+		g.Handler().ServeHTTP(rec, req)
+		t.Fatal("ServeHTTP returned normally, want http.ErrAbortHandler to panic through")
+	}()
+}
+
 func TestRecoverReturns500(t *testing.T) {
 	g, err := New(testDeps(t))
 	if err != nil {
