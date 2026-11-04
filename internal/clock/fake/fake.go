@@ -114,6 +114,22 @@ func (c *Clock) BlockUntil(n int) {
 	}
 }
 
+// NextDeadline returns the earliest pending waiter's deadline, so a test
+// harness can advance exactly that far without racing a goroutine that
+// hasn't registered its wait yet.
+func (c *Clock) NextDeadline() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var next time.Time
+	found := false
+	for _, w := range c.waiters {
+		if !found || w.deadline.Before(next) {
+			next, found = w.deadline, true
+		}
+	}
+	return next, found
+}
+
 func (c *Clock) notifyLocked() {
 	close(c.pending)
 	c.pending = make(chan struct{})

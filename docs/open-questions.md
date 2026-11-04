@@ -89,12 +89,13 @@ named spec moves to READY:
 
 | Spec | Fix |
 |---|---|
-| 050 | `vkllm_gpu_state{state}` must use the eight public states of spec 090, not the internal stage names |
-| 050 / 100 | budget reasons must use ADR 0012's vocabulary (`budget_exhausted`, `balance_low`, `balance_unknown`); spec 100 still says `monthly_budget_exceeded`, `balance_floor` |
-| 050 | close the tunnel at `drainTimeout` and stay DRAINING until then (spec 060 relies on it) |
+| 050 | `vkllm_gpu_state{state}` must use the eight public states of spec 090, not the internal stage names — **closed** (050 DONE, Design Decision 6): the shipped `PublicState()` is the metric label's sole source; spec 050's own text corrected to match |
+| 050 / 100 | budget reasons must use ADR 0012's vocabulary (`budget_exhausted`, `balance_low`, `balance_unknown`); spec 100 still says `monthly_budget_exceeded`, `balance_floor` — **closed** (050 DONE, Design Decision 7): `internal/controller` defines its own `Budget`/`Worker` interfaces in 050's own vocabulary (`no_offer`/`budget_exhausted`/`balance_low`/`attempts_exhausted`) and maps whatever reason CORE-100's `Allow` returns onto it at that boundary (spec 050 §"Events, definitions and transition table", reason mapping for `Unavailable`); spec 100 does not need to adopt ADR 0012's literal strings |
+| 050 | close the tunnel at `drainTimeout` and stay DRAINING until then (spec 060 relies on it) — **closed** (050 DONE): confirmed already correct in the merged Phase 1 `internal/tunnel` package plus the loop's own `processEvent` post-transition hook (T26) |
 | 055 | add the `result` field and `nextCreateAt` per ADR 0012 §1; return 202 during a create backoff |
 | 060 | describe when `vkllm_gateway_cancelled_streams_total` increments (spec 090 catalog) |
 | 070 | readiness citations point at FR-3.1; readiness is now FR-2.7 |
 | 080 / 110 | require at least one management token at install (spec 060 fails readiness without one) |
 | 150 / 160 | name the shared fake management server test package |
+| 070 / 100 | `internal/controller` defines its own `Budget`/`Worker` interfaces (050's own vocabulary: `Allow` returns one of `no_offer`/`budget_exhausted`/`balance_low`/`attempts_exhausted`); CORE-070 and CORE-100 implement against them, not the other way round — so neither spec should redesign this contract when it lands |
 | all | one full cross-spec review pass, as in `.superpowers` ledgers, before implementation of the affected spec |

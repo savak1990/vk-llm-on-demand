@@ -33,3 +33,17 @@ func TestAfterFiresOnAdvance(t *testing.T) {
 		t.Fatal("After channel did not fire after Advance")
 	}
 }
+
+func TestNextDeadlineIsEarliestWaiter(t *testing.T) {
+	c := New(time.Unix(0, 0))
+	if _, ok := c.NextDeadline(); ok {
+		t.Fatal("NextDeadline: want false with no waiters")
+	}
+	_ = c.After(time.Minute)
+	_ = c.After(30 * time.Second)
+	c.BlockUntil(2)
+	got, ok := c.NextDeadline()
+	if !ok || !got.Equal(time.Unix(0, 0).Add(30*time.Second)) {
+		t.Fatalf("NextDeadline = %v, %v, want 30s from start", got, ok)
+	}
+}

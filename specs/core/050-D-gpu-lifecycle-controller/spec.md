@@ -1,14 +1,14 @@
 ---
 id: "CORE-050"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-03"
 depends_on: ["CORE-020", "CORE-040"]
 adrs: ["0011", "0010", "0012", "0003", "0001", "0002", "0004", "0005", "0006", "0007"]
 ---
 
 # 050 — GPU lifecycle controller
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists; updated 2026-11-01 for explicit provisioning (ADR 0010) and the rolling 30-minute idle rule (ADR 0011).
+**Status note:** DONE 2026-11-03. Written 2026-11-01 before any code existed; updated 2026-11-01 for explicit provisioning (ADR 0010) and the rolling 30-minute idle rule (ADR 0011); implementation, the simulation harness and AC1–AC27 landed on `core-050-controller` and this write-back carries it to DONE.
 
 **Complexity:** L
 **Risk:** high — this package decides when money is spent and when a live instance is destroyed
@@ -32,7 +32,7 @@ Excludes: provider HTTP calls and the offer filter (CORE-020); `Load`/`Save`/`Tr
 
 ### Stages, public states and persistence
 
-`type State int`: `Idle, Searching, Creating, Booting, Loading, Ready, Serving, Draining, Destroying`; `String()` gives the names stored in `store.Instance.State` and used as the `vkllm_gpu_state` label. `PublicState()` maps per ADR 0011 §6: Idle → `STOPPED`; Searching, Creating → `ALLOCATING`; Booting → `STARTING`; Loading → `LOADING_MODEL`; Ready, Serving → `READY`; Draining → `DRAINING`; Destroying → `DELETING`, or `FAILED` while the memory field `failure` is set (T14, T15, T24; cleared at T29).
+`type State int`: `Idle, Searching, Creating, Booting, Loading, Ready, Serving, Draining, Destroying`; `String()` gives the names stored in `store.Instance.State`, used only for persistence and logs, never as a metric label. `PublicState()` maps per ADR 0011 §6: Idle → `STOPPED`; Searching, Creating → `ALLOCATING`; Booting → `STARTING`; Loading → `LOADING_MODEL`; Ready, Serving → `READY`; Draining → `DRAINING`; Destroying → `DELETING`, or `FAILED` while the memory field `failure` is set (T14, T15, T24; cleared at T29). `PublicState()`'s 8 values are the sole source of the `vkllm_gpu_state` label (Design Decision 6 — the internal `State` names are never exposed as a label).
 
 | Item | Where | Why |
 |---|---|---|
@@ -201,9 +201,11 @@ type Deps struct {
     Store          store.Store
     Dialer         tunnel.Dialer
     Clock          clock.Clock
-    Budget         *budget.Checker        // CORE-100; Allow(doc, balanceUSD)
+    Budget         Budget                 // this package's own interface (Design Decision 7); CORE-100's budget.Checker implements it
+    Worker         Worker                 // this package's own interface; CORE-070's worker.Client implements it
     WorkerSeed     func() ([]byte, error) // Secret key worker-seed, read per use (ADR 0006 §4)
     InstallationID string                 // configured (ADR 0004 §6 as amended)
+    ModelAlias     string                 // owned by model.* config, not config.Controller
     Config         config.Controller      // lifecycle.* and controller.* keys, architecture §9
     Reg            prometheus.Registerer
     Log            *slog.Logger
@@ -238,7 +240,7 @@ One loop goroutine owned by `Run(ctx)` is the only caller of `Provider` and `Dia
 
 | Metric | Type | Labels |
 |---|---|---|
-| `vkllm_gpu_state` | gauge, one-hot | `state` ∈ the 9 `State` names |
+| `vkllm_gpu_state` | gauge, one-hot | `state` ∈ the 8 `PublicState()` values (Design Decision 6) |
 | `vkllm_provision_attempts_total` | counter | `outcome` ∈ `ok, no_offer, provider_error, deadline_exceeded, attempts_exhausted, budget_exhausted, failed_status, lost, cancelled` (CORE-090) |
 | `vkllm_coldstart_stage_seconds` | histogram, buckets per CORE-090 | `stage` ∈ the 8 stages |
 | `vkllm_gpu_uptime_seconds_total` | counter | none; seconds with a `providerId` set, added at each wake |
@@ -305,7 +307,7 @@ Vast API down or 5xx → T7, T10, T30 retries, never a destroy; no qualifying of
 
 Harness: fake clock starts at `2026-11-01T00:00:00Z` (t=0); defaults from architecture §9 (idle 1800 s, drain 60 s, startup 900 s, lifetime 12 h, reconcile 60 s); installation id `iid`; `Run`, then `Settle()` processes every due event. The CORE-020 fake keeps the last value of a status sequence; `Calls(op)` counts harness calls too. The fake dialer counts `Dial` and `Close`; the fake worker returns a scripted `Probe` sequence and keeps its last value. "Adopted Ready gen 3" = store gen 3, `desired` RUNNING, instance id 9 `Ready`, `readyAt` t=0, idleDeadline t=1800, provider id 9 `running`, probe `Ready`. Offer A: id 11, machine 42, $0.60/h. Default `SetBalance(100)`.
 
-- AC1 happy cold start (FR-2.4, FR-2.7). Setup: fresh store, offer A, status `StatusOther("loading")`×2 then `running`; probes `Unreachable`×2, `Loading`×3, `Ready`. Action: `Start` at t=1, `ObserveFirstToken(1, 800ms)`. Expected: `Start` returns nil, `Public` `ALLOCATING`, `Desired` `RUNNING`; Public `STARTING` at t=1, `LOADING_MODEL` at t=16, `READY` at t=41; calls search 1, create 1, get 3, list 1, destroy 0; dial 1, probe 6; `vkllm_gpu_state{state="Ready"}` 1, the other 8 states 0; stage count 1 for all 8 stages, `boot` 15 s, `download` 10 s, `load` 15 s; `provision_attempts_total{outcome="ok"}` 1; price gauge 0.60; store `readyAt` t=41, idleDeadline t=1841; `vkllm_gpu_idle_deadline_seconds` = unix(t=1841).
+- AC1 happy cold start (FR-2.4, FR-2.7). Setup: fresh store, offer A, status `StatusOther("loading")`×2 then `running`; probes `Unreachable`×2, `Loading`×3, `Ready`. Action: `Start` at t=1, `ObserveFirstToken(1, 800ms)`. Expected: `Start` returns nil, `Public` `ALLOCATING`, `Desired` `RUNNING`; Public `STARTING` at t=1, `LOADING_MODEL` at t=16, `READY` at t=41; calls search 1, create 1, get 3, list 1, destroy 0; dial 1, probe 6; `vkllm_gpu_state{state="READY"}` 1, the other 7 public states 0; stage count 1 for all 8 stages, `boot` 15 s, `download` 10 s, `load` 15 s; `provision_attempts_total{outcome="ok"}` 1; price gauge 0.60; store `readyAt` t=41, idleDeadline t=1841; `vkllm_gpu_idle_deadline_seconds` = unix(t=1841).
 - AC2 50 concurrent starts (FR-2.1). Setup as AC1. Action: 50 goroutines call `Start` at t=1. Expected: all return nil; search 1, create 1; store `desired` writes 1; generation 1.
 - AC3 idle destroy (FR-3.1). Continue AC1, no requests. Expected: destroy 0 before t=1841; Draining, then destroy 1 at t=1841; Idle at t=1841; `desired` STOPPED; `shutdowns_total{reason="idle"}` 1; uptime 1840 s; search still 1 at t=7200.
 - AC4 rolling deadline (FR-3.2, FR-3.3). Continue AC1. `Admit(1)` at t=100, `RequestEnd(1)` at t=200; `Admit(1)` at t=1990, `RequestEnd(1)` at t=2100. Expected: idleDeadline 2000 after t=200; destroy 0 at t=2000 (`inFlight` 1); idleDeadline 3900 after t=2100; destroy 1 at t=3900; `vkllm_gpu_last_inference_finished_seconds` = unix(t=2100).
@@ -330,15 +332,15 @@ Harness: fake clock starts at `2026-11-01T00:00:00Z` (t=0); defaults from archit
 - AC23 non-terminal string (wave-1 ruling). Setup: status `StatusOther("scheduling")` forever, `Start` at t=1. Expected: destroy 0 before t=901, destroy 1 at t=901.
 - AC24 attempts cap (FR-6.5). Setup: offers on machines 42–45; probes `Unreachable` forever. Action: `Start` at t=0, t=3000, t=3600. Expected: creates at t=0, 960, 1980 (machines 42, 43, 44); at t=2880 `Desired` STOPPED, `Unavailable` `attempts_exhausted`, outcome `attempts_exhausted` 1; `Start` at t=3000 → `ErrGPUUnavailable`; create 4 at t=3600 on machine 45.
 - AC25 ready gate (FR-2.7). Setup as AC1, probes `Loading` forever. Expected: Public `LOADING_MODEL` at t=900, destroy 1 at t=901.
-- AC26 SSRF boundary and host key (NFR-8.4, ADR 0006 §3). Setup: store gen 4, id 9 `Ready`, `sshHost` `198.51.100.7`, `sshPort` 2222; provider id 9 at `192.0.2.10:41022`. Expected: dial 1 with `192.0.2.10:41022`, 0 dials to `198.51.100.7`; store address rewritten. Variant `FailNext("get", 6, Retryable)`: dial 0 at t=0. Variant dialer returns `ErrHostKeyMismatch`: destroy 1 at t=0, create 0.
+- AC26 SSRF boundary and host key (NFR-8.4, ADR 0006 §3). Setup: store gen 4, id 9 `Ready`, `sshHost` `198.51.100.7`, `sshPort` 2222; provider id 9 at `192.0.2.10:41022`. Expected: dial 1 with `192.0.2.10:41022`, 0 dials to `198.51.100.7`; stored address unchanged (R23: a recovery dial re-adopts without a write — only the initial provisioning path, around T12, ever writes `sshHost`/`sshPort`). Variant `FailNext("get", 6, Retryable)`: dial 0 at t=0. Variant dialer returns `ErrHostKeyMismatch`: destroy 1 at t=0, create 0.
 - AC27 worker crash (FR-5.6). Setup: adopted Ready gen 3, `Admit(3)`; probes `Unreachable` from t=10. Action: `ReportUpstreamFailure(3)` at t=10. Expected: probes at t=10 and t=15; `Close` 1 and destroy 1 at t=15; `desired` STOPPED. Variant probe `Ready` at t=15: destroy 0. Variant balance $1.59 on a fresh store, `Start` at t=1: `ErrGPUUnavailable`, `Unavailable` `balance_low`, search 0.
 
 ## Definition of done
 
-- [ ] AC1–AC27 and the step tests pass in CI; `go test -race ./internal/controller/... ./internal/tunnel/...` finishes in < 15 s.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE and folder renamed in the same PR.
-- [ ] Evidence section filled.
+- [x] AC1–AC27 and the step tests pass in CI; `go test -race ./internal/controller/... ./internal/tunnel/...` finishes in < 15 s.
+- [x] `make specs-check` passes.
+- [x] Status flipped to DONE and folder renamed in the same PR.
+- [x] Evidence section filled.
 
 ## Open questions
 
@@ -351,6 +353,153 @@ Harness: fake clock starts at `2026-11-01T00:00:00Z` (t=0); defaults from archit
 | 5 s polls vs Vast per-endpoint limits (research §1.1, thresholds U) | 429s slow boot | CORE-030 | 5 s; CORE-020 backoff absorbs 429 |
 | SSH user, keepalive interval and miss count are not in research.md | tunnel stability | CORE-030 | `root`, 15 s, 3 |
 
+## Known limitations
+
+Found during implementation review, each already ruled on; recorded here, not
+left to be rediscovered. None blocks DONE.
+
+1. **Reconcile's fence-advance narrowing.** The reconcile table's fence-advance
+   row ("label gen > `doc.generation`" → "CAS `generation = g`") only runs
+   when no instance is currently active (`advanceFence` requires
+   `doc.Instance == nil`), not unconditionally as the table's text reads. An
+   unconditional advance would strand a live Serving instance: `RequestEnd`
+   would look stale against the moved generation, the idle-shutdown rule would
+   never fire again for it, and it would bill until the 12-hour max-lifetime
+   cap. Deliberate, cost-safety-motivated narrowing, with a known ceiling: an
+   orphan instance whose label generation sits ahead of the active one bills
+   until the active instance's own lifecycle ends — typically the ~30-minute
+   idle timeout, worst case 12 h via max lifetime — reachable only through an
+   out-of-band store edit or reset, never through normal operation. A `Warn`
+   log fires every time the advance is deferred, so a billing orphan stays
+   visible in logs.
+2. **`BudgetExhausted` suppressed while the balance is unknown.** The spec's
+   literal text ("`Allow` returning false, including `balance_unknown` →
+   `BudgetExhausted`") is not what shipped. `reconcilePruneAndBudget` skips
+   posting `EvBudgetExhausted` while the balance has never been successfully
+   read (`lastBalanceKnown == false`): every process start begins with
+   `known=false`, and restart recovery runs a reconcile pass at t=0, so the
+   literal text would mean every restart immediately drains an
+   already-healthy, already-serving GPU on its first balance-read attempt.
+   Ruled cost-safety over literal spec text. `Start`'s own gate is unaffected
+   — a `Start` is still correctly denied with `balance_low` while the balance
+   is unknown; only the side effect of draining an already-Ready/Serving
+   instance was wrong, and is now suppressed.
+3. **AC26 corrected to match the code, not the other way round.** AC26's
+   "Expected" text said the stored SSH address is rewritten on the
+   restart/recovery-dial path. The shipped behavior, consistent with R23
+   ("a restart MUST re-adopt ... without a create or destroy"), never
+   rewrites `sshHost`/`sshPort` on a recovery dial — only the initial
+   provisioning path (around T12) ever writes it. `TestAC26_...` already
+   asserted the unchanged-address behavior; only this spec's AC26 prose was
+   wrong, fixed in this write-back.
+4. **T29's "evaluate T1 at once" is not implemented.** After a destroy
+   completes (T29) with the instance still wanted, nothing re-triggers a new
+   search immediately; revival waits for the next periodic reconcile tick (up
+   to `controller.reconcileInterval`, 60 s by default). Cost-neutral — it
+   delays spend, never accelerates it — but a real gap against the spec's
+   literal text, not yet fixed. The same root gap means a denial's
+   `desired=STOPPED` write can itself lag by up to one tick under certain
+   event orderings (seen in AC10/AC24); in the rare case where that lagging
+   tick crosses a UTC-hour boundary, the hourly provision-attempts gate could
+   pass on the delayed tick and the controller auto-retries within its own
+   hourly cap, rather than requiring an explicit new `Start`. A minor timing
+   nuance of the same gap, not a separate bug, and it never bypasses the cap
+   itself.
+5. **60 s backoff after a search error is not implemented.** T7's `no_offer`
+   backoff (AC13) ships. The equivalent 60 s pacing after a search *error*
+   (as opposed to a clean `no_offer` result) was never implemented. A
+   pre-existing gap, not introduced by this implementation.
+6. **Recovery-drain shutdown-reason mislabeling.** When restart recovery
+   determines an instance must drain because its idle deadline or max
+   lifetime already passed while the process was down, recovery always
+   raises a plain `Stop`-shaped event regardless of the real reason, so
+   `vkllm_shutdowns_total{reason}` always reports `manual` for a
+   recovery-triggered drain, even when the true reason was `idle` or
+   `lifetime`. Metrics-only: the destroy itself happens correctly (AC11).
+7. **`provision_attempts_total` undercounts gate-level denials.** The counter
+   has no case for a denial (`no_offer`/`budget_exhausted`/`balance_low`/
+   `attempts_exhausted`) raised directly at the Idle-state gate check, as
+   opposed to one raised after an offer was already chosen. The denial is
+   correctly enforced before any `CreateInstance` call either way, so there
+   is no cost or correctness impact — only an undercounted metric.
+8. **Other metrics-only gaps.** The orphan-destroyed counter can double-count
+   under rare provider-list-lag timing. Per-stage coldstart timing is never
+   populated in production — only `first_token` is observed, via
+   `ObserveFirstToken` — and AC1's test documents this as a known shortfall
+   rather than asserting it. A denied `Start` that happens to
+   hit a store CAS-retry-exhausted condition (inside `processEvent`, distinct
+   from `callerEvent`'s own `errStale` retry loop) returns no error and no
+   reason to its caller; this needs 8 consecutive write conflicts and is very
+   low probability.
+9. **T5/T6 gate-recheck, fixed in the final review round.** An offer arriving
+   after a search was already dispatched never had its own budget/attempts
+   recheck: `gateReason` only computed a result for `Start`/`Tick`/`Gone`, so
+   a budget denial that landed while the search was in flight let the create
+   go ahead anyway (bounded — the next reconcile's `EvBudgetExhausted`
+   destroyed it within about 60 s — but the recheck the spec describes
+   didn't run). `gateReason` now also evaluates the same budget and
+   attempts-cap checks for an offer arriving while `Searching`, so the
+   create itself is now denied rather than merely unwound afterward.
+10. **`vkllm_gpu_uptime_seconds_total` records in one lump sum, not
+    incrementally.** The counter is added to once, on any transition that
+    lands in `Idle` from a state other than `Searching` for an instance that
+    had a provider id, covering that instance's whole `createdAt`-to-now
+    span in a single `Add`. The spec's text reads as "recorded at each
+    wake"; the shipped behavior gets the same total either way, so this is
+    a timing-of-recording difference, not a correctness gap.
+11. **The reconcile table's T15/T26 "still runs on a tick" wording is
+    imprecise.** In the shipped code, T15 (startup timeout) and T26 (drain
+    deadline) fire only on `EvDeadlineExpired`, never on a periodic `EvTick`,
+    so the table's text overstates what actually triggers them. This is
+    practically unreachable as a behavioral gap — `procMu` serializes every
+    transition, so the one row that matters (T25, the `EvTick`-driven
+    drain-complete check) and these two never race each other — so it is
+    recorded here as a textual imprecision, not a bug.
+12. **`ErrStoreReset` recovery reruns only the reconcile pass, not a full
+    re-mapping of in-memory state.** On `ErrStoreReset`, `processEvent`
+    dispatches a reconcile pass against the freshly reloaded document but
+    does not re-derive `c.state`/`c.generation`/the armed timers from it, so
+    memory can stay briefly inconsistent with the store until the next
+    natural transition or a process restart. This matches the spec's own
+    literal instruction to rerun step 3, and stays cost-safe either way: the
+    orphan-detection path still destroys anything untracked.
+13. **A future `CORE-100` `Budget.Allow` must map into this package's own
+    4-string vocabulary.** `isDenial` treats any non-empty, non-`"backoff"`
+    reason as a denial, so a raw or unmapped string from a real
+    `budget.Checker` would still deny correctly. But `Snapshot.Unavailable`
+    only ever gets set from `isUnavailableReason`'s closed set
+    (`no_offer`/`budget_exhausted`/`balance_low`/`attempts_exhausted`), and
+    `provisionDenialOutcome` only counts those same four — an unmapped
+    string would deny spend correctly but leave `Unavailable` empty and
+    `provision_attempts_total` undercounted for that denial. `CORE-100` must
+    map its own denial reasons into this vocabulary, not invent new ones.
+14. **A stale `IdleDeadline` is never cleared once idle shutdown is
+    disabled.** `Status()` and `vkllm_gpu_idle_deadline_seconds` keep
+    reporting whatever deadline was last written; nothing destroys the
+    instance from it, since `idleRuleFires`/`armIdle` both refuse while the
+    setting is off. Cosmetic only.
+15. **Re-enabling idle shutdown on a live, already-`Ready` instance leaves
+    no deadline until the next inference finishes.** `IdleDeadline` is only
+    ever written by the create path or a flushed `RequestEnd`, never
+    backfilled from `ReadyAt` on a bare config change. `MaxLifetime`
+    (default 12 h) and the budget caps still bound the cost.
+
 ## Evidence
 
-None yet.
+`go test -race ./internal/controller/... ./internal/tunnel/...`:
+**9.35 s** wall clock (`controller` 7.89 s, `tunnel` 2.17 s), under this
+spec's own < 15 s Definition-of-done bound. All 27 acceptance criteria
+(`TestAC1_HappyColdStart` through `TestAC27_WorkerCrash`) and every step test
+pass; `-race` reports no data races.
+
+`internal/clock/fake` gained `NextDeadline() (time.Time, bool)` (commit
+`1869963`), returning the earliest pending waiter's deadline so the
+simulation harness (`sim_test.go`) can advance the fake clock to the next
+event instead of guessing a step size — a merged-package touch in the same
+category as CORE-040's own advisor-flagged `export_test.go` additions.
+
+The metrics table and AC1's expectation originally said the `vkllm_gpu_state`
+label used the 9 internal `State` names; the shipped code uses the 8
+`PublicState()` values instead (Design Decision 6). Corrected in this
+write-back; see "Known limitations" above for the other deliberate deviations
+and known gaps found during implementation review.

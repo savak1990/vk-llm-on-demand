@@ -20,7 +20,7 @@ single metric catalog and reconciles every name the five other specs (020,
 other packages each add metrics and log fields independently
 **Estimated effort:** one session (4–6 h)
 **Recommended model:** standard
-**Depends on:** [CORE-050](../050-P-gpu-lifecycle-controller/spec.md),
+**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md),
 [CORE-060](../060-P-gateway-openai-api/spec.md)
 
 ## Outcome
@@ -382,7 +382,7 @@ retried on the next demand, not a failure.
 | Histogram bucket boundaries above are a starting guess, not measured | Wrong buckets make `histogram_quantile` noisy without being wrong enough to fail a test | CORE-140's acceptance run | Keep the buckets above; CORE-140 records whether `_bucket` samples cluster at the edges and this spec is amended if so |
 | Exact Grafana dashboard JSON (panel ids, Grafana schema version, datasource UID templating) | Needs a real Grafana instance to author against | Implementation time, against the platform's kube-prometheus-stack Grafana | Panel list and queries above are fixed; JSON structure is mechanical from them |
 | The `grafana_dashboard: "1"` sidecar label and the log level being fixed (no `log.level` key) are not confirmed facts in research.md | C-32 forbids unverified facts as code assumptions | Verify the sidecar label against the platform's kube-prometheus-stack chart values at implementation time; add `log.level` to architecture §9 if runtime-configurable logging turns out to be needed | Keep the label as written; keep log level fixed at `info` |
-| CORE-050's own Observability table and simulation ACs (e.g. AC1, AC3, AC22) still emit `vkllm_gpu_state` with the nine internal `State.String()` values (`Idle`, `Searching`, `Creating`, `Booting`, `Loading`, `Ready`, `Serving`, `Draining`, `Destroying`), not the eight public states this catalog defines (R12, ADR 0011 §6) | Two specs disagree on the only label of a one-hot gauge; whichever ships first makes the other's dashboard panel and `VkllmDestroyStuck` alert wrong | CORE-050, before either spec leaves DRAFT | This catalog is authoritative (R1); CORE-050 must change the setter to `PublicState()` and its fixtures to the eight public-state names in its next revision |
+| CORE-050's own Observability table and simulation ACs (e.g. AC1, AC3, AC22) still emit `vkllm_gpu_state` with the nine internal `State.String()` values (`Idle`, `Searching`, `Creating`, `Booting`, `Loading`, `Ready`, `Serving`, `Draining`, `Destroying`), not the eight public states this catalog defines (R12, ADR 0011 §6) | Two specs disagree on the only label of a one-hot gauge; whichever ships first makes the other's dashboard panel and `VkllmDestroyStuck` alert wrong | CORE-050, before either spec leaves DRAFT | **closed** (CORE-050 DONE, Design Decision 6): the shipped setter uses `PublicState()` and the eight public-state names, matching this catalog; CORE-050's own spec text and fixtures were corrected to match in that write-back |
 | `vkllm_gateway_cancelled_streams_total` is added here to satisfy NFR-10.1 ("cancelled streams"), but CORE-060's own text and AC13 describe only `requests_total{code="499"}` on disconnect, not this counter | A metric this spec lists but no implementing spec increments fails AC6/AC1 trivially (always zero, never exercised) | CORE-060, before either spec leaves DRAFT | CORE-060 increments it at the same point it records `code="499"` (one `RequestEnd` call, same disconnect) |
 
 ## Evidence

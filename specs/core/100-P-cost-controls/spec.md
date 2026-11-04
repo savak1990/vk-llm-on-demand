@@ -14,7 +14,7 @@ adrs: ["0003", "0004", "0005", "0010", "0011", "0012"]
 **Risk:** medium — a bug either lets spend run past C-1/C-7's caps or wrongly kills a paying request
 **Estimated effort:** one session (4–6 h)
 **Recommended model:** strong — rounding and fold-on-overflow logic on a money path must be exact, not "close enough"
-**Depends on:** [CORE-050](../050-P-gpu-lifecycle-controller/spec.md)
+**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md)
 
 ## Outcome
 
