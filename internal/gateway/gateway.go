@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,9 +49,15 @@ type Gateway struct {
 	startedAt time.Time
 	rl        *auth.Limiter
 
-	// shuttingDown will gate admission once draining logic exists;
-	// declared now so that logic can be added without touching this struct.
+	// shuttingDown lets classify() label an in-flight failure correctly;
+	// it does not itself block new admission, so Shutdown's caller must
+	// stop the listener first, the way http.Server.Shutdown does.
 	shuttingDown atomic.Bool
+
+	activeWG  sync.WaitGroup
+	activeMu  sync.Mutex
+	activeFns map[int]context.CancelFunc
+	nextID    int
 }
 
 func New(d Deps) (*Gateway, error) {
@@ -73,7 +80,7 @@ func New(d Deps) (*Gateway, error) {
 		d.Log = slog.Default()
 	}
 
-	g := &Gateway{deps: d, startedAt: d.Clock.Now()}
+	g := &Gateway{deps: d, startedAt: d.Clock.Now(), activeFns: make(map[int]context.CancelFunc)}
 	g.mux = http.NewServeMux()
 	g.mux.HandleFunc("GET /v1/models", g.handleModels)
 	g.mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
@@ -112,6 +119,8 @@ func newRequestID() string {
 
 func (g *Gateway) requestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.activeWG.Add(1)
+		defer g.activeWG.Done()
 		rid := newRequestID()
 		w.Header().Set("X-Request-Id", rid)
 		ctx := context.WithValue(r.Context(), ctxKeyRequestID, rid)
@@ -170,4 +179,62 @@ func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
 	})
+}
+
+// shutdownCutoffDelay returns how long to wait before cancelling active
+// requests: ctx's deadline minus a 5s margin for handlers to write
+// their own shutting_down response, floored at 0.
+func shutdownCutoffDelay(now, deadline time.Time) time.Duration {
+	d := deadline.Sub(now) - 5*time.Second
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
+// Shutdown gives in-flight requests a cutoff window to respond on their
+// own, then cancels whatever remains and waits for every handler to
+// return; it never touches the instance, only HTTP serving stops.
+func (g *Gateway) Shutdown(ctx context.Context) error {
+	g.shuttingDown.Store(true)
+	if deadline, ok := ctx.Deadline(); ok {
+		if delay := shutdownCutoffDelay(g.deps.Clock.Now(), deadline); delay > 0 {
+			select {
+			case <-g.deps.Clock.After(delay):
+			case <-ctx.Done():
+			}
+		}
+	}
+	g.cancelActive()
+
+	done := make(chan struct{})
+	go func() { g.activeWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+func (g *Gateway) registerActive(cancel context.CancelFunc) (id int) {
+	g.activeMu.Lock()
+	defer g.activeMu.Unlock()
+	id = g.nextID
+	g.nextID++
+	g.activeFns[id] = cancel
+	return id
+}
+
+func (g *Gateway) unregisterActive(id int) {
+	g.activeMu.Lock()
+	defer g.activeMu.Unlock()
+	delete(g.activeFns, id)
+}
+
+func (g *Gateway) cancelActive() {
+	g.activeMu.Lock()
+	defer g.activeMu.Unlock()
+	for _, cancel := range g.activeFns {
+		cancel()
+	}
 }

@@ -104,7 +104,11 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 		timeout = 10 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
+	id := g.registerActive(cancel)
+	defer func() {
+		g.unregisterActive(id)
+		cancel()
+	}()
 
 	key := worker.WorkerKey(g.deps.Seed.Bytes(), g.deps.InstallationID, gen)
 
