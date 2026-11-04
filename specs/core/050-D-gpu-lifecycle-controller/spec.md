@@ -473,11 +473,21 @@ left to be rediscovered. None blocks DONE.
     string would deny spend correctly but leave `Unavailable` empty and
     `provision_attempts_total` undercounted for that denial. `CORE-100` must
     map its own denial reasons into this vocabulary, not invent new ones.
+14. **A stale `IdleDeadline` is never cleared once idle shutdown is
+    disabled.** `Status()` and `vkllm_gpu_idle_deadline_seconds` keep
+    reporting whatever deadline was last written; nothing destroys the
+    instance from it, since `idleRuleFires`/`armIdle` both refuse while the
+    setting is off. Cosmetic only.
+15. **Re-enabling idle shutdown on a live, already-`Ready` instance leaves
+    no deadline until the next inference finishes.** `IdleDeadline` is only
+    ever written by the create path or a flushed `RequestEnd`, never
+    backfilled from `ReadyAt` on a bare config change. `MaxLifetime`
+    (default 12 h) and the budget caps still bound the cost.
 
 ## Evidence
 
-`go test -race -count=1 ./internal/controller/... ./internal/tunnel/...`:
-**13.230 s** wall clock (`controller` 12.246 s, `tunnel` 2.221 s), under this
+`go test -race ./internal/controller/... ./internal/tunnel/...`:
+**9.35 s** wall clock (`controller` 7.89 s, `tunnel` 2.17 s), under this
 spec's own < 15 s Definition-of-done bound. All 27 acceptance criteria
 (`TestAC1_HappyColdStart` through `TestAC27_WorkerCrash`) and every step test
 pass; `-race` reports no data races.

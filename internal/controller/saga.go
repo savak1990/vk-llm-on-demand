@@ -98,16 +98,25 @@ func dispatchDial(ctx context.Context, c *Controller, e effDial) {
 		return
 	}
 	c.mu.Lock()
-	live := e.gen == c.generation && c.state == Booting && c.conn == nil
-	if live {
-		c.conn = conn
+	stillBooting := e.gen == c.generation && c.state == Booting
+	duplicate := stillBooting && c.conn != nil
+	installed := c.conn
+	if stillBooting && c.conn == nil {
+		c.conn, installed = conn, conn
 	}
 	c.mu.Unlock()
-	if !live {
+	if !stillBooting {
 		_ = conn.Close()
 		return
 	}
-	c.postEvent(Event{Kind: EvLinkUp, Gen: e.gen, HostKey: conn.HostKey()})
+	if duplicate {
+		// A second dial lands after an earlier one already installed a
+		// Conn: close this one, but still re-post EvLinkUp against the
+		// installed Conn so a dropped first EvLinkUp self-heals here
+		// instead of stalling until StartupTimeout.
+		_ = conn.Close()
+	}
+	c.postEvent(Event{Kind: EvLinkUp, Gen: e.gen, HostKey: installed.HostKey()})
 }
 
 // dispatchProbe is saga step 6. Unreachable/Loading posts nothing — the

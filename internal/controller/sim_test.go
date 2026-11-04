@@ -1944,3 +1944,47 @@ func TestIdleShutdownDisabledWarmRestartIgnoresLeftoverDeadline(t *testing.T) {
 		t.Fatalf("Public = %q, want still READY", snap.Public)
 	}
 }
+
+// TestGaugesRefreshWithoutStatusCall is a regression test: recordDocGauges
+// must run on every reconcile tick, not only inside Status(), or a
+// Prometheus scrape of a long-idle instance would never see idle_seconds
+// advance between calls to Status().
+func TestGaugesRefreshWithoutStatusCall(t *testing.T) {
+	h := buildHarness(t)
+	t0 := h.clk.Now()
+	seedAdoptedReady(h, 3, t0, time.Time{}, t0.Add(1800*time.Second))
+	h.worker.SetProbeSequence(ProbeReady)
+	h.run()
+
+	h.Settle(t0.Add(10 * time.Minute))
+	if got := h.metricValue("vkllm_gpu_idle_seconds"); got != 600 {
+		t.Fatalf("vkllm_gpu_idle_seconds = %v, want 600 (no Status() call was made)", got)
+	}
+}
+
+// TestReportUpstreamFailureStopsOnShutdown is a regression test: the
+// suspect probe must observe Run's own context, not context.Background(),
+// so cancelling it mid-wait stops the probe instead of leaking it past
+// shutdown.
+func TestReportUpstreamFailureStopsOnShutdown(t *testing.T) {
+	c := readyController(t)
+	clk := fakeclock.New(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
+	c.deps.Clock = clk
+	worker := c.deps.Worker.(*fakeWorker)
+	worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable)
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	c.mu.Lock()
+	c.runCtx = runCtx
+	c.mu.Unlock()
+
+	c.ReportUpstreamFailure(3)
+	clk.BlockUntil(1)
+	cancel()
+	waitFor(t, "suspect probe stopped", func() bool { return c.inFlightEffects.Load() == 0 })
+
+	clk.Advance(5 * time.Second)
+	if _, ok := recvEvent(t, c); ok {
+		t.Fatal("a probe cancelled via Run's context must not post EvWorkerFailed")
+	}
+}

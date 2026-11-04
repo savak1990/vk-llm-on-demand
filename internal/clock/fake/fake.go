@@ -114,10 +114,9 @@ func (c *Clock) BlockUntil(n int) {
 	}
 }
 
-// NextDeadline returns the earliest pending waiter's deadline. Test
-// harnesses use it to advance the clock exactly as far as a blocked
-// goroutine needs — never further — without racing that goroutine's
-// own registration, which Advance's single-pass firing can't detect.
+// NextDeadline returns the earliest pending waiter's deadline, so a test
+// harness can advance exactly that far without racing a goroutine that
+// hasn't registered its wait yet.
 func (c *Clock) NextDeadline() (time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

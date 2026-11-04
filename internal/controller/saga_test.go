@@ -174,8 +174,9 @@ func TestDispatchDialDiscardsDuplicateConn(t *testing.T) {
 	if c.conn != first {
 		t.Fatal("dispatchDial overwrote the already-installed Conn")
 	}
-	if _, ok := recvEvent(t, c); ok {
-		t.Fatal("want no EvLinkUp for a duplicate dial")
+	ev, ok := recvEvent(t, c)
+	if !ok || ev.Kind != EvLinkUp || ev.HostKey != first.HostKey() {
+		t.Fatalf("event = %+v, ok=%v, want EvLinkUp against the already-installed Conn (so a dropped first EvLinkUp self-heals here)", ev, ok)
 	}
 }
 
