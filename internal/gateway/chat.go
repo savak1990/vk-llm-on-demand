@@ -247,14 +247,18 @@ func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen
 	rc := http.NewResponseController(w)
 
 	firstByte := true
+	chunks := 0
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			if firstByte {
-				g.deps.Controller.ObserveFirstToken(gen, g.deps.Clock.Now().Sub(start))
+				ttft := g.deps.Clock.Now().Sub(start)
+				g.deps.Controller.ObserveFirstToken(gen, ttft)
+				g.metrics.ttftSeconds.Observe(ttft.Seconds())
 				firstByte = false
 			}
+			chunks += bytes.Count(buf[:n], []byte("data: "))
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				setCodeOverride(w, "499")
 				return
@@ -262,7 +266,11 @@ func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen
 			_ = rc.Flush()
 		}
 		if err != nil {
-			if err != io.EOF {
+			if err == io.EOF {
+				if elapsed := g.deps.Clock.Now().Sub(start).Seconds(); elapsed > 0 && chunks > 1 {
+					g.metrics.outputTokensPerSecond.Observe(float64(chunks-1) / elapsed) // -1 for the final [DONE] row
+				}
+			} else {
 				outcome := g.classify(r, err)
 				if outcome == outcomeUpstreamError {
 					g.deps.Controller.ReportUpstreamFailure(gen)

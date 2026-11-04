@@ -58,6 +58,8 @@ type Gateway struct {
 	activeMu  sync.Mutex
 	activeFns map[int]context.CancelFunc
 	nextID    int
+
+	metrics *gatewayMetrics
 }
 
 func New(d Deps) (*Gateway, error) {
@@ -85,6 +87,7 @@ func New(d Deps) (*Gateway, error) {
 	g.mux.HandleFunc("GET /v1/models", g.handleModels)
 	g.mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
 	g.rl = auth.NewLimiter(d.Config.RateLimitPerKeyRPM, d.Clock)
+	g.metrics = newGatewayMetrics(d.Reg)
 	return g, nil
 }
 
@@ -92,11 +95,11 @@ func New(d Deps) (*Gateway, error) {
 func (g *Gateway) Handler() http.Handler {
 	return chain(g.mux,
 		g.requestIDMiddleware,
+		g.accessLogAndMetrics,
 		g.recoverMiddleware,
 		g.bodyLimitMiddleware,
 		g.authMiddleware,
 		g.rateLimitMiddleware,
-		g.loggingMiddleware,
 	)
 }
 
@@ -173,12 +176,6 @@ func setCodeOverride(w http.ResponseWriter, code string) {
 	if sr, ok := w.(*statusRecorder); ok {
 		sr.codeOverride = code
 	}
-}
-
-func (g *Gateway) loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-	})
 }
 
 // shutdownCutoffDelay returns how long to wait before cancelling active
