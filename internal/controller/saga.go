@@ -1,4 +1,3 @@
-// internal/controller/saga.go
 package controller
 
 import (
@@ -63,7 +62,7 @@ func dispatchGet(ctx context.Context, c *Controller, e effGet) {
 	}
 	c.postEvent(Event{
 		Kind: EvProviderObserved, Gen: e.gen,
-		Status: inst.Status, RawStatus: inst.RawStatus,
+		Status:  inst.Status,
 		SSHHost: inst.SSHHost, SSHPort: inst.SSHPort,
 	})
 }
@@ -88,7 +87,11 @@ func (c *Controller) confirmPollStatus(gen int64, terminal bool) bool {
 }
 
 // Dials the address the caller just observed, never one read back from
-// the document, so a stale or edited document can't redirect the connection.
+// the document, so a stale or edited document can't redirect the
+// connection. A repeat poll can start a second dial while the first is
+// still in flight; only the dial that lands first while still Booting
+// with no Conn installed wins, so a late or duplicate success is closed
+// instead of leaking or overwriting the live Conn.
 func dispatchDial(ctx context.Context, c *Controller, e effDial) {
 	conn, err := c.deps.Dialer.Dial(ctx, e.inst)
 	if err != nil {
@@ -98,8 +101,15 @@ func dispatchDial(ctx context.Context, c *Controller, e effDial) {
 		return
 	}
 	c.mu.Lock()
-	c.conn = conn
+	live := e.gen == c.generation && c.state == Booting && c.conn == nil
+	if live {
+		c.conn = conn
+	}
 	c.mu.Unlock()
+	if !live {
+		_ = conn.Close()
+		return
+	}
 	c.postEvent(Event{Kind: EvLinkUp, Gen: e.gen, HostKey: conn.HostKey()})
 }
 

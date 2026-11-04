@@ -341,9 +341,9 @@ func TestAC1_HappyColdStart(t *testing.T) {
 	if got := testutil.ToFloat64(gpuIdleDeadlineSeconds); got != float64(wantIdleDeadline.Unix()) {
 		t.Fatalf("gpu_idle_deadline_seconds = %v, want unix(%v)", got, wantIdleDeadline)
 	}
-	// Known shortfall: stageEnteredAt is never written in production (only
-	// first_token is observed via ObserveFirstToken), so the spec's
-	// per-stage boot/download/load durations and counts aren't assertable.
+	// Known shortfall: only first_token is observed, via
+	// ObserveFirstToken, so the spec's per-stage boot/download/load
+	// durations and counts aren't assertable.
 }
 
 func TestAC2_FiftyConcurrentStarts(t *testing.T) {
@@ -1881,4 +1881,65 @@ func TestAC27_WorkerCrash(t *testing.T) {
 			t.Fatalf("Calls(search) = %d, want 0", h.prov.Calls("search"))
 		}
 	})
+}
+
+// Idle shutdown disabled: a cold start that reaches Ready and serves one
+// request must never be destroyed on an idle deadline, however long it
+// then sits idle.
+func TestIdleShutdownDisabledColdStartNeverDestroys(t *testing.T) {
+	h := buildHarness(t)
+	h.ctl.deps.Config.IdleShutdownEnabled = false
+	h.run()
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusOther, provider.StatusOther)
+	h.worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable, ProbeLoading, ProbeLoading, ProbeLoading, ProbeReady)
+
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	h.Settle(t0.Add(41 * time.Second))
+	readyAt := *h.ctl.Status().ReadyAt
+	gen := h.ctl.Status().Generation
+	if d := h.ctl.Status().IdleDeadline; d != nil {
+		t.Fatalf("IdleDeadline = %v, want nil with idle shutdown disabled", d)
+	}
+
+	if _, err := h.ctl.Admit(gen); err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	h.Settle(readyAt.Add(10 * time.Second))
+	h.ctl.RequestEnd(gen)
+	h.Settle(readyAt.Add(21 * time.Second))
+
+	h.Settle(readyAt.Add(3600 * time.Second))
+	if got := h.prov.Calls("destroy"); got != 0 {
+		t.Fatalf("Calls(destroy) = %d well past the idle window, want 0 with idle shutdown disabled", got)
+	}
+	if snap := h.ctl.Status(); snap.Public != "READY" {
+		t.Fatalf("Public = %q well past the idle window, want still READY", snap.Public)
+	}
+}
+
+// Idle shutdown disabled on a warm restart must ignore a deadline left
+// over from an earlier run that had it enabled: a stale past deadline
+// must not destroy the instance, and must not livelock armIdle/
+// idleRuleFires into re-arming an already-past timer forever (Settle's
+// own spin detector fails the test if that happens).
+func TestIdleShutdownDisabledWarmRestartIgnoresLeftoverDeadline(t *testing.T) {
+	h := buildHarness(t)
+	h.ctl.deps.Config.IdleShutdownEnabled = false
+	t0 := h.clk.Now()
+	seedAdoptedReady(h, 3, t0.Add(-2*time.Hour), time.Time{}, t0.Add(-time.Hour))
+	h.worker.SetProbeSequence(ProbeReady)
+	h.run()
+
+	h.Settle(t0.Add(3600 * time.Second))
+	if got := h.prov.Calls("destroy"); got != 0 {
+		t.Fatalf("Calls(destroy) = %d with a leftover past deadline and idle shutdown disabled, want 0", got)
+	}
+	if snap := h.ctl.Status(); snap.Public != "READY" {
+		t.Fatalf("Public = %q, want still READY", snap.Public)
+	}
 }

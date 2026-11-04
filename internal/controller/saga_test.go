@@ -24,7 +24,7 @@ func newTestController(t *testing.T) (*Controller, *fakeprovider.Fake, *fakecloc
 		Provider: prov, Store: fakestore.New("iid"), Dialer: &recordDialer{}, Clock: clk, Budget: budget, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
-		Config: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxProvisionAttemptsPerHour: 3, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second},
+		Config: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxProvisionAttemptsPerHour: 3, IdleShutdownEnabled: true, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -109,7 +109,7 @@ func TestDispatchGetFailureReadPostsNothing(t *testing.T) {
 	prov.FailNext("get", 1, context.DeadlineExceeded)
 	dispatchGet(context.Background(), c, effGet{id: 9, gen: 1})
 	if _, ok := recvEvent(t, c); ok {
-		t.Fatal("want no event on a failed read (C-9)")
+		t.Fatal("want no event on a failed read")
 	}
 }
 
@@ -122,6 +122,60 @@ func TestDispatchDialPlainFailurePostsNothing(t *testing.T) {
 	dispatchDial(context.Background(), c, effDial{inst: tunnel.Instance{Host: "127.0.0.1", Port: 1}, gen: 1})
 	if _, ok := recvEvent(t, c); ok {
 		t.Fatal("want no event on a plain dial failure (retries on next poll)")
+	}
+}
+
+type dialerFunc func(context.Context, tunnel.Instance) (*tunnel.Conn, error)
+
+func (f dialerFunc) Dial(ctx context.Context, in tunnel.Instance) (*tunnel.Conn, error) {
+	return f(ctx, in)
+}
+
+func closingDialer(closed chan struct{}) tunnel.Dialer {
+	return dialerFunc(func(context.Context, tunnel.Instance) (*tunnel.Conn, error) {
+		return tunnelConnForTest(func() error { closed <- struct{}{}; return nil }), nil
+	})
+}
+
+func TestDispatchDialDiscardsStaleConn(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	closed := make(chan struct{}, 1)
+	c.deps.Dialer = closingDialer(closed)
+	c.generation = 3
+	c.state = Destroying // the state already moved on by the time the dial returns
+	dispatchDial(context.Background(), c, effDial{gen: 3})
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("a dial that landed after the state moved on was never closed")
+	}
+	if c.conn != nil {
+		t.Fatalf("conn = %v, want nil", c.conn)
+	}
+	if _, ok := recvEvent(t, c); ok {
+		t.Fatal("want no EvLinkUp for a stale dial")
+	}
+}
+
+func TestDispatchDialDiscardsDuplicateConn(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	first := tunnelConnForTest(func() error { return nil })
+	c.conn = first
+	closed := make(chan struct{}, 1)
+	c.deps.Dialer = closingDialer(closed)
+	c.generation = 3
+	c.state = Booting
+	dispatchDial(context.Background(), c, effDial{gen: 3})
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("a duplicate dial's Conn was never closed")
+	}
+	if c.conn != first {
+		t.Fatal("dispatchDial overwrote the already-installed Conn")
+	}
+	if _, ok := recvEvent(t, c); ok {
+		t.Fatal("want no EvLinkUp for a duplicate dial")
 	}
 }
 

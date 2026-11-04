@@ -11,9 +11,8 @@ import (
 )
 
 // decide is the pure heart of the state machine: given the current
-// state, one event, and a snapshot of the facts that matter, it
-// returns the next state, an optional CAS mutation, and the effects to
-// dispatch after that CAS commits (or immediately, if mutate is nil).
+// state, one event, and a snapshot of facts, it returns the next
+// state, an optional CAS mutation, and the effects to dispatch after.
 func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Document) error, effects []Effect) {
 	switch {
 	// T3: a Start while already provisioning or serving, with
@@ -22,9 +21,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 		return state, nil, nil
 
 	// A backoff wait at Idle is a pacing delay, not a denial: a Tick
-	// or Gone must not search again until it elapses. A Start still
-	// records the desire right away, with no search of its own, so
-	// the next eligible Tick starts the search on its own.
+	// or Gone must not search again until it elapses, though a Start
+	// still records the desire right away.
 	case state == Idle && (ev.Kind == EvTick || ev.Kind == EvGone) && ev.Reason == "backoff":
 		return state, nil, nil
 	case state == Idle && ev.Kind == EvStart && ev.Reason == "backoff":
@@ -404,7 +402,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// T27: the instance vanished before Ready, or while draining —
 	// close the ledger entry; desired is left alone (already STOPPED
 	// if Draining, kept RUNNING before Ready so the backoff retries).
-	case isCreatingLoadingOrDraining(state) && ev.Kind == EvVanished:
+	case (isCreatingBootingOrLoading(state) || state == Draining) && ev.Kind == EvVanished:
 		return Idle, func(d *store.Document) error {
 			if d.Instance == nil || d.Generation != ev.Gen {
 				return errStale
@@ -505,17 +503,8 @@ func isCreatingThroughDraining(s State) bool {
 	}
 }
 
-func isCreatingLoadingOrDraining(s State) bool {
-	switch s {
-	case Creating, Booting, Loading, Draining:
-		return true
-	default:
-		return false
-	}
-}
-
 func idleRuleFires(f Facts) bool {
-	if f.Doc.Instance == nil || f.Doc.Instance.IdleDeadline == nil {
+	if !f.Cfg.IdleShutdownEnabled || f.Doc.Instance == nil || f.Doc.Instance.IdleDeadline == nil {
 		return false
 	}
 	return !f.Now.Before(*f.Doc.Instance.IdleDeadline)

@@ -67,11 +67,21 @@ func (c *Controller) reconcilePruneAndBudget(ctx context.Context, balance provid
 		return
 	}
 	c.postEvent(Event{Kind: EvTick, Gen: doc.Generation})
-	// A balance never read since start is no evidence of a low one; Start's gate still denies on it.
-	if doc.Instance == nil || !known {
+	if doc.Instance == nil {
 		return
 	}
-	if reason := c.deps.Budget.Allow(doc, balance, known); reason != "" {
+	reason := ""
+	// A balance never read since start is no evidence of a low one; Start's gate still denies on it.
+	if known {
+		reason = c.deps.Budget.Allow(doc, balance, known)
+	}
+	spendCap := c.deps.Config.MaxInstanceSpendUSD
+	if reason == "" && spendCap > 0 {
+		if e, ok := openEntry(doc); ok && e.EstUSD >= spendCap {
+			reason = "budget_exhausted"
+		}
+	}
+	if reason != "" {
 		c.postEvent(Event{Kind: EvBudgetExhausted, Gen: doc.Generation, Reason: reason})
 	}
 }
@@ -155,7 +165,7 @@ func (c *Controller) reconcileCompareInstances(ctx context.Context, doc store.Do
 			c.terminalSeen++
 			if c.terminalSeen >= 2 {
 				c.terminalSeen = 0
-				c.postEvent(Event{Kind: EvProviderObserved, Gen: doc.Generation, Status: active.Status, RawStatus: active.RawStatus})
+				c.postEvent(Event{Kind: EvProviderObserved, Gen: doc.Generation, Status: active.Status})
 			}
 		}
 	default:

@@ -189,6 +189,33 @@ func TestGenerationChangeResetsInFlightAndSuspect(t *testing.T) {
 	}
 }
 
+// T6's gate-recheck must also deny an offer that arrives after the
+// budget has flipped while the search was in flight, not just a fresh
+// Start — the create must never dispatch at all.
+func TestOfferChosenDeniedByBudgetNeverCreates(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	c.state = Searching
+	putDoc(t, c, func(d *store.Document) {
+		d.Desired = store.DesiredRunning
+		d.Ledger.TotalUSD = 30 // the monthly cap, as if Allow flipped while the search was in flight
+	})
+	if err := c.processEvent(context.Background(), Event{Kind: EvOfferChosen, Offer: provider.Offer{ID: 11, MachineID: 42, Hourly: 600000}}); err != nil {
+		t.Fatalf("processEvent: %v", err)
+	}
+	if c.state != Idle {
+		t.Fatalf("state = %v, want Idle (denied before create)", c.state)
+	}
+	if got := prov.Calls("create"); got != 0 {
+		t.Fatalf("Calls(create) = %d, want 0 — the gate must deny before dispatching the create effect", got)
+	}
+	if got, _, _ := c.deps.Store.Load(context.Background()); got.Desired != store.DesiredStopped {
+		t.Fatalf("desired = %q, want STOPPED", got.Desired)
+	}
+	if got := c.Status().Unavailable; got != "budget_exhausted" {
+		t.Fatalf("Unavailable = %q, want budget_exhausted", got)
+	}
+}
+
 func TestSameGenerationKeepsInFlight(t *testing.T) {
 	c, _, _, _, _ := newTestController(t)
 	c.state = Ready

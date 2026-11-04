@@ -89,7 +89,7 @@ func shutdownReason(state, next State, ev Event, inFlight int, doc store.Documen
 	case isCreatingBootingOrLoading(state) && (ev.Kind == EvStop || ev.Kind == EvBudgetExhausted) && next == Destroying:
 		return manualOrBudget(ev), true
 	case state == Ready && (ev.Kind == EvIdleTimer || ev.Kind == EvTick) && next == Draining &&
-		inFlight == 0 && idleRuleFires(Facts{Now: now, Doc: doc}):
+		inFlight == 0 && idleRuleFires(Facts{Now: now, Doc: doc, Cfg: cfg}):
 		return "idle", true
 	case (state == Ready || state == Serving) && ev.Kind == EvTick && next == Draining &&
 		lifetimeExpired(Facts{Now: now, Doc: doc, Cfg: cfg}):
@@ -159,9 +159,9 @@ func provisionDenialOutcome(reason string) (string, bool) {
 	}
 }
 
-// recordDocGauges sets the 4 gauges that are pure functions of the
-// already-loaded document; Status is their only caller, so none of
-// these ever triggers a provider or store call of its own.
+// recordDocGauges sets the 4 gauges that are pure functions of an
+// already-loaded document; every caller passes one in hand, so this
+// never triggers a provider or store call of its own.
 func recordDocGauges(doc store.Document, state State, inFlight int, now time.Time) {
 	idleSeconds, idleDeadline, lastInference, hourly := 0.0, 0.0, 0.0, 0.0
 	if doc.Instance != nil {

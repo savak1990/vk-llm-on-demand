@@ -40,7 +40,7 @@ func TestShutdownsTotalIncrementsByReason(t *testing.T) {
 
 func TestShutdownReasonByTransition(t *testing.T) {
 	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	cfg := config.Controller{MaxLifetime: time.Hour}
+	cfg := config.Controller{MaxLifetime: time.Hour, IdleShutdownEnabled: true}
 	readyLongAgo := now.Add(-2 * time.Hour)
 	instanceWith := func(idleDeadline *time.Time) store.Document {
 		return store.Document{Instance: &store.Instance{State: Ready.String(), ReadyAt: &readyLongAgo, CreatedAt: readyLongAgo, IdleDeadline: idleDeadline}}
@@ -61,7 +61,7 @@ func TestShutdownReasonByTransition(t *testing.T) {
 		{"T14 terminal while draining", Draining, Destroying, Event{Kind: EvProviderObserved, Status: provider.StatusExited}, 0, store.Document{}, config.Controller{}, "failure", true},
 		{"T16 stop while booting", Booting, Destroying, Event{Kind: EvStop}, 0, store.Document{}, config.Controller{}, "manual", true},
 		{"T16 budget while creating with id", Creating, Destroying, Event{Kind: EvBudgetExhausted}, 0, store.Document{}, config.Controller{}, "budget", true},
-		{"T20 idle timer drains", Ready, Draining, Event{Kind: EvIdleTimer}, 0, instanceWith(&past), config.Controller{}, "idle", true},
+		{"T20 idle timer drains", Ready, Draining, Event{Kind: EvIdleTimer}, 0, instanceWith(&past), config.Controller{IdleShutdownEnabled: true}, "idle", true},
 		{"T20/T21 tick, idle due and lifetime due: idle wins", Ready, Draining, Event{Kind: EvTick}, 0, instanceWith(&past), cfg, "idle", true},
 		{"T21 tick, idle not due, lifetime due", Ready, Draining, Event{Kind: EvTick}, 0, instanceWith(&future), cfg, "lifetime", true},
 		{"T21 lifetime drains regardless of inFlight", Serving, Draining, Event{Kind: EvTick}, 3, instanceWith(&future), cfg, "lifetime", true},

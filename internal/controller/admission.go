@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -95,9 +94,8 @@ func computeIdleDeadline(readyAt, lastInferenceFinishedAt *time.Time, timeout ti
 }
 
 // ObserveFirstToken records the first_token stage once per generation;
-// a later call for the same generation is a no-op. mu is held for the
-// whole check so a generation change can't land between the read and
-// the write.
+// mu is held for the whole check so a generation change can't land
+// between the read and the write.
 func (c *Controller) ObserveFirstToken(gen int64, d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -137,6 +135,7 @@ func (c *Controller) suspectProbe(gen int64, conn interface {
 		c.suspect = false
 		c.mu.Unlock()
 	}()
+	ctx := c.effCtx()
 	seed, err := c.deps.WorkerSeed()
 	if err != nil {
 		if c.deps.Log != nil {
@@ -148,9 +147,13 @@ func (c *Controller) suspectProbe(gen int64, conn interface {
 	misses := 0
 	for i := 0; i < 2; i++ {
 		if i == 1 {
-			<-c.deps.Clock.After(5 * time.Second)
+			select {
+			case <-c.deps.Clock.After(5 * time.Second):
+			case <-ctx.Done():
+				return
+			}
 		}
-		status, err := c.deps.Worker.Probe(context.Background(), conn.RoundTripper(), key, c.deps.ModelAlias)
+		status, err := c.deps.Worker.Probe(ctx, conn.RoundTripper(), key, c.deps.ModelAlias)
 		if err != nil || status != ProbeReady {
 			misses++
 			continue

@@ -80,8 +80,6 @@ func holdsConn(s State) bool {
 	}
 }
 
-func inStartup(s State) bool { return s == Creating || s == Booting || s == Loading }
-
 func inService(s State) bool { return s == Ready || s == Serving }
 
 // processEvent is the one path through decide for the loop and for
@@ -92,7 +90,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	defer c.procMu.Unlock()
 
 	c.mu.Lock()
-	state, inFlight, failing := c.state, c.inFlight, c.failing
+	state, inFlight := c.state, c.inFlight
 	c.mu.Unlock()
 
 	doc, _, err := c.deps.Store.Load(ctx)
@@ -106,7 +104,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	now := c.deps.Clock.Now()
 	ev.Reason = c.gateReason(state, ev, doc, now)
 	next, mutate, effects := decide(state, ev, Facts{
-		Now: now, Doc: doc, InFlight: inFlight, Failing: failing,
+		Now: now, Doc: doc, InFlight: inFlight,
 		Cfg: c.deps.Config, Budget: c.deps.Budget,
 	})
 
@@ -164,6 +162,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		c.since = now
 		setGPUState(PublicState(next, c.failing))
 	}
+	recordDocGauges(doc, next, c.inFlight, now)
 	c.mu.Unlock()
 	if next == Searching {
 		c.setLastError("")
@@ -200,17 +199,18 @@ func isUnavailableReason(reason string) bool {
 	}
 }
 
-// gateReason is the Start/Tick/Gone admission gate: budget, the hourly
-// attempts cap, the no_offer search backoff (a real denial), then the
-// create backoff, which only paces and is never a denial.
+// gateReason is the admission gate: budget and the attempts cap apply
+// both to a fresh Start/Tick/Gone and to an offer arriving while
+// Searching (T6's own recheck); no_offer/create backoff apply only to the former.
 func (c *Controller) gateReason(state State, ev Event, doc store.Document, now time.Time) string {
 	if ev.Reason != "" {
 		return ev.Reason
 	}
-	if ev.Kind != EvStart && ev.Kind != EvTick && ev.Kind != EvGone {
+	offer := state == Searching && ev.Kind == EvOfferChosen
+	if !offer && ev.Kind != EvStart && ev.Kind != EvTick && ev.Kind != EvGone {
 		return ""
 	}
-	if state != Idle && state != Draining && state != Destroying {
+	if !offer && state != Idle && state != Draining && state != Destroying {
 		return ""
 	}
 	if c.deps.Budget != nil {
@@ -224,6 +224,9 @@ func (c *Controller) gateReason(state State, ev Event, doc store.Document, now t
 	a := doc.AttemptsThisHour
 	if a.Hour == now.UTC().Format("2006-01-02T15") && a.Count >= c.deps.Config.MaxProvisionAttemptsPerHour {
 		return "attempts_exhausted"
+	}
+	if offer {
+		return ""
 	}
 	c.noOfferMu.Lock()
 	noOfferUntil := c.noOfferUntil
@@ -253,12 +256,12 @@ func noOfferBackoffEnds(state, next State, ev Event, now time.Time) (time.Time, 
 func (c *Controller) syncTimers(prev, next State, doc store.Document) {
 	now := c.deps.Clock.Now()
 
-	if inStartup(next) && !inStartup(prev) {
+	if isCreatingBootingOrLoading(next) && !isCreatingBootingOrLoading(prev) {
 		c.armTimer(timerPoll, now.Add(pollInterval))
 		if doc.Instance != nil && c.deps.Config.StartupTimeout > 0 {
 			c.armTimer(timerStartup, doc.Instance.CreatedAt.Add(c.deps.Config.StartupTimeout))
 		}
-	} else if !inStartup(next) {
+	} else if !isCreatingBootingOrLoading(next) {
 		c.clearTimer(timerStartup)
 	}
 
@@ -292,7 +295,7 @@ func (c *Controller) syncTimers(prev, next State, doc store.Document) {
 }
 
 func (c *Controller) armIdle(doc store.Document) {
-	if doc.Instance != nil && doc.Instance.IdleDeadline != nil {
+	if c.deps.Config.IdleShutdownEnabled && doc.Instance != nil && doc.Instance.IdleDeadline != nil {
 		c.armTimer(timerIdle, *doc.Instance.IdleDeadline)
 	}
 }
@@ -314,8 +317,10 @@ func (c *Controller) flushAndRun(mutate func(*store.Document) error) func(*store
 		if at, pending := c.pendingActivity(); pending && d.Instance != nil {
 			t := at
 			d.Instance.LastInferenceFinishedAt = &t
-			if dl := computeIdleDeadline(d.Instance.ReadyAt, &t, c.deps.Config.IdleShutdownTimeout); !dl.IsZero() {
-				d.Instance.IdleDeadline = &dl
+			if c.deps.Config.IdleShutdownEnabled {
+				if dl := computeIdleDeadline(d.Instance.ReadyAt, &t, c.deps.Config.IdleShutdownTimeout); !dl.IsZero() {
+					d.Instance.IdleDeadline = &dl
+				}
 			}
 		}
 		return mutate(d)
@@ -528,7 +533,7 @@ func (c *Controller) pollTick(ctx context.Context) {
 		effCtx := c.effCtx()
 		c.spawn(func() { dispatchProbe(effCtx, c, effProbe{gen: gen}) })
 	}
-	if inStartup(state) {
+	if isCreatingBootingOrLoading(state) {
 		c.armTimer(timerPoll, c.deps.Clock.Now().Add(pollInterval))
 	}
 }

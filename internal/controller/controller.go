@@ -95,20 +95,19 @@ const (
 	timerMetricsPull
 )
 
-// Note: the suspect probe (ReportUpstreamFailure, Task 5) runs on its
-// own goroutine against c.deps.Clock.After directly — it is not a
+// Note: the suspect probe (ReportUpstreamFailure) runs on its own
+// goroutine against c.deps.Clock.After directly — it is not a
 // table-scheduled timer, so there is no timerSuspect.
 
 // Controller runs the single-instance GPU lifecycle state machine. One
-// loop goroutine (started by Run, Task 6) is the only caller of
-// Provider and Dialer; every other method takes mu only for the memory
-// fields it touches.
+// loop goroutine (started by Run) is the only caller of Provider and
+// Dialer; every other method takes mu only for the memory fields it touches.
 type Controller struct {
 	deps Deps
 
 	procMu sync.Mutex // serializes processEvent between the loop and Start/Stop callers
 
-	runCtx context.Context // set once by Run (Task 6); effect goroutines use this, never a caller's request ctx
+	runCtx context.Context // set once by Run; effect goroutines use this, never a caller's request ctx
 
 	mu          sync.Mutex
 	state       State
@@ -129,9 +128,8 @@ type Controller struct {
 	events chan Event
 	wake   chan struct{}
 
-	stagesMu       sync.Mutex
-	stages         map[string]time.Duration // completed stage durations, for Snapshot.Stages and the coldstart histogram (Task 6, Task 9)
-	stageEnteredAt map[string]time.Time     // open stage-boundary markers the loop stamps on each state transition (Task 6)
+	stagesMu sync.Mutex
+	stages   map[string]time.Duration // completed stage durations, for Snapshot.Stages and the coldstart histogram
 
 	lastErrorMu sync.Mutex
 	lastError   string
@@ -161,7 +159,7 @@ type Controller struct {
 }
 
 // New validates the configuration and builds a Controller; it does not
-// start the loop (Run does, Task 6) or touch the provider or the store.
+// start the loop (Run does) or touch the provider or the store.
 func New(d Deps) (*Controller, error) {
 	if d.Config.ProvisioningMode != "explicit" {
 		return nil, fmt.Errorf("controller: provisioningMode %q not supported", d.Config.ProvisioningMode)
@@ -178,16 +176,13 @@ func New(d Deps) (*Controller, error) {
 		events:         make(chan Event, 64),
 		wake:           make(chan struct{}, 1),
 		stages:         make(map[string]time.Duration),
-		stageEnteredAt: make(map[string]time.Time),
 		orphanObserved: make(map[provider.InstanceID]int),
 	}, nil
 }
 
-// postEvent queues an event for the loop; effect dispatchers (Task 4,
-// Task 7) call this from their own goroutine, never the loop goroutine
-// itself, so it must never block it. The channel is large enough
-// (64) that a blocking send here would mean something is already
-// badly wrong, which is the signal a full channel should give.
+// postEvent queues an event for the loop; effect dispatchers call this
+// from their own goroutine, never the loop goroutine itself, so it must
+// never block it — a full 64-slot channel means something is already badly wrong.
 func (c *Controller) postEvent(e Event) { c.events <- e }
 
 // spawn runs fn on its own goroutine, counted as in flight for fn's

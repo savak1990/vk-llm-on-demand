@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
+	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
 // Status is a memory copy; it reads the store (never the provider) to
@@ -58,11 +59,8 @@ func (c *Controller) Status() Snapshot {
 	if doc.Instance.IdleDeadline != nil {
 		snap.UntilIdleShutdown = doc.Instance.IdleDeadline.Sub(c.deps.Clock.Now())
 	}
-	for _, e := range doc.Ledger.Entries {
-		if e.Gen == doc.Generation && e.End == nil {
-			snap.SpendInstanceUSD = e.EstUSD
-			break
-		}
+	if e, ok := openEntry(doc); ok {
+		snap.SpendInstanceUSD = e.EstUSD
 	}
 	if snap.LastError == "" {
 		snap.LastError = c.getLastError()
@@ -75,6 +73,18 @@ func (c *Controller) Status() Snapshot {
 	}
 	c.stagesMu.Unlock()
 	return snap
+}
+
+// openEntry returns the current generation's still-open ledger entry,
+// if any; Status and the per-instance spend gate both read a
+// document's running spend through this one lookup.
+func openEntry(doc store.Document) (store.LedgerEntry, bool) {
+	for _, e := range doc.Ledger.Entries {
+		if e.Gen == doc.Generation && e.End == nil {
+			return e, true
+		}
+	}
+	return store.LedgerEntry{}, false
 }
 
 // setLastError/getLastError hold the controller-level last error, the

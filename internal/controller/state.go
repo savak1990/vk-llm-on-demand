@@ -10,7 +10,7 @@ import (
 )
 
 // State is the controller's internal stage; PublicState maps it to the
-// 8 names ADR 0011 §6 exposes externally.
+// 8 names exposed externally.
 type State int
 
 const (
@@ -51,7 +51,7 @@ func (s State) String() string {
 }
 
 // PublicState is the externally reported state and the metric label
-// source (Design Decision 6 — never State.String() for the metric).
+// source (never State.String() for the metric).
 func PublicState(s State, failing bool) string {
 	switch s {
 	case Idle:
@@ -111,46 +111,30 @@ type Event struct {
 	Duplicate  bool
 	HostKey    string
 	Status     provider.InstanceStatus
-	RawStatus  string
 	SSHHost    string
 	SSHPort    int
 }
 
-// Facts is everything decide reads; it never touches the clock, the
-// store, or the provider itself. Doc is a snapshot — decide picks a row
-// from it, but the mutate closure it returns re-validates against
-// whatever document Transition actually hands it. Cfg and Budget let a
-// row read a config duration or call Budget.OpenEntry/CloseEntry
-// inside its own CAS.
+// Facts is everything decide reads, snapshotted before its own CAS; the
+// mutate closure it returns re-validates against whatever document
+// Transition actually hands it.
 type Facts struct {
 	Now      time.Time
 	Doc      store.Document
 	InFlight int
-	Failing  bool
 
 	Cfg    config.Controller
 	Budget Budget
 }
 
 // Effect is a closed set of event-derived requests the loop dispatches
-// as goroutines (Architecture point 2); decide never calls Provider,
-// Dialer or Worker itself.
+// as goroutines; decide never calls Provider, Dialer or Worker itself.
 type Effect interface{ effect() }
 
-// effList and effBalance are deliberately absent: reconcile (Task 7)
-// compares a whole instance list against the document, which doesn't
-// fit a single-event decide() result, so it runs as its own async
-// worker and calls Provider.ListInstances/Balance directly — it only
-// feeds back into this Effect pipeline via postEvent on findings that
-// affect the active generation (vanish, terminal status, lost).
-//
-// effDestroy and effCloseConn are also deliberately absent: both are
-// generic post-transition hooks keyed on the (state, next) class
-// change itself (Task 6's processEvent), not something any individual
-// transition row has to remember to return — "entering Destroying
-// arms the destroy-retry timer" and "leaving a Conn-holding state
-// closes it" apply uniformly to every row that does either, so no row
-// needs to ask for them by name.
+// effList, effBalance, effDestroy and effCloseConn are deliberately
+// absent: reconcile calls Provider.ListInstances/Balance directly from
+// its own async worker, and destroy/close-conn are generic hooks keyed
+// on the (state, next) class change itself, not a per-row effect.
 type effSearch struct{ filter provider.OfferFilter }
 type effCreate struct {
 	offer provider.Offer

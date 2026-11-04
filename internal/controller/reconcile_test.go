@@ -80,6 +80,30 @@ func TestReconcilePrunesExpiredDenylistAndKeepsLive(t *testing.T) {
 	}
 }
 
+// MaxInstanceSpendUSD has its own cap, independent of the monthly one:
+// an open ledger entry already at or past it must raise
+// EvBudgetExhausted even though the monthly total is nowhere near its cap.
+func TestReconcileMaxInstanceSpendExceededPostsBudgetExhausted(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	c.deps.Config.MaxInstanceSpendUSD = 1.0
+	now := c.deps.Clock.Now()
+	doc, _, _ := c.deps.Store.Load(context.Background())
+	doc.Generation = 3
+	doc.Instance = &store.Instance{State: Ready.String(), Label: "vkllm:iid:3"}
+	doc.Ledger.Month = now.Format("2006-01")
+	doc.Ledger.Entries = []store.LedgerEntry{{Gen: 3, Start: now.Add(-2 * time.Hour), DPH: 0.60}}
+	c.deps.Store.(interface{ Put(store.Document) }).Put(doc)
+
+	c.reconcilePruneAndBudget(context.Background(), provider.Money(100_000_000), true)
+
+	if ev, ok := recvEvent(t, c); !ok || ev.Kind != EvTick {
+		t.Fatalf("first event = %+v, ok=%v, want EvTick", ev, ok)
+	}
+	if ev, ok := recvEvent(t, c); !ok || ev.Kind != EvBudgetExhausted || ev.Reason != "budget_exhausted" {
+		t.Fatalf("second event = %+v, ok=%v, want EvBudgetExhausted{budget_exhausted}", ev, ok)
+	}
+}
+
 func mustList(t *testing.T, prov *fakeprovider.Fake) []provider.Instance {
 	t.Helper()
 	instances, err := prov.ListInstances(context.Background(), "vkllm:iid:")
@@ -215,7 +239,7 @@ func TestReconcileTable(t *testing.T) {
 			edit:      ready(3, "9"),
 			instances: []provider.Instance{{ID: 9, Label: "vkllm:iid:3", Status: provider.StatusExited, RawStatus: "exited"}},
 			passes:    2, wantDestroy: 0, wantGen: 3,
-			wantEvents: []Event{{Kind: EvProviderObserved, Gen: 3, Status: provider.StatusExited, RawStatus: "exited"}},
+			wantEvents: []Event{{Kind: EvProviderObserved, Gen: 3, Status: provider.StatusExited}},
 		},
 		{
 			name:      "running_active_posts_nothing",

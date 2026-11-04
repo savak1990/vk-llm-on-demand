@@ -740,7 +740,7 @@ func TestTransitionTable(t *testing.T) {
 	})
 
 	t.Run("T18_T19_admit_and_requestend_are_not_decide_rows", func(t *testing.T) {
-		t.Skip("Admit/RequestEnd act directly under the admission mutex (R16); decide has no EventKind for them")
+		t.Skip("Admit/RequestEnd act directly under the admission mutex; decide has no EventKind for them")
 	})
 
 	t.Run("T20_idle_deadline_reached_drains", func(t *testing.T) {
@@ -748,7 +748,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredRunning
 		past := now.Add(-time.Second)
 		doc.Instance = &store.Instance{State: Ready.String(), IdleDeadline: &past}
-		next, mutate, effects := decide(Ready, Event{Kind: EvIdleTimer}, Facts{Now: now, Doc: doc, InFlight: 0})
+		next, mutate, effects := decide(Ready, Event{Kind: EvIdleTimer}, Facts{Now: now, Doc: doc, InFlight: 0, Cfg: config.Controller{IdleShutdownEnabled: true}})
 		if next != Draining || mutate == nil || effects != nil {
 			t.Fatalf("T20: next=%v mutate=%v effects=%v", next, mutate != nil, effects)
 		}
@@ -766,7 +766,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredRunning
 		past := now.Add(-time.Second)
 		doc.Instance = &store.Instance{State: Ready.String(), IdleDeadline: &past}
-		_, mutate, _ := decide(Ready, Event{Kind: EvIdleTimer}, Facts{Now: now, Doc: doc, InFlight: 0})
+		_, mutate, _ := decide(Ready, Event{Kind: EvIdleTimer}, Facts{Now: now, Doc: doc, InFlight: 0, Cfg: config.Controller{IdleShutdownEnabled: true}})
 		live := doc
 		future := now.Add(time.Hour)
 		live.Instance.IdleDeadline = &future // deadline moved by a RequestEnd between decide and the CAS
@@ -780,7 +780,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredRunning
 		past := now.Add(-time.Second)
 		doc.Instance = &store.Instance{State: Ready.String(), IdleDeadline: &past}
-		_, mutate, _ := decide(Ready, Event{Kind: EvIdleTimer}, Facts{Now: now, Doc: doc, InFlight: 0})
+		_, mutate, _ := decide(Ready, Event{Kind: EvIdleTimer}, Facts{Now: now, Doc: doc, InFlight: 0, Cfg: config.Controller{IdleShutdownEnabled: true}})
 		live := doc
 		live.Instance = &store.Instance{State: Destroying.String(), IdleDeadline: &past} // a concurrent failure already destroyed it
 		if err := mutate(&live); !errors.Is(err, errStale) {
@@ -883,7 +883,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Instance = &store.Instance{State: Ready.String(), Label: "vkllm:iid:3"}
 		next, mutate, effects := decide(Ready, Event{Kind: EvWorkerFailed, Gen: 3, Err: errors.New("probe failed")}, Facts{Now: now, Doc: doc})
 		if next != Destroying || mutate == nil || effects != nil {
-			t.Fatalf("T24: next=%v mutate=%v effects=%v, want Destroying/non-nil/nil (closing the Conn is Task 6's generic hook)", next, mutate != nil, effects)
+			t.Fatalf("T24: next=%v mutate=%v effects=%v, want Destroying/non-nil/nil (closing the Conn is a generic hook, not this row's own job)", next, mutate != nil, effects)
 		}
 		got := doc
 		if err := mutate(&got); err != nil {

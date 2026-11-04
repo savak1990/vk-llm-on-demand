@@ -26,8 +26,8 @@ func parseLabel(label string) (installationID string, gen int64, ok bool) {
 }
 
 // mayDestroy is true only for a label under our own installation id
-// whose generation is no newer than the one just read (C-11); a
-// foreign or unparsable label is never a destroy target.
+// whose generation is no newer than the one just read; a foreign or
+// unparsable label is never a destroy target.
 func mayDestroy(label, installationID string, docGeneration int64) bool {
 	id, gen, ok := parseLabel(label)
 	if !ok || id != installationID {
