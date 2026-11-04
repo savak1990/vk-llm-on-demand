@@ -8,7 +8,7 @@ adrs: ["0012", "0010", "0011", "0009"]
 
 # 055 — Management API
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** READY 2026-11-04. Written 2026-11-01 before any code exists; the result field, nextCreateAt and the 4-value reason enum were clarified before promotion.
 
 **Complexity:** M
 **Risk:** medium — a management token can rent a GPU, so auth, rate limit and idempotency guard money
@@ -62,9 +62,7 @@ Port 9090 never serves it (ADR 0012 §6).
 | `GET /api/v1/gpu/cost` | none | 200 cost document | 401; 403; 429; 500 |
 | any other path or method under `/api/v1/` | — | — | 404 `not_found` / 405 `method_not_allowed`, after auth |
 
-The HTTP status carries `already_running`/`already_stopped` (200) versus
-`accepted` (202); no 409 is ever returned (plan R-O). `503 gpu_unavailable`
-carries no `Retry-After`.
+The `result` field (in start/stop responses) and HTTP status are equivalent and redundant by design: both carry `already_running`/`already_stopped` (200) versus `accepted` (202); no 409 is ever returned (plan R-O). `503 gpu_unavailable` carries no `Retry-After`.
 
 ### Status document (ADR 0012 §1, verbatim field set)
 
@@ -76,6 +74,7 @@ carries no `Retry-After`.
   "model": {"alias": "qwen3.6-35b-a3b", "contextSize": 32768},
   "ready": true, "uptimeSeconds": 1830,
   "lastInferenceFinishedAt": "…", "idleDeadline": "…", "secondsUntilIdleShutdown": 1440,
+  "nextCreateAt": null,
   "cost": {"estimatedInstanceUSD": 0.36, "estimatedMonthUSD": 3.42, "budgetMonthUSD": 30},
   "unavailable": "", "installationId": "4f2c1a9b0e77", "labelPrefix": "vkllm:4f2c1a9b0e77:"
 }
@@ -291,8 +290,8 @@ CORE-080 and CORE-150.
 |---|---|---|---|
 | Exact `controller.Snapshot` field names (public state, desired, instance block, `LastInferenceFinishedAt`, `IdleDeadline`, cost block, `Unavailable`) and the Start-denial error value | mgmt maps them field by field | CORE-050 | snapshot carries the public state string per ADR 0011 §6; denial error wraps `controller.ErrUnavailable` |
 | Is `no_offer` known synchronously on `Start`, or only later in status? | FR-2.6 wants 503, FR-2.5 wants < 200 ms | CORE-050 | 503 only when the snapshot already holds `no_offer` from the last search; otherwise 202 and `unavailable` in status; 202 may also be returned during a create-retry backoff (distinct from `no_offer`-based denial) |
-| Should 2xx bodies carry a `result` field (`accepted`, `already_running`, `already_stopped`)? | ADR 0012 §1 lists the codes but no field | 055 | start/stop responses carry `result`: 200 → `"already_running"`/`"already_stopped"`; 202 → `"accepted"`; status and cost responses do not |
-| `nextCreateAt` field on status document | mgmt needs to advertise when start will be allowed again | 055 | nullable RFC 3339 timestamp, rendered `null` unless the controller currently holds a future next-allowed-create time |
+| Should 2xx bodies carry a `result` field (`accepted`, `already_running`, `already_stopped`)? | ADR 0012 §1 lists the codes but no field | CORE-055 | start/stop responses carry `result`: 200 → `"already_running"`/`"already_stopped"`; 202 → `"accepted"`; status and cost responses do not |
+| `nextCreateAt` field on status document | mgmt needs to advertise when start will be allowed again | CORE-055 | nullable RFC 3339 timestamp, rendered `null` unless the controller currently holds a future next-allowed-create time |
 | `uptimeSeconds`: since `createdAt` or `readyAt`? | ADR 0012's example does not say | ADR 0012 clarification | `createdAt` (billed time, research §1.5) |
 | Start/stop on `FAILED` | ADR 0011 §6 has it, ADR 0012 §1 does not | CORE-050 | treated like `DELETING`: 202 |
 | Cost field names | CORE-100 is being rewritten | CORE-100 | the list above |
