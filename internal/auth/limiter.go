@@ -13,7 +13,7 @@ type bucket struct {
 }
 
 // Limiter is a per-keyID token bucket; its own instance, never shared
-// with another surface's limiter (ADR 0012 §1).
+// with another surface's limiter.
 type Limiter struct {
 	mu       sync.Mutex
 	buckets  map[string]*bucket
@@ -32,7 +32,7 @@ func NewLimiter(rpm int, c clock.Clock) *Limiter {
 }
 
 // Allow reports whether keyID has a token now; on false, retryAfter is
-// the time to the next token, floored at 1 second (spec's own minimum).
+// the time to the next token, floored at 1 second so callers never poll faster than once a second.
 func (l *Limiter) Allow(keyID string) (ok bool, retryAfter time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
