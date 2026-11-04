@@ -423,10 +423,10 @@ left to be rediscovered. None blocks DONE.
    correctly enforced before any `CreateInstance` call either way, so there
    is no cost or correctness impact — only an undercounted metric.
 8. **Other metrics-only gaps.** The orphan-destroyed counter can double-count
-   under rare provider-list-lag timing. A coldstart per-stage-timing field
-   (`stageEnteredAt`) is never populated in production — only `first_token`
-   is observed, via `ObserveFirstToken` — and AC1's test documents this as a
-   known shortfall rather than asserting it. A denied `Start` that happens to
+   under rare provider-list-lag timing. Per-stage coldstart timing is never
+   populated in production — only `first_token` is observed, via
+   `ObserveFirstToken` — and AC1's test documents this as a known shortfall
+   rather than asserting it. A denied `Start` that happens to
    hit a store CAS-retry-exhausted condition (inside `processEvent`, distinct
    from `callerEvent`'s own `errStale` retry loop) returns no error and no
    reason to its caller; this needs 8 consecutive write conflicts and is very
