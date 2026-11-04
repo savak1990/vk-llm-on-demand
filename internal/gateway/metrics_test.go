@@ -32,9 +32,9 @@ func TestStatusLabelBucketsUnenumeratedCodes(t *testing.T) {
 	}
 }
 
-// TestUnenumeratedUpstreamCodeMetricBucketed closes I3: an upstream 4xx
-// outside the enumerated set must not grow the requests_total series, even
-// though the client still receives the exact status the upstream sent.
+// TestUnenumeratedUpstreamCodeMetricBucketed: an upstream 4xx outside
+// the enumerated label set must not grow the requests_total series,
+// even though the client still receives the exact status sent upstream.
 func TestUnenumeratedUpstreamCodeMetricBucketed(t *testing.T) {
 	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 422, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"m","type":"invalid_request_error","code":"unprocessable"}}`))}, nil
@@ -370,5 +370,37 @@ func TestLogRedactionFullSuite(t *testing.T) {
 	// sample count itself is the right assertion for "always 0".
 	if got, err := testutil.GatherAndCount(reg, "vkllm_gateway_cold_start_outcomes_total"); err != nil || got != 0 {
 		t.Errorf("cold_start_outcomes_total sample count = %d, err = %v, want 0 (on-demand-only metric)", got, err)
+	}
+
+	allowedRoute := map[string]bool{"chat_completions": true, "models": true, "other": true}
+	allowedCode := map[string]bool{
+		"200": true, "400": true, "401": true, "403": true, "404": true, "405": true,
+		"413": true, "429": true, "499": true, "500": true, "502": true, "503": true,
+		"504": true, "stream_error": true,
+	}
+	allowedReason := map[string]bool{"missing": true, "malformed": true, "unknown_key": true, "wrong_surface": true}
+	metricFamilies, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, mf := range metricFamilies {
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				switch l.GetName() {
+				case "route":
+					if !allowedRoute[l.GetValue()] {
+						t.Errorf("%s: route label %q outside the enumerated set", mf.GetName(), l.GetValue())
+					}
+				case "code":
+					if !allowedCode[l.GetValue()] {
+						t.Errorf("%s: code label %q outside the enumerated set", mf.GetName(), l.GetValue())
+					}
+				case "reason":
+					if !allowedReason[l.GetValue()] {
+						t.Errorf("%s: reason label %q outside the enumerated set", mf.GetName(), l.GetValue())
+					}
+				}
+			}
+		}
 	}
 }

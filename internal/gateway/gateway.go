@@ -220,10 +220,8 @@ func setCodeOverride(w http.ResponseWriter, code string) {
 	}
 }
 
-// recorderOf returns w's *statusRecorder so a handler can stash fields
-// accessLogAndMetrics reads back later. Outside the middleware chain (a
-// test calling a handler directly) w is not a *statusRecorder, so this
-// returns a scratch value the caller can still write to safely.
+// recorderOf returns w's *statusRecorder, or a scratch value if w is
+// not one (a test calling a handler directly, outside the chain).
 func recorderOf(w http.ResponseWriter) *statusRecorder {
 	if sr, ok := w.(*statusRecorder); ok {
 		return sr

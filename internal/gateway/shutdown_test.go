@@ -156,13 +156,35 @@ func TestShutdownDrainsPlain(t *testing.T) {
 	}
 }
 
+// releaseBody signals once reading starts, then blocks on a test-owned
+// channel instead of ctx.Done(), so cancelActive() can never unblock it;
+// this keeps the active handler running for as long as the test needs.
+type releaseBody struct {
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (b *releaseBody) Read(_ []byte) (int, error) {
+	select {
+	case b.reached <- struct{}{}:
+	default:
+	}
+	<-b.release
+	return 0, errors.New("connection reset")
+}
+func (b *releaseBody) Close() error { return nil }
+
 // TestShutdownReturnsCtxErrOnExpiry confirms Shutdown reports its own
 // deadline expiring instead of masking it as success: a caller relying
 // on the return value to know draining fully finished must see the error.
+// The active handler is held open past Shutdown's return (via a
+// test-owned release, not ctx) so the final select has exactly one
+// ready case, never a race between it and the drain finishing.
 func TestShutdownReturnsCtxErrOnExpiry(t *testing.T) {
 	reached := make(chan struct{}, 1)
-	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: &reachedBody{ctx: r.Context(), reached: reached}}, nil
+	release := make(chan struct{})
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: &releaseBody{reached: reached, release: release}}, nil
 	})
 
 	d := testDeps(t)
@@ -182,7 +204,7 @@ func TestShutdownReturnsCtxErrOnExpiry(t *testing.T) {
 
 	// A context that is already expired skips the cutoff-wait branch and
 	// its Done() is already closed, so Shutdown's final select returns
-	// ctx.Err() immediately without ever cancelling the active handler.
+	// ctx.Err() immediately without waiting on the still-active handler.
 	ctx, cancel := context.WithTimeout(context.Background(), 0)
 	defer cancel()
 	<-ctx.Done()
@@ -191,6 +213,7 @@ func TestShutdownReturnsCtxErrOnExpiry(t *testing.T) {
 		t.Fatalf("Shutdown error = %v, want context.DeadlineExceeded", err)
 	}
 
+	close(release)
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -221,8 +244,8 @@ func (b *shutdownStreamBody) Read(p []byte) (int, error) {
 }
 func (b *shutdownStreamBody) Close() error { return nil }
 
-// TestShutdownCancelsActiveStreamAtCutoff closes AC18 on a fake clock: an
-// open stream must get its in-stream shutting_down row exactly at the
+// TestShutdownCancelsActiveStreamAtCutoff: on a fake clock, an open
+// stream must get its in-stream shutting_down row exactly at the
 // cutoff (deadline - 5s), not merely "eventually" once cancelActive runs.
 func TestShutdownCancelsActiveStreamAtCutoff(t *testing.T) {
 	reached := make(chan struct{}, 1)
@@ -271,5 +294,11 @@ func TestShutdownCancelsActiveStreamAtCutoff(t *testing.T) {
 	}
 	if _, endCalls := fc.snapshot(); len(endCalls) != 1 {
 		t.Fatalf("RequestEnd calls = %d, want 1", len(endCalls))
+	}
+	fc.mu.Lock()
+	gotFailure := len(fc.upstreamErr)
+	fc.mu.Unlock()
+	if gotFailure != 0 {
+		t.Fatalf("ReportUpstreamFailure called %d times, want 0 (shutdown is not an upstream failure)", gotFailure)
 	}
 }

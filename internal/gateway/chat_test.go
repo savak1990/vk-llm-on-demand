@@ -91,10 +91,9 @@ func TestClampMaxTokensRejectsNonInteger(t *testing.T) {
 	}
 }
 
-// TestClampEndToEndLogsAndUpstream closes AC4: a request over the cap
-// must reach the upstream clamped to the cap, and the access log line
-// must carry max_tokens_clamped=true so an operator can see clamping
-// happened without reading the proxied body.
+// TestClampEndToEndLogsAndUpstream: a request over the cap must reach
+// the upstream clamped, with every observability field this path owns
+// visible on the access log line, not just max_tokens_clamped.
 func TestClampEndToEndLogsAndUpstream(t *testing.T) {
 	var gotBody []byte
 	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
@@ -127,8 +126,35 @@ func TestClampEndToEndLogsAndUpstream(t *testing.T) {
 	if maxTokens != 8192 {
 		t.Fatalf("upstream max_tokens = %d, want 8192", maxTokens)
 	}
-	if !strings.Contains(buf.String(), "max_tokens_clamped=true") {
-		t.Fatalf("access log missing max_tokens_clamped=true: %s", buf.String())
+
+	logged := buf.String()
+	for _, want := range []string{
+		"max_tokens_clamped=true", "max_tokens_requested=100000",
+		"instance_gen=1", "stream=false", "duration_ms=",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("access log missing %q: %s", want, logged)
+		}
+	}
+}
+
+// TestBackendUnavailableLogsOutcome confirms the access log's outcome
+// field reports backend_unavailable when Admit refuses a request, not
+// just the numeric 503 status every other 503 would also carry.
+func TestBackendUnavailableLogsOutcome(t *testing.T) {
+	var buf bytes.Buffer
+	d := testDeps(t)
+	d.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	d.Controller = &fakeController{admitErr: controller.ErrBackendUnavailable}
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	g.Handler().ServeHTTP(httptest.NewRecorder(), chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+
+	if !strings.Contains(buf.String(), "outcome=backend_unavailable") {
+		t.Fatalf("access log missing outcome=backend_unavailable: %s", buf.String())
 	}
 }
 
@@ -141,6 +167,13 @@ func TestModelMismatch404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 (body %q)", rec.Code, rec.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q does not parse as errorBody: %v", rec.Body.String(), err)
+	}
+	if body.Error.Code != "model_not_found" {
+		t.Fatalf("body code = %q, want %q", body.Error.Code, "model_not_found")
 	}
 	fc := g.deps.Controller.(*fakeController)
 	if calls, _ := fc.snapshot(); len(calls) != 0 {

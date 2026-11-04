@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,31 @@ func TestBodyLimit413(t *testing.T) {
 
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413 (body %q)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestBodyLimit413OnChatRoute covers the real chat route, not just a
+// test-only echo handler: handleChatCompletions must map MaxBytesReader's
+// error to 413 request_too_large, not swallow it into a 400.
+func TestBodyLimit413OnChatRoute(t *testing.T) {
+	g := newTestGateway(t)
+	h := g.Handler()
+
+	body := bytes.Repeat([]byte("a"), int(g.deps.Config.MaxBodyBytes)+1)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (body %q)", rec.Code, rec.Body.String())
+	}
+	var body2 errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body2); err != nil {
+		t.Fatalf("body %q does not parse as errorBody: %v", rec.Body.String(), err)
+	}
+	if body2.Error.Code != "request_too_large" {
+		t.Fatalf("body code = %q, want %q", body2.Error.Code, "request_too_large")
 	}
 }
 

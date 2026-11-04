@@ -14,13 +14,9 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/worker"
 )
 
-// clampMaxTokens clamps max_tokens and max_completion_tokens independently,
-// mutating body in place: each field present above the cap, or <= 0 (which
-// llama-server reads as "unlimited", defeating the cap entirely), is set to
-// the cap; a field within the cap is left untouched under its own name. If
-// neither field is present, max_tokens is set to the cap. clamped is true
-// whenever any field was changed or added; requested is the original value
-// logged (max_tokens's if present, else max_completion_tokens's, else 0).
+// clampMaxTokens clamps each field independently and mutates body in
+// place; <= 0 is treated as absent because llama-server reads that as
+// "unlimited", the exact bypass this cap exists to prevent.
 func clampMaxTokens(body map[string]json.RawMessage, maxCap int) (clamped bool, requested int, err error) {
 	mtPresent, mtVal, mtClamped, err := clampField(body, "max_tokens", maxCap)
 	if err != nil {
@@ -195,10 +191,9 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 	}
 }
 
-// cappedBuffer tees a response body into a bounded buffer for a
-// usage.completion_tokens parse; io.Copy requires a tee target to report
-// every byte as written, so Write always returns len(p), silently
-// discarding bytes once the cap is reached.
+// cappedBuffer tees into a bounded buffer for a usage parse; io.Copy
+// requires a tee target to report every byte written, so Write always
+// returns len(p), silently discarding bytes once the cap is reached.
 type cappedBuffer struct {
 	buf bytes.Buffer
 	cap int64
@@ -259,10 +254,9 @@ func isJSONString(raw json.RawMessage) bool {
 	return len(raw) > 0 && json.Unmarshal(raw, &s) == nil && s != ""
 }
 
-// copyUpstream4xx passes through a client-error body only when it already
-// matches R5's schema exactly (all three fields non-empty strings);
-// anything else is normalized, keeping the upstream message where there
-// is one, so the client always gets a parseable error either way.
+// copyUpstream4xx passes a client-error body through only when it
+// already has all three fields as non-empty strings; anything else is
+// normalized, keeping the upstream message where there is one.
 func (g *Gateway) copyUpstream4xx(w http.ResponseWriter, resp *http.Response) {
 	raw, _ := io.ReadAll(resp.Body)
 	var probe upstream4xxProbe

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
@@ -111,6 +112,41 @@ func TestUpstreamErrorMappingPlain(t *testing.T) {
 		if c.state == controller.Draining && rec.Header().Get("Retry-After") != "" {
 			t.Errorf("%s: Retry-After set, want unset (backend_unavailable never carries one)", c.name)
 		}
+	}
+}
+
+// TestUpstreamErrorMappingMidStreamReset: a mid-stream reset while the
+// backend is READY (not draining) must produce an in-stream
+// upstream_error row followed by [DONE], with exactly one
+// ReportUpstreamFailure call — the streaming sibling of the 500/401
+// plain-response cases above.
+func TestUpstreamErrorMappingMidStreamReset(t *testing.T) {
+	failNow := make(chan struct{})
+	body := &drainBody{failNow: failNow}
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}, nil
+	})
+	d := testDeps(t)
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1, State: controller.Ready}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	go close(failNow)
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[],"stream":true}`))
+
+	body2 := rec.Body.String()
+	if !strings.Contains(body2, "upstream_error") || !strings.HasSuffix(body2, "data: [DONE]\n\n") {
+		t.Fatalf("body = %q, want an in-stream upstream_error row followed by [DONE]", body2)
+	}
+	fc.mu.Lock()
+	gotFailure := len(fc.upstreamErr)
+	fc.mu.Unlock()
+	if gotFailure != 1 {
+		t.Fatalf("ReportUpstreamFailure called %d times, want 1", gotFailure)
 	}
 }
 

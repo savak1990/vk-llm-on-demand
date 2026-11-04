@@ -32,7 +32,7 @@ func (c *chunkedBody) Close() error { return nil }
 func TestSSEPassThrough(t *testing.T) {
 	// Fixture chunks carry reasoning_content and tool_calls deltas, not
 	// just plain content, so a line-assembly bug that only handles the
-	// simple shape would still show up here (AC8).
+	// simple shape would still show up here.
 	chunks := [][]byte{
 		[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n"),
 		[]byte("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n"),

@@ -98,10 +98,8 @@ func (g *Gateway) accessLogAndMetrics(next http.Handler) http.Handler {
 	})
 }
 
-// statusLabel keeps the requests_total "code" label inside the spec's
-// enumerated set: a status this package itself writes passes through,
-// anything else (an unrecognized upstream 2xx/4xx/5xx) buckets by class
-// so a single unusual upstream code can never grow the series unbounded.
+// statusLabel buckets any status outside the enumerated label set by
+// class, so an unusual upstream code can never grow the series unbounded.
 func statusLabel(code int) string {
 	switch code {
 	case 200, 400, 401, 403, 404, 405, 413, 429, 499, 500, 502, 503, 504:

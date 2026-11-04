@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 	"github.com/savak1990/vk-llm-on-demand/internal/worker"
 )
@@ -69,11 +69,13 @@ func TestProxyPlain(t *testing.T) {
 	}
 }
 
-// TestPlainTokensPerSecondObserved closes I4: a plain 2xx response's
-// usage.completion_tokens must reach output_tokens_per_second, the same
-// metric the streaming path already feeds.
+// TestPlainTokensPerSecondObserved: a plain 2xx's usage.completion_tokens
+// must reach output_tokens_per_second. The fake upstream advances the
+// clock by exactly 1s, pinning the observed value to a real number.
 func TestPlainTokensPerSecondObserved(t *testing.T) {
+	clk := fakeclock.New(time.Now())
 	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		clk.Advance(time.Second)
 		return &http.Response{
 			StatusCode: 200,
 			Header:     http.Header{"Content-Type": {"application/json"}},
@@ -83,6 +85,7 @@ func TestPlainTokensPerSecondObserved(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	d := testDeps(t)
 	d.Reg = reg
+	d.Clock = clk
 	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
 	d.Controller = fc
 	g, err := New(d)
@@ -96,8 +99,31 @@ func TestPlainTokensPerSecondObserved(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
 	}
 
-	if got := testutil.CollectAndCount(g.metrics.outputTokensPerSecond); got != 1 {
-		t.Fatalf("output_tokens_per_second sample count = %d, want 1", got)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	var count uint64
+	var sum float64
+	var found bool
+	for _, mf := range mfs {
+		if mf.GetName() != "vkllm_gateway_output_tokens_per_second" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			found = true
+			count = m.GetHistogram().GetSampleCount()
+			sum = m.GetHistogram().GetSampleSum()
+		}
+	}
+	if !found {
+		t.Fatal("vkllm_gateway_output_tokens_per_second not found in the registry")
+	}
+	if count != 1 {
+		t.Fatalf("sample count = %d, want 1", count)
+	}
+	if sum != 5 {
+		t.Fatalf("sample sum = %v, want 5 (5 tokens over the 1s the fake clock advanced)", sum)
 	}
 }
 
@@ -118,9 +144,9 @@ func (b *failAfterNBody) Read(p []byte) (int, error) {
 }
 func (b *failAfterNBody) Close() error { return nil }
 
-// TestPlainCopyErrorRecordsOutcome closes I4's second half: a read error
-// partway through a confirmed-2xx plain body must not be silently
-// swallowed, even though the truncated response itself is left as is.
+// TestPlainCopyErrorRecordsOutcome: a read error partway through a
+// confirmed-2xx plain body must surface in the access log, even though
+// the truncated response itself is left as is.
 func TestPlainCopyErrorRecordsOutcome(t *testing.T) {
 	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: &failAfterNBody{remaining: []byte(`{"partial`)}}, nil
