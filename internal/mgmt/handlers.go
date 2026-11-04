@@ -14,6 +14,9 @@ func (s *server) routes() {
 	s.mux.HandleFunc("/api/v1/gpu/status", s.method(http.MethodGet, s.handleStatus))
 	s.mux.HandleFunc("/api/v1/gpu/stop", s.method(http.MethodPost, s.handleStop))
 	s.mux.HandleFunc("/api/v1/gpu/cost", s.method(http.MethodGet, s.handleCost))
+	s.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "not_found", "", "")
+	})
 }
 
 func (s *server) method(want string, h http.HandlerFunc) http.HandlerFunc {
@@ -27,6 +30,9 @@ func (s *server) method(want string, h http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
+	if !decodeStrict(w, r, &struct{}{}) {
+		return
+	}
 	snap, err := s.start.do(r.Context(), s.d.Controller.Start)
 	s.respondOp(w, "start", snap, err)
 }

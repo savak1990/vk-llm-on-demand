@@ -158,6 +158,22 @@ func TestBodyLimit(t *testing.T) {
 	}
 }
 
+func TestStartRejectsOversizedBody(t *testing.T) {
+	clk := fakeclock.New(time.Unix(0, 0))
+	keys := authKeys(t, "sk-vkllm-clientkey1", "sk-vkllm-mgmttoken1")
+	fc := newFakeController()
+	h, _ := newFullServer(t, fc, keys, clk, 10000)
+
+	big := strings.Repeat("a", 65537)
+	req := httptest.NewRequest("POST", "/api/v1/gpu/start", strings.NewReader(`{"x":"`+big+`"}`))
+	req.Header.Set("Authorization", "Bearer sk-vkllm-mgmttoken1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 413 || fc.Calls("start") != 0 {
+		t.Fatalf("code = %d, start calls = %d, want 413/0", rec.Code, fc.Calls("start"))
+	}
+}
+
 // TestRejectedRequestsAreObserved proves the observe wrapper sits
 // outermost: a 401/403/429 — none of which ever reach a handler — must
 // still each produce one metric increment and one log line.
@@ -230,5 +246,36 @@ func TestRejectedRequestsAreObserved(t *testing.T) {
 				t.Fatalf("log line key_id = %q, want empty=%v", entry.KeyID, tc.wantKeyIDEmpty)
 			}
 		})
+	}
+}
+
+// TestAC2_StartDenialMetric drives all 4 start-denial reasons through a
+// real HTTP request each (via the full New(...) handler, so the observe
+// wrapper actually runs) and checks vkllm_mgmt_requests_total{op="start",
+// code="503"} increased by exactly 4.
+func TestAC2_StartDenialMetric(t *testing.T) {
+	before := testutil.ToFloat64(mgmtRequestsTotal.WithLabelValues("start", "503"))
+
+	for _, reason := range []string{"no_offer", "budget_exhausted", "balance_low", "attempts_exhausted"} {
+		clk := fakeclock.New(time.Unix(0, 0))
+		keys := authKeys(t, "sk-vkllm-clientkey1", "sk-vkllm-mgmttoken1")
+		fc := newFakeController()
+		fc.startErr = controller.ErrGPUUnavailable
+		fc.startSnap = controller.Snapshot{Unavailable: reason}
+		reg := prometheus.NewRegistry()
+		h := New(Deps{Controller: fc, Keys: keys, Limiter: auth.NewLimiter(10000, clk), Clock: clk, Config: config.Mgmt{}, Reg: reg, Log: noopLogger()})
+
+		req := httptest.NewRequest("POST", "/api/v1/gpu/start", nil)
+		req.Header.Set("Authorization", "Bearer sk-vkllm-mgmttoken1")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 503 {
+			t.Fatalf("reason=%s: code = %d, want 503", reason, rec.Code)
+		}
+	}
+
+	after := testutil.ToFloat64(mgmtRequestsTotal.WithLabelValues("start", "503"))
+	if after-before != 4 {
+		t.Fatalf("mgmtRequestsTotal{op=start,code=503} increased by %v, want 4", after-before)
 	}
 }

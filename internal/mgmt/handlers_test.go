@@ -110,11 +110,31 @@ func TestStatusAndCost200(t *testing.T) {
 
 func TestUnknownPathAnd405(t *testing.T) {
 	s := newTestServer(t, newFakeController())
-	if rec := doReq(s, "GET", "/api/v1/gpu/bogus", ""); rec.Code != 404 {
+	rec := doReq(s, "GET", "/api/v1/gpu/bogus", "")
+	if rec.Code != 404 {
 		t.Fatalf("unknown path: code = %d, want 404", rec.Code)
+	}
+	var body map[string]map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body["error"]["code"] != "not_found" {
+		t.Fatalf("unknown path body = %v, want error.code = not_found", body)
 	}
 	if rec := doReq(s, "DELETE", "/api/v1/gpu/start", ""); rec.Code != 405 {
 		t.Fatalf("wrong method: code = %d, want 405", rec.Code)
+	}
+}
+
+func TestStartRejectsMalformedBody(t *testing.T) {
+	s := newTestServer(t, newFakeController())
+	rec := doReq(s, "POST", "/api/v1/gpu/start", `{"x":1}`)
+	if rec.Code != 400 {
+		t.Fatalf("unknown field: code = %d, want 400", rec.Code)
+	}
+	rec = doReq(s, "POST", "/api/v1/gpu/start", `not json`)
+	if rec.Code != 400 {
+		t.Fatalf("malformed json: code = %d, want 400", rec.Code)
 	}
 }
 
@@ -148,11 +168,17 @@ func TestForceNotEnabled(t *testing.T) {
 	if rec.Code != 202 || fc.Calls("stop") != 1 {
 		t.Fatalf("code = %d, stop calls = %d, want 202/1", rec.Code, fc.Calls("stop"))
 	}
+	if fc.StopForce() {
+		t.Fatal("StopForce() = true, want false for {\"force\":false}")
+	}
 
 	s.d.Config.ShutdownAllowForce = true
 	rec = doReq(s, "POST", "/api/v1/gpu/stop", `{"force":true}`)
 	if rec.Code != 202 || fc.Calls("stop") != 2 {
 		t.Fatalf("code = %d, stop calls = %d, want 202/2", rec.Code, fc.Calls("stop"))
+	}
+	if !fc.StopForce() {
+		t.Fatal("StopForce() = false, want true for {\"force\":true} with allowForce enabled")
 	}
 }
 
@@ -181,6 +207,35 @@ func TestStartCoalescesConcurrentCalls(t *testing.T) {
 	for i, code := range codes {
 		if code != 200 {
 			t.Fatalf("codes[%d] = %d, want 200", i, code)
+		}
+	}
+}
+
+func TestStopCoalescesConcurrentCalls(t *testing.T) {
+	fc := newFakeController()
+	fc.stopBlock = make(chan struct{})
+	fc.stopSnap = controller.Snapshot{Public: "DRAINING"}
+	s := newTestServer(t, fc)
+
+	var wg sync.WaitGroup
+	codes := make([]int, 50)
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			codes[i] = doReq(s, "POST", "/api/v1/gpu/stop", "").Code
+		}(i)
+	}
+	waitForWaiters(t, s.stop, 49)
+	close(fc.stopBlock)
+	wg.Wait()
+
+	if fc.Calls("stop") != 1 {
+		t.Fatalf("Calls(stop) = %d, want 1", fc.Calls("stop"))
+	}
+	for i, code := range codes {
+		if code != 202 {
+			t.Fatalf("codes[%d] = %d, want 202", i, code)
 		}
 	}
 }
