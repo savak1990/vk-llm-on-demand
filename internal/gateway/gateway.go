@@ -140,6 +140,7 @@ func (g *Gateway) recoverMiddleware(next http.Handler) http.Handler {
 				// into a fresh status line; the only safe move left is to
 				// stop, not write a 500.
 				if sr, ok := w.(*statusRecorder); ok && sr.wroteHeader {
+					setCodeOverride(w, "stream_error")
 					return
 				}
 				writeError(w, http.StatusInternalServerError, "server_error", "internal_error", "internal error")

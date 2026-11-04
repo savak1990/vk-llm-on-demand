@@ -168,6 +168,26 @@ func TestRecoverDoesNotWriteAfterHeadersSent(t *testing.T) {
 	}
 }
 
+// A panic after headers go out is a post-header failure like the
+// other writeInStreamOutcome cases, not a client disconnect, so it
+// must not default to codeOverride="" and read back as a 200.
+func TestPanicAfterHeadersSentLabeledStreamError(t *testing.T) {
+	g, err := New(testDeps(t))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	sr := &statusRecorder{ResponseWriter: httptest.NewRecorder()}
+	handler := g.recoverMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		panic("boom after headers")
+	}))
+	handler.ServeHTTP(sr, httptest.NewRequest(http.MethodGet, "/v1/test-panic-mid-stream", nil))
+
+	if sr.codeOverride != "stream_error" {
+		t.Fatalf("codeOverride = %q, want %q (a panic after headers go out must not read back as a 200)", sr.codeOverride, "stream_error")
+	}
+}
+
 // authMiddleware stores keyID on a derived *http.Request its callees
 // see, but accessLogAndMetrics sits above it with the original
 // request, so only *statusRecorder.keyID can carry the value up.
