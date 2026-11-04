@@ -21,7 +21,7 @@ other packages each add metrics and log fields independently
 **Estimated effort:** one session (4–6 h)
 **Recommended model:** standard
 **Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md),
-[CORE-060](../060-P-gateway-openai-api/spec.md)
+[CORE-060](../060-D-gateway-openai-api/spec.md)
 
 ## Outcome
 

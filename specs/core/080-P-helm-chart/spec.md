@@ -14,7 +14,7 @@ adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013"]
 **Risk:** medium — a wrong RBAC verb, a wrong `config.*` → env-var mapping, or a schema guard that does not actually block `idleShutdown.enabled: false` breaks safety invisibly, because nothing here is unit-testable in Go.
 **Estimated effort:** one session (4–6 h)
 **Recommended model:** standard — pattern-copy from `vk-ahorro` plus the fixed value list in `docs/architecture.md` §9; the novel pieces are the amended RBAC rule, the NetworkPolicy egress shape, and the `values.schema.json` `if`/`then` guard tying `idleShutdown.enabled` to `maxLifetime`.
-**Depends on:** [CORE-060](../060-P-gateway-openai-api/spec.md) (the gateway's config surface and admin port this chart wires up; written after this spec but its contract — ports 8080/9090, `/healthz`/`/readyz`, management and inference endpoints — is already fixed by `docs/architecture.md` and ADR 0012)
+**Depends on:** [CORE-060](../060-D-gateway-openai-api/spec.md) (the gateway's config surface and admin port this chart wires up; written after this spec but its contract — ports 8080/9090, `/healthz`/`/readyz`, management and inference endpoints — is already fixed by `docs/architecture.md` and ADR 0012)
 
 ## Outcome
 
