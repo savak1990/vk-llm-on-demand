@@ -165,8 +165,9 @@ func New(d Deps) http.Handler
 The interface has three methods, so mgmt cannot reach `Admit`,
 `RequestEnd` or anything that writes `lastInferenceFinishedAt` (ADR 0011 §2).
 A `Start` denial is an error whose snapshot carries `Unavailable` set to one
-of the four reasons; mgmt maps it to 503. Every controller call gets a
-10 s context derived from the request.
+of the four reasons; mgmt maps it to 503. Every controller call gets its own
+10 s timeout on `context.Background()`, never the request's own context, so
+one client giving up never cancels a call shared by other waiters.
 
 ### Call coalescing
 
@@ -280,7 +281,7 @@ CORE-080 and CORE-150.
 
 - [x] AC1–AC12 pass in CI.
 - [x] `make specs-check` passes.
-- [x] CORE-060 uses `internal/auth` for `/v1` and its management-token 403 test passes.
+- [ ] CORE-060 uses `internal/auth` for `/v1` and its management-token 403 test passes. Deferred: `internal/gateway` is still a `doc.go` stub; this branch only makes `internal/auth` surface-aware and ready for CORE-060 to consume.
 - [x] Status flipped to DONE in the same PR; folder renamed `055-D-management-api`.
 - [x] Evidence section filled.
 
@@ -306,21 +307,25 @@ rediscovered. None blocks DONE.
    log-field list and could be added later if abuse-rate logging ever needs
    the error reason per request.
 
-3. **`withObserve` wrapper reads controller state once per request.** Every
-   management request triggers one `Controller.Status()` call (a ConfigMap
-   read) to populate the `state` and `generation` fields in the structured log
-   line — even rejected requests that never reach a handler (401, 403, 429).
-   Acceptable at this scale and required for observability of all requests,
-   but worth noting for anyone adding abuse-rate protection or request
-   deduplication later: the `generation` value used in the log will be the
-   controller's current generation at log time, not the generation at the
-   time the handler ran (if any).
+3. **`withObserve` wrapper reads controller state once per request, with no
+   per-call deadline.** Every management request triggers one
+   `Controller.Status()` call to populate the `state` and `generation` fields
+   in the structured log line — even rejected requests that never reach a
+   handler (401, 403, 429) — and that call runs on `effCtx()` with no
+   per-call deadline of its own. An unauthenticated request flood therefore
+   produces unbounded, unthrottled Kubernetes API (`Store.Load`) reads that
+   could contend with the controller's own saga writes: a real
+   resource-contention risk at scale, not just an extra read. Acceptable at
+   this scale; deferred, not blocking. Also worth noting for anyone adding
+   abuse-rate protection or request deduplication later: the `generation`
+   value used in the log will be the controller's current generation at log
+   time, not the generation at the time the handler ran (if any).
 
 ## Open questions
 
 | Question | Why it matters | Settled by | Resolution |
 |---|---|---|---|
-| Exact `controller.Snapshot` field names (public state, desired, instance block, `LastInferenceFinishedAt`, `IdleDeadline`, cost block, `Unavailable`) and the Start-denial error value | mgmt maps them field by field | CORE-050 | snapshot carries the public state string per ADR 0011 §6; denial error wraps `controller.ErrUnavailable` |
+| Exact `controller.Snapshot` field names (public state, desired, instance block, `LastInferenceFinishedAt`, `IdleDeadline`, cost block, `Unavailable`) and the Start-denial error value | mgmt maps them field by field | CORE-050 | snapshot carries the public state string per ADR 0011 §6; denial error wraps `controller.ErrGPUUnavailable` |
 | Is `no_offer` known synchronously on `Start`, or only later in status? | FR-2.6 wants 503, FR-2.5 wants < 200 ms | CORE-050 | 503 only when the snapshot already holds `no_offer` from the last search; otherwise 202 and `unavailable` in status; 202 may also be returned during a create-retry backoff (distinct from `no_offer`-based denial) |
 | Should 2xx bodies carry a `result` field (`accepted`, `already_running`, `already_stopped`)? | ADR 0012 §1 lists the codes but no field | CORE-055 | start/stop responses carry `result`: 200 → `"already_running"`/`"already_stopped"`; 202 → `"accepted"`; status and cost responses do not |
 | `nextCreateAt` field on status document | mgmt needs to advertise when start will be allowed again | CORE-055 | nullable RFC 3339 timestamp, rendered `null` unless the controller currently holds a future next-allowed-create time |
@@ -351,12 +356,22 @@ IDs present. The three-method `Controller` interface enforced: calls to
 `Start`, `Stop`, `Status` reached the controller; `Admit`, `RequestEnd`,
 `LastInferenceFinishedAt`, `ReadyAt` and `IdleDeadline` modification methods
 never called (AC11 guarantee). AC4 (coalescing): 50 concurrent starts
-produced 1 controller call, 50 identical 200 responses. AC7 (rate limit):
-61st request in 60-per-minute rate limit returned 429 with correct
-`Retry-After: 1`. AC6 (real controller integration): 50 concurrent starts
-through the CORE-050 harness reached create-provision once, completed
-startup < 200 ms p99 in-process (mgmt + controller overhead only), and idle
-timeout persisted unchanged through 110 calls. AC10 (reload): 10 s reload
-cycle switched active key sets. All AC12 redaction tests passed: no tokens,
-Authorization headers, request bodies, SSH addresses or provider IDs in
-responses or logs; metrics labels only contain enumerated values.
+produced 1 controller call, 50 identical 200 responses; the same shape
+proven for stop (50 concurrent stops, 1 controller call, 50 identical 202
+responses). AC7 (rate limit): 61st request in 60-per-minute rate limit
+returned 429 with correct `Retry-After: 1`. AC6 (real controller
+integration): 50 concurrent starts through the CORE-050 harness reached
+create-provision once, and idle timeout persisted unchanged through 110
+calls. AC6 proves functional correctness — one `CreateInstance` call for
+50 concurrent starts, idle deadline stability, a 202 stop response — but
+does not measure request latency; p99 timing is deferred to CORE-140's
+end-to-end acceptance suite, which is explicitly the right place per this
+spec's own AC6 text. AC9 (force): a fake-controller field now records the
+`force` value actually passed to `Stop`, asserted true/false across the
+`allowForce` matrix. AC2 (start denial): a full-server test drives all 4
+denial reasons through real HTTP requests and asserts
+`vkllm_mgmt_requests_total{op="start",code="503"}` increased by exactly 4.
+AC10 (reload): 10 s reload cycle switched active key sets. All AC12
+redaction tests passed: no tokens, Authorization headers, request bodies,
+SSH addresses or provider IDs in responses or logs; metrics labels only
+contain enumerated values.

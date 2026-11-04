@@ -122,7 +122,7 @@ func resultFor(op string, snap controller.Snapshot) string {
 }
 
 // errorBody marshals the management API's fixed error shape; reason
-// is omitted when empty. Unused until a handler calls it.
+// is omitted when empty.
 func errorBody(code, message, reason string) []byte {
 	doc := struct {
 		Error struct {
