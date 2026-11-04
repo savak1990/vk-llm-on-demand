@@ -31,9 +31,8 @@ func LoadWorkerSeed(path string, clk clock.Clock) (*WorkerSeed, error) {
 }
 
 // reload stores the file's bytes exactly as read — no trimming, no
-// encoding conversion — so this side and the controller's own seed
-// reader (CORE-050) always derive the same worker key from the same
-// bytes.
+// encoding conversion — so this side and the sibling component that
+// derives a worker key from the same bytes always agree.
 func (w *WorkerSeed) reload() error {
 	raw, err := os.ReadFile(w.path)
 	if err != nil {
