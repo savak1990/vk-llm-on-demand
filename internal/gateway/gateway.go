@@ -47,8 +47,8 @@ type Gateway struct {
 	mux       *http.ServeMux
 	startedAt time.Time
 
-	// shuttingDown is read by Task 9's classify and set by Task 14's
-	// Shutdown; declared here so Task 9 compiles before Shutdown exists.
+	// shuttingDown will gate admission once draining logic exists;
+	// declared now so that logic can be added without touching this struct.
 	shuttingDown atomic.Bool
 }
 
@@ -78,8 +78,8 @@ func New(d Deps) (*Gateway, error) {
 	return g, nil
 }
 
-// Handler returns the full /v1 handler; Task 5-7 extend this chain with
-// auth, rate-limiting and the body-limit wrapper.
+// Handler returns the full /v1 handler; auth, rate-limiting and the
+// body-limit wrapper attach to this chain later.
 func (g *Gateway) Handler() http.Handler {
 	return chain(g.mux,
 		g.requestIDMiddleware,
@@ -119,10 +119,9 @@ func (g *Gateway) recoverMiddleware(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				g.deps.Log.Error("gateway: panic", "panic", true, "request_id", r.Context().Value(ctxKeyRequestID))
-				// If headers already went out (e.g. a panic mid-stream,
-				// after the 200/text-event-stream header was written),
-				// writing a fresh status line is not legal HTTP — the
-				// only safe thing left to do is stop, not write a 500.
+				// A panic after headers are already sent cannot be turned
+				// into a fresh status line; the only safe move left is to
+				// stop, not write a 500.
 				if sr, ok := w.(*statusRecorder); ok && sr.wroteHeader {
 					return
 				}
@@ -133,17 +132,10 @@ func (g *Gateway) recoverMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// statusRecorder wraps the response writer so the outermost middleware
-// (Task 15's accessLogAndMetrics) can read the real status/outcome
-// after a handler returns. codeOverride lets a handler record a metric
-// label the plain numeric status cannot express (e.g. "499" written
-// before any header, or "stream_error" for an in-stream failure that
-// can't rewrite an already-sent 200) — both of those are legitimate
-// cases Go's http package itself cannot represent as a second status
-// code. Defined here (Task 4) rather than Task 15, even though metrics
-// aren't wired yet, so Tasks 9-10's writePreHeaderOutcome/
-// writeInStreamOutcome can call setCodeOverride from the start, instead
-// of patching functions that exist in an earlier task.
+// statusRecorder wraps the response writer so outer middleware can read
+// the real status after a handler returns. codeOverride lets a handler
+// record a metric label a numeric status can't express, such as a
+// client-closed request or an in-stream failure after headers are sent.
 type statusRecorder struct {
 	http.ResponseWriter
 	status       int
@@ -161,10 +153,9 @@ func (s *statusRecorder) WriteHeader(code int) {
 // through this wrapper, required for SSE flushing to keep working.
 func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-// setCodeOverride is a no-op unless w is a *statusRecorder (it isn't,
-// in any test that calls a handler directly without going through
-// Handler()'s middleware chain — that's fine, those tests don't assert
-// on metric labels).
+// setCodeOverride is a no-op unless w is a *statusRecorder, which is
+// fine for a test that calls a handler directly, outside the middleware
+// chain.
 func setCodeOverride(w http.ResponseWriter, code string) {
 	if sr, ok := w.(*statusRecorder); ok {
 		sr.codeOverride = code

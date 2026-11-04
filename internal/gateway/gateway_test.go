@@ -11,11 +11,6 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 )
 
-// testFixtureDir holds client-keys/management-tokens fixtures matching
-// auth.Load's real signature (Task 2's vendored package) and a separate
-// worker-seed fixture matching this package's own loadWorkerSeed (Task 3) —
-// the two are intentionally unrelated files in unrelated directories,
-// mirroring that internal/auth and internal/gateway never share a loader.
 const (
 	testClientKeysFile = "testdata/client-keys"
 	testMgmtTokensFile = "testdata/management-tokens"
@@ -44,6 +39,7 @@ func testDeps(t *testing.T) Deps {
 			RateLimitPerKeyRPM: 60,
 		},
 		InstallationID: "test-install",
+		Log:            slog.New(slog.DiscardHandler),
 	}
 }
 
@@ -84,7 +80,7 @@ func TestRecoverReturns500(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	g.mux.HandleFunc("GET /v1/test-panic", func(w http.ResponseWriter, r *http.Request) {
+	g.mux.HandleFunc("GET /v1/test-panic", func(_ http.ResponseWriter, _ *http.Request) {
 		panic("boom")
 	})
 	rec := httptest.NewRecorder()

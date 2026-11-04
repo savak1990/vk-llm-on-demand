@@ -14,7 +14,7 @@ type firstTokenCall struct {
 }
 
 // fakeController is the test double for Controller; every call is
-// recorded so tests can assert exact call counts and arguments (C-29).
+// recorded so tests can assert exact call counts and arguments.
 type fakeController struct {
 	mu sync.Mutex
 
