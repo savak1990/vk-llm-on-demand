@@ -22,16 +22,16 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 		case errors.Is(err, auth.ErrMissing):
 			g.metrics.authFailuresTotal.WithLabelValues("missing").Inc()
-			writeError(w, http.StatusUnauthorized, "authentication_error", "missing_api_key", "no api key provided")
+			writeError(w, http.StatusUnauthorized, "authentication_error", "invalid_api_key", "no api key provided")
 		case errors.Is(err, auth.ErrMalformed):
 			g.metrics.authFailuresTotal.WithLabelValues("malformed").Inc()
-			writeError(w, http.StatusUnauthorized, "authentication_error", "malformed_api_key", "authorization header must be a bearer token")
+			writeError(w, http.StatusUnauthorized, "authentication_error", "invalid_api_key", "authorization header must be a bearer token")
 		case errors.Is(err, auth.ErrWrongSurface):
 			g.metrics.authFailuresTotal.WithLabelValues("wrong_surface").Inc()
-			writeError(w, http.StatusForbidden, "permission_error", "wrong_surface", "management tokens cannot call the inference api")
+			writeError(w, http.StatusForbidden, "permission_error", "permission_denied", "management tokens cannot call the inference api")
 		default:
 			g.metrics.authFailuresTotal.WithLabelValues("unknown_key").Inc()
-			writeError(w, http.StatusUnauthorized, "authentication_error", "unknown_key", "the api key is not recognized")
+			writeError(w, http.StatusUnauthorized, "authentication_error", "invalid_api_key", "the api key is not recognized")
 		}
 	})
 }
@@ -62,25 +62,59 @@ func (g *Gateway) accessLogAndMetrics(next http.Handler) http.Handler {
 		start := g.deps.Clock.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
+		duration := g.deps.Clock.Now().Sub(start)
 
-		code := rec.codeOverride
-		if code == "" {
-			code = statusLabel(rec.status)
+		metricCode := rec.codeOverride
+		if metricCode == "" {
+			metricCode = statusLabel(rec.status)
 		}
-		g.metrics.requestsTotal.WithLabelValues(route, code).Inc()
-		g.metrics.requestSeconds.WithLabelValues(route).Observe(g.deps.Clock.Now().Sub(start).Seconds())
+		g.metrics.requestsTotal.WithLabelValues(route, metricCode).Inc()
+		g.metrics.requestSeconds.WithLabelValues(route).Observe(duration.Seconds())
+
+		// The log keeps the real status (e.g. "422"); only the metric
+		// label above is bucketed, so cardinality stays bounded without
+		// losing the exact code an operator reading logs would want.
+		logCode := rec.codeOverride
+		if logCode == "" {
+			logCode = strconv.Itoa(rec.status)
+		}
+		outcome := rec.outcome
+		if outcome == "" {
+			outcome = logCode
+		}
 
 		g.deps.Log.Info("gateway: request",
 			"request_id", r.Context().Value(ctxKeyRequestID),
 			"route", route,
-			"status_code", code,
+			"status_code", logCode,
+			"duration_ms", duration.Milliseconds(),
 			"key_id", rec.keyID,
+			"stream", rec.stream,
+			"instance_gen", rec.gen,
+			"outcome", outcome,
+			"max_tokens_clamped", rec.clamped,
+			"max_tokens_requested", rec.maxTokensRequested,
 		)
 	})
 }
 
+// statusLabel keeps the requests_total "code" label inside the spec's
+// enumerated set: a status this package itself writes passes through,
+// anything else (an unrecognized upstream 2xx/4xx/5xx) buckets by class
+// so a single unusual upstream code can never grow the series unbounded.
 func statusLabel(code int) string {
-	return strconv.Itoa(code)
+	switch code {
+	case 200, 400, 401, 403, 404, 405, 413, 429, 499, 500, 502, 503, 504:
+		return strconv.Itoa(code)
+	}
+	switch {
+	case code >= 200 && code < 300:
+		return "2xx"
+	case code >= 400 && code < 500:
+		return "4xx"
+	default:
+		return "5xx"
+	}
 }
 
 func (g *Gateway) rateLimitMiddleware(next http.Handler) http.Handler {

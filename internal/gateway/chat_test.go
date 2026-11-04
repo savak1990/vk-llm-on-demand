@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,29 +20,115 @@ func chatReq(body string) *http.Request {
 	return r
 }
 
+// getIntField reads an int field back out of a clamped body map; present
+// reports whether the key exists at all, distinguishing "absent" from "0".
+func getIntField(t *testing.T, m map[string]json.RawMessage, key string) (value int, present bool) {
+	t.Helper()
+	raw, ok := m[key]
+	if !ok {
+		return 0, false
+	}
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatalf("field %s did not unmarshal as int: %v (raw %s)", key, err, raw)
+	}
+	return value, true
+}
+
 func TestClampMaxTokensPure(t *testing.T) {
 	cases := []struct {
-		name    string
-		body    string
-		wantVal int
-		wantOK  bool
+		name        string
+		body        string
+		wantClamped bool
+		wantMT      int
+		wantMTOK    bool
+		wantMCT     int
+		wantMCTOK   bool
 	}{
-		{"absent", `{}`, 8192, true},
-		{"above cap", `{"max_tokens": 100000}`, 8192, true},
-		{"within cap", `{"max_tokens": 10}`, 10, false},
+		{"absent", `{}`, true, 8192, true, 0, false},
+		{"above cap", `{"max_tokens": 100000}`, true, 8192, true, 0, false},
+		{"within cap", `{"max_tokens": 10}`, false, 10, true, 0, false},
+		{"negative treated as absent", `{"max_tokens": -1}`, true, 8192, true, 0, false},
+		{"zero treated as absent", `{"max_tokens": 0}`, true, 8192, true, 0, false},
+		{"only max_completion_tokens above cap", `{"max_completion_tokens": 100000}`, true, 0, false, 8192, true},
+		{"only max_completion_tokens within cap, not renamed", `{"max_completion_tokens": 10}`, false, 0, false, 10, true},
+		{"both present, only one over cap", `{"max_tokens": 10, "max_completion_tokens": 100000}`, true, 10, true, 8192, true},
 	}
 	for _, c := range cases {
 		var m map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(c.body), &m); err != nil {
 			t.Fatalf("%s: unmarshal: %v", c.name, err)
 		}
-		clamped, value, err := clampMaxTokens(m, 8192)
+		clamped, _, err := clampMaxTokens(m, 8192)
 		if err != nil {
 			t.Fatalf("%s: clampMaxTokens: %v", c.name, err)
 		}
-		if value != c.wantVal || clamped != c.wantOK {
-			t.Errorf("%s: got (clamped=%v, value=%d), want (clamped=%v, value=%d)", c.name, clamped, value, c.wantOK, c.wantVal)
+		if clamped != c.wantClamped {
+			t.Errorf("%s: clamped = %v, want %v", c.name, clamped, c.wantClamped)
 		}
+		if gotMT, okMT := getIntField(t, m, "max_tokens"); okMT != c.wantMTOK || (okMT && gotMT != c.wantMT) {
+			t.Errorf("%s: max_tokens = (present=%v, value=%d), want (present=%v, value=%d)", c.name, okMT, gotMT, c.wantMTOK, c.wantMT)
+		}
+		if gotMCT, okMCT := getIntField(t, m, "max_completion_tokens"); okMCT != c.wantMCTOK || (okMCT && gotMCT != c.wantMCT) {
+			t.Errorf("%s: max_completion_tokens = (present=%v, value=%d), want (present=%v, value=%d)", c.name, okMCT, gotMCT, c.wantMCTOK, c.wantMCT)
+		}
+	}
+}
+
+func TestClampMaxTokensRejectsNonInteger(t *testing.T) {
+	cases := []string{
+		`{"max_tokens": "ten"}`,
+		`{"max_completion_tokens": "ten"}`,
+		`{"max_tokens": 10, "max_completion_tokens": "ten"}`,
+	}
+	for _, body := range cases {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(body), &m); err != nil {
+			t.Fatalf("%s: unmarshal: %v", body, err)
+		}
+		if _, _, err := clampMaxTokens(m, 8192); err == nil {
+			t.Errorf("%s: clampMaxTokens: want error for a non-integer field, got nil", body)
+		}
+	}
+}
+
+// TestClampEndToEndLogsAndUpstream closes AC4: a request over the cap
+// must reach the upstream clamped to the cap, and the access log line
+// must carry max_tokens_clamped=true so an operator can see clamping
+// happened without reading the proxied body.
+func TestClampEndToEndLogsAndUpstream(t *testing.T) {
+	var gotBody []byte
+	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		gotBody, _ = io.ReadAll(r.Body)
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader([]byte(`{}`)))}, nil
+	})
+
+	var buf bytes.Buffer
+	d := testDeps(t)
+	d.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[],"max_tokens":100000}`))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	var sentBody map[string]json.RawMessage
+	if err := json.Unmarshal(gotBody, &sentBody); err != nil {
+		t.Fatalf("unmarshal upstream body: %v", err)
+	}
+	var maxTokens int
+	_ = json.Unmarshal(sentBody["max_tokens"], &maxTokens)
+	if maxTokens != 8192 {
+		t.Fatalf("upstream max_tokens = %d, want 8192", maxTokens)
+	}
+	if !strings.Contains(buf.String(), "max_tokens_clamped=true") {
+		t.Fatalf("access log missing max_tokens_clamped=true: %s", buf.String())
 	}
 }
 

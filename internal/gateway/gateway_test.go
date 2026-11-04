@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,47 @@ func TestNewRequiresSeed(t *testing.T) {
 	d.Seed = nil
 	if _, err := New(d); err == nil {
 		t.Fatal("New: want error for nil Seed")
+	}
+}
+
+func TestUnknownPathUnder1GetsJSON404(t *testing.T) {
+	g := newTestGateway(t)
+	req := httptest.NewRequest(http.MethodGet, "/v1/nope", nil)
+	req.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (body %q)", rec.Code, rec.Body.String())
+	}
+	var body errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q does not parse as errorBody: %v", rec.Body.String(), err)
+	}
+	if body.Error.Type != "invalid_request_error" || body.Error.Code != "not_found" {
+		t.Fatalf("body = %+v, want type=invalid_request_error code=not_found", body.Error)
+	}
+}
+
+func TestWrongMethodOnKnownPathGetsJSON405(t *testing.T) {
+	g := newTestGateway(t)
+	req := httptest.NewRequest(http.MethodDelete, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer sk-vkllm-aaaaaaaa1111")
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405 (body %q)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Allow"); got != "GET" {
+		t.Fatalf("Allow = %q, want %q", got, "GET")
+	}
+	var body errorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body %q does not parse as errorBody: %v", rec.Body.String(), err)
+	}
+	if body.Error.Type != "invalid_request_error" || body.Error.Code != "method_not_allowed" {
+		t.Fatalf("body = %+v, want type=invalid_request_error code=method_not_allowed", body.Error)
 	}
 }
 

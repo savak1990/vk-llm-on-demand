@@ -15,7 +15,12 @@ import (
 
 func TestDisconnectCancelsUpstream(t *testing.T) {
 	ctxDone := make(chan struct{}, 1)
+	reached := make(chan struct{}, 1)
 	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		select {
+		case reached <- struct{}{}:
+		default:
+		}
 		return &http.Response{
 			StatusCode: 200,
 			Header:     http.Header{"Content-Type": {"text/event-stream"}},
@@ -36,7 +41,7 @@ func TestDisconnectCancelsUpstream(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		<-reached
 		cancel()
 	}()
 	g.Handler().ServeHTTP(rec, req)
@@ -246,7 +251,12 @@ func TestRequestEndOnEveryPath(t *testing.T) {
 			run: func(t *testing.T) ([]int64, []int64, int64) {
 				gen := int64(109)
 				ctxDone := make(chan struct{}, 1)
+				reached := make(chan struct{}, 1)
 				rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+					select {
+					case reached <- struct{}{}:
+					default:
+					}
 					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: &watchedBody{ctx: r.Context(), done: ctxDone}}, nil
 				})
 				d := testDeps(t)
@@ -259,7 +269,7 @@ func TestRequestEndOnEveryPath(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				req := chatReq(`{"model":"qwen3.6-35b-a3b","messages":[],"stream":true}`).WithContext(ctx)
 				go func() {
-					time.Sleep(20 * time.Millisecond)
+					<-reached
 					cancel()
 				}()
 				g.Handler().ServeHTTP(httptest.NewRecorder(), req)

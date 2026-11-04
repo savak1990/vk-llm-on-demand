@@ -14,31 +14,66 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/worker"
 )
 
-// clampMaxTokens returns the value to send upstream for max_tokens:
-// cap if absent or over cap, otherwise the requested value. clamped
-// is true whenever the returned value differs from what was requested.
-func clampMaxTokens(body map[string]json.RawMessage, maxCap int) (clamped bool, value int, err error) {
-	raw, ok := body["max_tokens"]
+// clampMaxTokens clamps max_tokens and max_completion_tokens independently,
+// mutating body in place: each field present above the cap, or <= 0 (which
+// llama-server reads as "unlimited", defeating the cap entirely), is set to
+// the cap; a field within the cap is left untouched under its own name. If
+// neither field is present, max_tokens is set to the cap. clamped is true
+// whenever any field was changed or added; requested is the original value
+// logged (max_tokens's if present, else max_completion_tokens's, else 0).
+func clampMaxTokens(body map[string]json.RawMessage, maxCap int) (clamped bool, requested int, err error) {
+	mtPresent, mtVal, mtClamped, err := clampField(body, "max_tokens", maxCap)
+	if err != nil {
+		return false, 0, err
+	}
+	mctPresent, mctVal, mctClamped, err := clampField(body, "max_completion_tokens", maxCap)
+	if err != nil {
+		return false, 0, err
+	}
+	if !mtPresent && !mctPresent {
+		body["max_tokens"] = json.RawMessage(strconv.Itoa(maxCap))
+		return true, 0, nil
+	}
+	requested = mctVal
+	if mtPresent {
+		requested = mtVal
+	}
+	return mtClamped || mctClamped, requested, nil
+}
+
+// clampField clamps one field of body in place, if present.
+func clampField(body map[string]json.RawMessage, key string, maxCap int) (present bool, original int, clamped bool, err error) {
+	raw, ok := body[key]
 	if !ok {
-		raw, ok = body["max_completion_tokens"]
+		return false, 0, false, nil
 	}
-	if !ok {
-		return true, maxCap, nil
+	var v int
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return true, 0, false, errors.New(key + " must be an integer")
 	}
-	var requested int
-	if err := json.Unmarshal(raw, &requested); err != nil {
-		return false, 0, errors.New("max_tokens must be an integer")
+	want := v
+	if v <= 0 || v > maxCap {
+		want = maxCap
 	}
-	if requested > maxCap {
-		return true, maxCap, nil
+	if want == v {
+		return true, v, false, nil
 	}
-	return false, requested, nil
+	body[key] = json.RawMessage(strconv.Itoa(want))
+	return true, v, true, nil
 }
 
 func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large", "request body exceeds the size limit")
+		var mbe *http.MaxBytesError
+		switch {
+		case errors.As(err, &mbe):
+			writeError(w, http.StatusRequestEntityTooLarge, "invalid_request_error", "request_too_large", "request body exceeds the size limit")
+		case r.Context().Err() != nil:
+			w.WriteHeader(499)
+		default:
+			writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "could not read request body")
+		}
 		return
 	}
 
@@ -64,14 +99,16 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	rec := recorderOf(w)
+	rec.stream = stream
 
-	_, maxTokens, err := clampMaxTokens(body, g.deps.Config.MaxTokensCap)
+	clamped, requested, err := clampMaxTokens(body, g.deps.Config.MaxTokensCap)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
-	body["max_tokens"] = json.RawMessage(strconv.Itoa(maxTokens))
-	delete(body, "max_completion_tokens")
+	rec.clamped = clamped
+	rec.maxTokensRequested = requested
 
 	status := g.deps.Controller.Status()
 	gen := status.Generation
@@ -81,12 +118,14 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 		// No response headers have been sent yet, so an Admit failure is
 		// always a plain status — even for stream:true — since the SSE
 		// content-type only gets set once a 2xx actually arrives upstream.
+		rec.outcome = "backend_unavailable"
 		writeBackendUnavailable(w)
 		return
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, "server_error", "internal_error", "internal error")
 		return
 	}
+	rec.gen = gen
 	defer g.deps.Controller.RequestEnd(gen)
 
 	g.proxyChat(w, r, gen, rt, body, stream)
@@ -152,15 +191,56 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 	case stream:
 		g.streamUpstream(w, resp, gen, r, start)
 	default:
-		g.copyUpstream2xx(w, resp)
+		g.copyUpstream2xx(w, resp, r, start)
 	}
 }
 
-// copyUpstream2xx passes a confirmed 2xx plain response straight through.
-func (g *Gateway) copyUpstream2xx(w http.ResponseWriter, resp *http.Response) {
+// cappedBuffer tees a response body into a bounded buffer for a
+// usage.completion_tokens parse; io.Copy requires a tee target to report
+// every byte as written, so Write always returns len(p), silently
+// discarding bytes once the cap is reached.
+type cappedBuffer struct {
+	buf bytes.Buffer
+	cap int64
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := c.cap - int64(c.buf.Len()); room > 0 {
+		n := int64(len(p))
+		if n > room {
+			n = room
+		}
+		c.buf.Write(p[:n])
+	}
+	return len(p), nil
+}
+
+// copyUpstream2xx passes a confirmed 2xx plain response straight through,
+// teeing it into a capped buffer to read usage.completion_tokens once the
+// copy finishes, for the plain-request tokens/s metric.
+func (g *Gateway) copyUpstream2xx(w http.ResponseWriter, resp *http.Response, r *http.Request, start time.Time) {
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+
+	tee := &cappedBuffer{cap: g.deps.Config.MaxBodyBytes}
+	if _, err := io.Copy(io.MultiWriter(w, tee), resp.Body); err != nil {
+		// The client may already have a truncated body; that matches
+		// ordinary HTTP body-copy behaviour, but the failure still needs
+		// to be visible, so the access log's outcome field carries it.
+		recorderOf(w).outcome = outcomeLabel(g.classify(r, err))
+		return
+	}
+
+	var parsed struct {
+		Usage struct {
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(tee.buf.Bytes(), &parsed) == nil && parsed.Usage.CompletionTokens > 0 {
+		if elapsed := g.deps.Clock.Now().Sub(start).Seconds(); elapsed > 0 {
+			g.metrics.outputTokensPerSecond.Observe(float64(parsed.Usage.CompletionTokens) / elapsed)
+		}
+	}
 }
 
 // copyUpstream4xx passes through a client-error body that already looks
@@ -213,6 +293,24 @@ func (g *Gateway) classify(r *http.Request, err error) upstreamOutcome {
 func (g *Gateway) isDrainCutoff() bool {
 	state := g.deps.Controller.Status().State
 	return state == controller.Draining || state == controller.Destroying
+}
+
+// outcomeLabel names an upstreamOutcome for the access log's outcome
+// field, independent of the HTTP status or in-stream code a given path
+// writes for the same outcome.
+func outcomeLabel(o upstreamOutcome) string {
+	switch o {
+	case outcomeClientGone:
+		return "client_gone"
+	case outcomeShuttingDown:
+		return "shutting_down"
+	case outcomeTimeout:
+		return "upstream_timeout"
+	case outcomeDrainCutoff:
+		return "backend_unavailable"
+	default:
+		return "upstream_error"
+	}
 }
 
 // writePreHeaderOutcome writes a plain status for an outcome that

@@ -16,6 +16,62 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 )
 
+func TestStatusLabelBucketsUnenumeratedCodes(t *testing.T) {
+	cases := []struct {
+		code int
+		want string
+	}{
+		{200, "200"}, {201, "2xx"}, {400, "400"}, {404, "404"},
+		{422, "4xx"}, {409, "4xx"}, {500, "500"}, {503, "503"}, {599, "5xx"},
+	}
+	for _, c := range cases {
+		if got := statusLabel(c.code); got != c.want {
+			t.Errorf("statusLabel(%d) = %q, want %q", c.code, got, c.want)
+		}
+	}
+}
+
+// TestUnenumeratedUpstreamCodeMetricBucketed closes I3: an upstream 4xx
+// outside the enumerated set must not grow the requests_total series, even
+// though the client still receives the exact status the upstream sent.
+func TestUnenumeratedUpstreamCodeMetricBucketed(t *testing.T) {
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 422, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"m","type":"invalid_request_error","code":"unprocessable"}}`))}, nil
+	})
+	reg := prometheus.NewRegistry()
+	d := testDeps(t)
+	d.Reg = reg
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+
+	if rec.Code != 422 {
+		t.Fatalf("status = %d, want 422 (the client must still see the upstream's exact code)", rec.Code)
+	}
+	metricFamilies, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, mf := range metricFamilies {
+		if mf.GetName() != "vkllm_gateway_requests_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "code" && l.GetValue() == "422" {
+					t.Fatal("requests_total has code=\"422\", want it bucketed to \"4xx\"")
+				}
+			}
+		}
+	}
+}
+
 func TestMetricsLabels(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	d := testDeps(t)

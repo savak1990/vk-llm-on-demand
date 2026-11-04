@@ -3,13 +3,18 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 	"github.com/savak1990/vk-llm-on-demand/internal/worker"
@@ -61,6 +66,80 @@ func TestProxyPlain(t *testing.T) {
 	}
 	if _, endCalls := fc.snapshot(); len(endCalls) != 1 || endCalls[0] != 7 {
 		t.Fatalf("RequestEnd calls = %v, want [7]", endCalls)
+	}
+}
+
+// TestPlainTokensPerSecondObserved closes I4: a plain 2xx response's
+// usage.completion_tokens must reach output_tokens_per_second, the same
+// metric the streaming path already feeds.
+func TestPlainTokensPerSecondObserved(t *testing.T) {
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": {"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte(`{"choices":[{"message":{"content":"hi"}}],"usage":{"completion_tokens":5}}`))),
+		}, nil
+	})
+	reg := prometheus.NewRegistry()
+	d := testDeps(t)
+	d.Reg = reg
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+
+	if got := testutil.CollectAndCount(g.metrics.outputTokensPerSecond); got != 1 {
+		t.Fatalf("output_tokens_per_second sample count = %d, want 1", got)
+	}
+}
+
+// failAfterNBody returns n bytes, then a read error, modeling a plain
+// response whose body is cut off mid-copy (e.g. a drain cutoff or
+// shutdown after headers already went out).
+type failAfterNBody struct {
+	remaining []byte
+	failed    bool
+}
+
+func (b *failAfterNBody) Read(p []byte) (int, error) {
+	if len(b.remaining) > 0 {
+		n := copy(p, b.remaining)
+		b.remaining = b.remaining[n:]
+		return n, nil
+	}
+	return 0, errors.New("connection reset by peer")
+}
+func (b *failAfterNBody) Close() error { return nil }
+
+// TestPlainCopyErrorRecordsOutcome closes I4's second half: a read error
+// partway through a confirmed-2xx plain body must not be silently
+// swallowed, even though the truncated response itself is left as is.
+func TestPlainCopyErrorRecordsOutcome(t *testing.T) {
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: &failAfterNBody{remaining: []byte(`{"partial`)}}, nil
+	})
+	var buf bytes.Buffer
+	d := testDeps(t)
+	d.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1, State: controller.Ready}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	g.Handler().ServeHTTP(httptest.NewRecorder(), chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+
+	if !strings.Contains(buf.String(), "outcome=upstream_error") {
+		t.Fatalf("access log missing outcome=upstream_error for a mid-copy read error on a plain 2xx response: %s", buf.String())
 	}
 }
 

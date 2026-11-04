@@ -86,6 +86,12 @@ func New(d Deps) (*Gateway, error) {
 	g.mux = http.NewServeMux()
 	g.mux.HandleFunc("GET /v1/models", g.handleModels)
 	g.mux.HandleFunc("POST /v1/chat/completions", g.handleChatCompletions)
+	// Go's 1.22+ mux always prefers a method-specific pattern over a
+	// method-less one when both match, so these three catch everything
+	// the two handlers above don't: wrong method or unknown path under /v1/.
+	g.mux.HandleFunc("/v1/models", g.handleMethodNotAllowed("GET"))
+	g.mux.HandleFunc("/v1/chat/completions", g.handleMethodNotAllowed("POST"))
+	g.mux.HandleFunc("/v1/", g.handleNotFound)
 	g.rl = auth.NewLimiter(d.Config.RateLimitPerKeyRPM, d.Clock)
 	g.metrics = newGatewayMetrics(d.Reg)
 	return g, nil
@@ -101,6 +107,21 @@ func (g *Gateway) Handler() http.Handler {
 		g.authMiddleware,
 		g.rateLimitMiddleware,
 	)
+}
+
+// handleNotFound answers any /v1/ path neither route pattern matched.
+func (g *Gateway) handleNotFound(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusNotFound, "invalid_request_error", "not_found", "the requested path does not exist")
+}
+
+// handleMethodNotAllowed answers a request to a known /v1/ path with the
+// wrong method; it only runs when the method-specific pattern alongside it
+// did not match, which net/http's mux guarantees happens first.
+func (g *Gateway) handleMethodNotAllowed(allow string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", allow)
+		writeError(w, http.StatusMethodNotAllowed, "invalid_request_error", "method_not_allowed", "method not allowed on this path")
+	}
 }
 
 func chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler {
@@ -159,6 +180,15 @@ type statusRecorder struct {
 	wroteHeader  bool
 	codeOverride string
 	keyID        string
+
+	// Fields below are observability-only, written by handleChatCompletions
+	// and read back by accessLogAndMetrics; /v1/models requests leave them
+	// at their zero values.
+	stream             bool
+	gen                int64
+	clamped            bool
+	maxTokensRequested int
+	outcome            string
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
@@ -178,6 +208,17 @@ func setCodeOverride(w http.ResponseWriter, code string) {
 	if sr, ok := w.(*statusRecorder); ok {
 		sr.codeOverride = code
 	}
+}
+
+// recorderOf returns w's *statusRecorder so a handler can stash fields
+// accessLogAndMetrics reads back later. Outside the middleware chain (a
+// test calling a handler directly) w is not a *statusRecorder, so this
+// returns a scratch value the caller can still write to safely.
+func recorderOf(w http.ResponseWriter) *statusRecorder {
+	if sr, ok := w.(*statusRecorder); ok {
+		return sr
+	}
+	return &statusRecorder{}
 }
 
 // setKeyID stashes the authenticated key id on the *statusRecorder so

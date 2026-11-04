@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,12 +27,13 @@ func TestAuthMatrixV1(t *testing.T) {
 		header     string
 		want       int
 		authReason string // empty for the one success case, which increments no auth_failures counter
+		wantCode   string // empty for the one success case, which has no error body
 	}{
-		{"no header", "", http.StatusUnauthorized, "missing"},
-		{"not bearer", "Basic xyz", http.StatusUnauthorized, "malformed"},
-		{"unknown key", "Bearer sk-vkllm-doesnotexist", http.StatusUnauthorized, "unknown_key"},
-		{"management token on v1", "Bearer sk-vkllm-mgmtmgmt9999", http.StatusForbidden, "wrong_surface"},
-		{"inference key", "Bearer sk-vkllm-aaaaaaaa1111", http.StatusOK, ""},
+		{"no header", "", http.StatusUnauthorized, "missing", "invalid_api_key"},
+		{"not bearer", "Basic xyz", http.StatusUnauthorized, "malformed", "invalid_api_key"},
+		{"unknown key", "Bearer sk-vkllm-doesnotexist", http.StatusUnauthorized, "unknown_key", "invalid_api_key"},
+		{"management token on v1", "Bearer sk-vkllm-mgmtmgmt9999", http.StatusForbidden, "wrong_surface", "permission_denied"},
+		{"inference key", "Bearer sk-vkllm-aaaaaaaa1111", http.StatusOK, "", ""},
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -46,6 +48,14 @@ func TestAuthMatrixV1(t *testing.T) {
 		if c.authReason != "" {
 			if got := testutil.ToFloat64(g.metrics.authFailuresTotal.WithLabelValues(c.authReason)); got != 1 {
 				t.Errorf("%s: auth_failures_total{reason=%q} = %v, want 1", c.name, c.authReason, got)
+			}
+		}
+		if c.wantCode != "" {
+			var body errorBody
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Errorf("%s: body %q does not parse as errorBody: %v", c.name, rec.Body.String(), err)
+			} else if body.Error.Code != c.wantCode {
+				t.Errorf("%s: body code = %q, want %q", c.name, body.Error.Code, c.wantCode)
 			}
 		}
 	}

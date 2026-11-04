@@ -41,7 +41,7 @@ func newGatewayMetrics(reg prometheus.Registerer) *gatewayMetrics {
 		}),
 		outputTokensPerSecond: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name: "vkllm_gateway_output_tokens_per_second",
-			Help: "Output chunks per second for a completed streamed response.",
+			Help: "Output tokens per second for a completed plain or streamed response.",
 		}),
 		// Future on-demand-mode metrics, registered now so a
 		// dashboard panel never shows "no data" after an upgrade.
