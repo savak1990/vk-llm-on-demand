@@ -38,7 +38,7 @@ func (b *drainBody) Close() error { return nil }
 func TestDrainCutoffMidStream(t *testing.T) {
 	failNow := make(chan struct{})
 	body := &drainBody{failNow: failNow}
-	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body}, nil
 	})
 
