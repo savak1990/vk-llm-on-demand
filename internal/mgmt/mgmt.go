@@ -54,19 +54,9 @@ func New(d Deps) http.Handler {
 	return withMiddleware(s, d)
 }
 
-// routes is a placeholder; it registers no handlers until the
-// endpoints that need them exist.
-func (s *server) routes() {}
-
 // withMiddleware is a placeholder that passes the handler through
 // unchanged until auth and rate-limiting wrap it.
 func withMiddleware(h http.Handler, d Deps) http.Handler { return h }
-
-// coalescer is a placeholder with no fields until call coalescing is
-// implemented.
-type coalescer struct{}
-
-func newCoalescer() *coalescer { return &coalescer{} }
 
 // registerMetrics is a placeholder; it registers nothing until
 // metrics are defined.
