@@ -252,6 +252,7 @@ func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen
 				firstByte = false
 			}
 			if _, werr := w.Write(buf[:n]); werr != nil {
+				setCodeOverride(w, "499")
 				return
 			}
 			_ = rc.Flush()

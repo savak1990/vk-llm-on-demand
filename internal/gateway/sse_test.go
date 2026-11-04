@@ -79,3 +79,38 @@ func TestSSEPassThrough(t *testing.T) {
 		t.Fatalf("ObserveFirstToken calls = %v, want exactly one with gen=3", ft)
 	}
 }
+
+// failWriteResponseWriter's Write always fails, modeling a client that
+// disconnected mid-stream after the 200/SSE headers already went out.
+// Unwrap lets http.ResponseController still reach the recorder's Flush.
+type failWriteResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (f *failWriteResponseWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
+func (f *failWriteResponseWriter) Unwrap() http.ResponseWriter { return f.ResponseWriter }
+
+func TestWriteErrorMidStreamLabeled499(t *testing.T) {
+	d := testDeps(t)
+	fc := &fakeController{status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	sr := &statusRecorder{ResponseWriter: &failWriteResponseWriter{ResponseWriter: httptest.NewRecorder()}}
+	resp := &http.Response{
+		StatusCode: 200,
+		Body:       &chunkedBody{chunks: [][]byte{[]byte("data: x\n\n")}},
+	}
+
+	g.streamUpstream(sr, resp, 1, chatReq(`{}`), g.deps.Clock.Now())
+
+	if sr.codeOverride != "499" {
+		t.Fatalf("codeOverride = %q, want %q (a write failure mid-stream is a disconnect, not a 200)", sr.codeOverride, "499")
+	}
+}
