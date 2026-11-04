@@ -136,7 +136,8 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 	defer func() { _ = resp.Body.Close() }()
 
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden, resp.StatusCode >= 500:
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden, resp.StatusCode >= 500,
+		resp.StatusCode >= 300 && resp.StatusCode < 400:
 		// The upstream answered, but with a status this gateway never
 		// forwards as-is. Headers still haven't been sent to the
 		// client, so this is plain too, regardless of stream.

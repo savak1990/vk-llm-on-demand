@@ -106,13 +106,15 @@ func TestUpstream4xxMapping(t *testing.T) {
 		body           string
 		wantStatus     int
 		wantCode       string
+		wantExactBody  bool
 		wantFailureInc bool
 	}{
 		{
-			name:       "openai-shaped 4xx passes through unchanged",
-			body:       `{"error":{"message":"bad request","type":"invalid_request_error","code":"invalid_request"}}`,
-			wantStatus: http.StatusBadRequest,
-			wantCode:   "invalid_request",
+			name:          "openai-shaped 4xx passes through unchanged",
+			body:          `{"error":{"message":"bad request","type":"invalid_request_error","code":"invalid_request"}}`,
+			wantStatus:    http.StatusBadRequest,
+			wantCode:      "invalid_request",
+			wantExactBody: true,
 		},
 		{
 			name:       "non-conforming 4xx body gets wrapped as upstream_rejected",
@@ -142,11 +144,49 @@ func TestUpstream4xxMapping(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), c.wantCode) {
 			t.Errorf("%s: body %q does not contain code %q", c.name, rec.Body.String(), c.wantCode)
 		}
+		if c.wantExactBody && rec.Body.String() != c.body {
+			t.Errorf("%s: body = %q, want upstream body passed through unchanged: %q", c.name, rec.Body.String(), c.body)
+		}
 		fc.mu.Lock()
 		gotFailure := len(fc.upstreamErr) != 0
 		fc.mu.Unlock()
 		if gotFailure {
 			t.Errorf("%s: ReportUpstreamFailure called, want 0 calls (a 4xx-with-body is not reported, only 401/403/5xx and transport failures are)", c.name)
 		}
+	}
+}
+
+// TestUpstream3xxReportedAsError guards against a 3xx upstream response
+// falling through to the stream/default cases, which would otherwise
+// get copied as if it were a confirmed 2xx.
+func TestUpstream3xxReportedAsError(t *testing.T) {
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"http://elsewhere"}}, Body: io.NopCloser(strings.NewReader(""))}, nil
+	})
+	d := testDeps(t)
+	fc := &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	d.Controller = fc
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (body %q)", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json (never SSE for a 3xx)", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "upstream_error") {
+		t.Fatalf("body %q does not contain code %q", rec.Body.String(), "upstream_error")
+	}
+	fc.mu.Lock()
+	gotFailure := len(fc.upstreamErr) != 0
+	fc.mu.Unlock()
+	if !gotFailure {
+		t.Fatal("ReportUpstreamFailure not called, want 1 call for a 3xx upstream response")
 	}
 }
