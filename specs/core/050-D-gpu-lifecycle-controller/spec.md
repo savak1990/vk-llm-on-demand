@@ -441,11 +441,12 @@ left to be rediscovered. None blocks DONE.
    attempts-cap checks for an offer arriving while `Searching`, so the
    create itself is now denied rather than merely unwound afterward.
 10. **`vkllm_gpu_uptime_seconds_total` records in one lump sum, not
-    incrementally.** The counter is added to once, when an instance returns
-    to Idle (or Destroying, from Searching), covering its whole
-    `createdAt`-to-now span in a single `Add`. The spec's text reads as
-    "recorded at each wake"; the shipped behavior gets the same total either
-    way, so this is a timing-of-recording difference, not a correctness gap.
+    incrementally.** The counter is added to once, on any transition that
+    lands in `Idle` from a state other than `Searching` for an instance that
+    had a provider id, covering that instance's whole `createdAt`-to-now
+    span in a single `Add`. The spec's text reads as "recorded at each
+    wake"; the shipped behavior gets the same total either way, so this is
+    a timing-of-recording difference, not a correctness gap.
 11. **The reconcile table's T15/T26 "still runs on a tick" wording is
     imprecise.** In the shipped code, T15 (startup timeout) and T26 (drain
     deadline) fire only on `EvDeadlineExpired`, never on a periodic `EvTick`,

@@ -132,9 +132,8 @@ type Facts struct {
 type Effect interface{ effect() }
 
 // effList, effBalance, effDestroy and effCloseConn are deliberately
-// absent: reconcile calls Provider.ListInstances/Balance directly from
-// its own async worker, and destroy/close-conn are generic hooks keyed
-// on the (state, next) class change itself, not a per-row effect.
+// absent: reconcile calls the provider directly from its own async
+// worker, and destroy/close-conn are generic (state, next) hooks, not per-row effects.
 type effSearch struct{ filter provider.OfferFilter }
 type effCreate struct {
 	offer provider.Offer

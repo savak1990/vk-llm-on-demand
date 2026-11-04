@@ -1912,6 +1912,9 @@ func TestIdleShutdownDisabledColdStartNeverDestroys(t *testing.T) {
 	h.Settle(readyAt.Add(10 * time.Second))
 	h.ctl.RequestEnd(gen)
 	h.Settle(readyAt.Add(21 * time.Second))
+	if d := h.ctl.Status().IdleDeadline; d != nil {
+		t.Fatalf("IdleDeadline = %v after activity, want nil with idle shutdown disabled", d)
+	}
 
 	h.Settle(readyAt.Add(3600 * time.Second))
 	if got := h.prov.Calls("destroy"); got != 0 {
@@ -1922,11 +1925,9 @@ func TestIdleShutdownDisabledColdStartNeverDestroys(t *testing.T) {
 	}
 }
 
-// Idle shutdown disabled on a warm restart must ignore a deadline left
-// over from an earlier run that had it enabled: a stale past deadline
-// must not destroy the instance, and must not livelock armIdle/
-// idleRuleFires into re-arming an already-past timer forever (Settle's
-// own spin detector fails the test if that happens).
+// A leftover deadline from an earlier enabled run must not destroy the
+// instance, nor livelock armIdle/idleRuleFires into re-arming an
+// already-past timer forever (Settle's own spin detector would catch that).
 func TestIdleShutdownDisabledWarmRestartIgnoresLeftoverDeadline(t *testing.T) {
 	h := buildHarness(t)
 	h.ctl.deps.Config.IdleShutdownEnabled = false

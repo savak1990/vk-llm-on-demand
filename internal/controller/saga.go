@@ -87,11 +87,8 @@ func (c *Controller) confirmPollStatus(gen int64, terminal bool) bool {
 }
 
 // Dials the address the caller just observed, never one read back from
-// the document, so a stale or edited document can't redirect the
-// connection. A repeat poll can start a second dial while the first is
-// still in flight; only the dial that lands first while still Booting
-// with no Conn installed wins, so a late or duplicate success is closed
-// instead of leaking or overwriting the live Conn.
+// the document. A repeat poll can start a second dial while the first
+// is still in flight; only the one that lands first wins, so a late or duplicate success is closed instead of overwriting the live Conn.
 func dispatchDial(ctx context.Context, c *Controller, e effDial) {
 	conn, err := c.deps.Dialer.Dial(ctx, e.inst)
 	if err != nil {
