@@ -77,11 +77,11 @@ func readKeySet(path string) (keySet, time.Time, error) {
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- path is one of two fixed config paths set at process startup, never user input
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	set := keySet{}
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
