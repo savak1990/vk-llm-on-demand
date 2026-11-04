@@ -21,14 +21,13 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
 
-// allowAllBudget and readyWorker are minimal stand-ins for the real
-// budget and worker implementations, built only against the exported
-// controller.Budget/controller.Worker interfaces — not a copy of
-// internal/controller's own test fakes.
+// allowAllBudget and readyWorker are minimal fakes built only against
+// the exported controller.Budget/controller.Worker interfaces, not a
+// copy of internal/controller's own test fakes.
 type allowAllBudget struct{}
 
 func (allowAllBudget) Allow(store.Document, provider.Money, bool) string    { return "" }
-func (allowAllBudget) AssertPrice(hourlyUSD, capUSD float64) error          { return nil }
+func (allowAllBudget) AssertPrice(float64, float64) error                   { return nil }
 func (allowAllBudget) OpenEntry(*store.Document, time.Time, int64, float64) {}
 func (allowAllBudget) CloseEntry(*store.Document, time.Time, int64)         {}
 func (allowAllBudget) Rollover(*store.Document, time.Time)                  {}
@@ -59,10 +58,9 @@ func (fakeDialer) Dial(context.Context, tunnel.Instance) (*tunnel.Conn, error) {
 	return tunnel.NewConn(nil, func() error { return nil }, "sha256:fake"), nil
 }
 
-// waitForReady advances the fake clock in small steps and polls the
-// controller's own public Status until it reports READY, so the saga's
-// background goroutines (search, create, poll, dial, probe) get real
-// wall-clock turns to run between each clock advance.
+// waitForReady advances the fake clock in small steps, giving the
+// saga's own background goroutines real wall-clock turns between each
+// step, and polls Status until it reports READY.
 func waitForReady(t *testing.T, ctl *controller.Controller, clk *fakeclock.Clock) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
