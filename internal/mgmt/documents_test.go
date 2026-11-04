@@ -28,6 +28,9 @@ func TestBuildStatusDocumentReadySnapshot(t *testing.T) {
 	if doc.SecondsUntilIdleShutdown == nil || *doc.SecondsUntilIdleShutdown != 1440 {
 		t.Fatalf("SecondsUntilIdleShutdown = %v, want 1440", doc.SecondsUntilIdleShutdown)
 	}
+	if doc.UptimeSeconds != 1800 {
+		t.Fatalf("UptimeSeconds = %v, want 1800", doc.UptimeSeconds)
+	}
 	if doc.Instance == nil || doc.Instance.GPU != "L40S" || doc.Instance.MachineID != 12345 {
 		t.Fatalf("Instance = %+v", doc.Instance)
 	}
