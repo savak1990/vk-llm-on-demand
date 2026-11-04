@@ -13,6 +13,8 @@ type fakeController struct {
 	startSnap, stopSnap, statusSnap controller.Snapshot
 	startErr, stopErr               error
 	startBlock                      chan struct{} // when non-nil, Start blocks until closed
+	stopBlock                       chan struct{} // when non-nil, Stop blocks until closed
+	stopForce                       bool          // force passed on the most recent Stop call
 }
 
 func newFakeController() *fakeController { return &fakeController{} }
@@ -30,11 +32,15 @@ func (f *fakeController) Start(_ context.Context) (controller.Snapshot, error) {
 	return snap, err
 }
 
-func (f *fakeController) Stop(_ context.Context, _ bool) (controller.Snapshot, error) {
+func (f *fakeController) Stop(_ context.Context, force bool) (controller.Snapshot, error) {
 	f.mu.Lock()
 	f.stopCalls++
-	snap, err := f.stopSnap, f.stopErr
+	f.stopForce = force
+	block, snap, err := f.stopBlock, f.stopSnap, f.stopErr
 	f.mu.Unlock()
+	if block != nil {
+		<-block
+	}
 	return snap, err
 }
 
@@ -42,6 +48,12 @@ func (f *fakeController) Status() controller.Snapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.statusSnap
+}
+
+func (f *fakeController) StopForce() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stopForce
 }
 
 func (f *fakeController) Calls(op string) int {
