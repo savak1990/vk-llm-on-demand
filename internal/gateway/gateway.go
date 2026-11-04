@@ -157,6 +157,7 @@ type statusRecorder struct {
 	status       int
 	wroteHeader  bool
 	codeOverride string
+	keyID        string
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
@@ -175,6 +176,15 @@ func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter 
 func setCodeOverride(w http.ResponseWriter, code string) {
 	if sr, ok := w.(*statusRecorder); ok {
 		sr.codeOverride = code
+	}
+}
+
+// setKeyID stashes the authenticated key id on the *statusRecorder so
+// accessLogAndMetrics, sitting above authMiddleware in the chain, can
+// log it; authMiddleware's own context value never reaches that layer.
+func setKeyID(w http.ResponseWriter, keyID string) {
+	if sr, ok := w.(*statusRecorder); ok {
+		sr.keyID = keyID
 	}
 }
 

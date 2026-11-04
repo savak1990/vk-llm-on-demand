@@ -41,10 +41,9 @@ func TestMetricsLabels(t *testing.T) {
 	}
 }
 
-// TestMetricsCountAuthAndRateLimitRejections is the regression test for
-// the advisor-caught bug: 401/403/429 responses return before reaching
-// the handler, so they are only counted if the metrics layer wraps auth
-// and rate-limiting too, not just the mux.
+// A 401/403/429 response returns before reaching a route handler, so
+// it is only counted if the metrics layer wraps auth and rate-limiting
+// too, not just the mux.
 func TestMetricsCountAuthAndRateLimitRejections(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	d := testDeps(t)
@@ -79,11 +78,9 @@ func TestMetricsCountAuthAndRateLimitRejections(t *testing.T) {
 	}
 }
 
-// TestMetricsNoSharedStateBetweenGateways proves collectors are
-// per-Gateway: two Gateway instances, each with its own registry, must
-// not panic on construction (a package-level var would double-register
-// on the second New() against the default registry, or leak counts
-// between instances sharing one registry).
+// Two Gateways, each with its own registry, must not panic on
+// construction: a package-level var would double-register the second
+// one against the default registry.
 func TestMetricsNoSharedStateBetweenGateways(t *testing.T) {
 	d1 := testDeps(t)
 	d1.Reg = prometheus.NewRegistry()
@@ -98,11 +95,9 @@ func TestMetricsNoSharedStateBetweenGateways(t *testing.T) {
 	}
 }
 
-// TestDisconnectIsLabeledCode499 is the regression test for the
-// advisor-caught bug: a mid-stream disconnect must be recorded as
-// requests_total{code="499"}, not "200" — status 200 was already
-// written before the disconnect was noticed, so only codeOverride can
-// correct the label.
+// A mid-stream disconnect must be recorded as code="499", not "200":
+// 200 was already written before the disconnect was noticed, so only
+// codeOverride can correct the label.
 func TestDisconnectIsLabeledCode499(t *testing.T) {
 	ctxDone := make(chan struct{}, 1)
 	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
@@ -156,7 +151,7 @@ func TestRecoverDoesNotWriteAfterHeadersSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	g.mux.HandleFunc("GET /v1/test-panic-mid-stream", func(w http.ResponseWriter, r *http.Request) {
+	g.mux.HandleFunc("GET /v1/test-panic-mid-stream", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("partial"))
 		panic("boom after headers")
@@ -170,6 +165,27 @@ func TestRecoverDoesNotWriteAfterHeadersSent(t *testing.T) {
 	}
 	if rec.Body.String() != "partial" {
 		t.Fatalf("body = %q, want %q (recover must not append anything after the panic)", rec.Body.String(), "partial")
+	}
+}
+
+// authMiddleware stores keyID on a derived *http.Request its callees
+// see, but accessLogAndMetrics sits above it with the original
+// request, so only *statusRecorder.keyID can carry the value up.
+func TestAccessLogIncludesKeyID(t *testing.T) {
+	var buf bytes.Buffer
+	d := testDeps(t)
+	d.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	req := chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`)
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, req)
+
+	if !strings.Contains(buf.String(), "key_id=aaaaaaaa") {
+		t.Fatalf("access log missing key_id=aaaaaaaa: %s", buf.String())
 	}
 }
 

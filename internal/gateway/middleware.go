@@ -17,6 +17,7 @@ func (g *Gateway) authMiddleware(next http.Handler) http.Handler {
 		keyID, err := g.deps.Keys.Check(r.Header.Get("Authorization"), auth.Inference)
 		switch {
 		case err == nil:
+			setKeyID(w, keyID)
 			ctx := context.WithValue(r.Context(), ctxKeyKeyID, keyID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		case errors.Is(err, auth.ErrMissing):
@@ -73,7 +74,7 @@ func (g *Gateway) accessLogAndMetrics(next http.Handler) http.Handler {
 			"request_id", r.Context().Value(ctxKeyRequestID),
 			"route", route,
 			"status_code", code,
-			"key_id", r.Context().Value(ctxKeyKeyID),
+			"key_id", rec.keyID,
 		)
 	})
 }
