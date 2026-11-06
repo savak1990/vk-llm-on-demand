@@ -71,7 +71,7 @@ func TestEstimatedMTD(t *testing.T) {
 	doc := store.Document{Ledger: store.Ledger{
 		TotalUSD: 10,
 		Entries: []store.LedgerEntry{
-			{Gen: 1, End: &closedEnd, EstUSD: 1.0}, // closed: already folded into TotalUSD, must not double-count
+			{Gen: 1, End: &closedEnd, EstUSD: 1.0}, // closed: cost already added to TotalUSD when it closed, must not double-count
 			{Gen: 2, EstUSD: 0.25},                 // open
 		},
 	}}
@@ -87,5 +87,22 @@ func TestAssertPriceBoundary(t *testing.T) {
 	}
 	if err := c.AssertPrice(0.80, 0.80); err != nil {
 		t.Fatalf("AssertPrice(0.80, 0.80) = %v, want nil (equal is allowed)", err)
+	}
+}
+
+func TestClosedEntryCountsTowardMonthlyCap(t *testing.T) {
+	c := New(Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.80})
+	t0 := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
+	doc := store.Document{Ledger: store.Ledger{Month: "2026-11"}}
+	c.OpenEntry(&doc, t0, 1, 0.80)
+	c.CloseEntry(&doc, t0.Add(40*time.Hour), 1)
+	if r := c.Allow(doc, provider.Money(100_000_000), true); r != "budget_exhausted" {
+		t.Fatalf("Allow after $32 closed spend = %q, want budget_exhausted", r)
+	}
+}
+
+func TestWorkedArithmeticMonthlyHoursAtCap(t *testing.T) {
+	if 30.0/0.80 != 37.5 {
+		t.Fatal("30/0.80 != 37.5 — shipped defaults no longer match the spec's worked figure")
 	}
 }

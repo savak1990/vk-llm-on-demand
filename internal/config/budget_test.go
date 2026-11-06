@@ -1,4 +1,3 @@
-// internal/config/budget_test.go
 package config
 
 import "testing"

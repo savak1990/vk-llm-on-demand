@@ -15,6 +15,9 @@ const MaxLedgerEntries = 100
 // understate a deny-gate input — before applying the hourly rate.
 func estUSD(dph float64, start, now time.Time) float64 {
 	seconds := math.Ceil(now.Sub(start).Seconds())
+	if seconds < 0 {
+		seconds = 0
+	}
 	return dph * seconds / 3600
 }
 
@@ -38,6 +41,7 @@ func (c *Checker) CloseEntry(doc *store.Document, now time.Time, gen int64) {
 			e.EstUSD = estUSD(e.DPH, e.Start, now)
 			t := now
 			e.End = &t
+			doc.Ledger.TotalUSD += e.EstUSD
 			break
 		}
 	}
@@ -45,8 +49,8 @@ func (c *Checker) CloseEntry(doc *store.Document, now time.Time, gen int64) {
 }
 
 // foldOverflow removes the oldest closed entries once the list exceeds
-// MaxLedgerEntries, adding each one's EstUSD into TotalUSD first. It
-// never removes an open entry.
+// MaxLedgerEntries. Their cost is already in TotalUSD (added by
+// CloseEntry); this only trims the array, never re-adds it.
 func foldOverflow(doc *store.Document) {
 	for len(doc.Ledger.Entries) > MaxLedgerEntries {
 		idx := -1
@@ -59,7 +63,6 @@ func foldOverflow(doc *store.Document) {
 		if idx == -1 {
 			return
 		}
-		doc.Ledger.TotalUSD += doc.Ledger.Entries[idx].EstUSD
 		doc.Ledger.Entries = append(doc.Ledger.Entries[:idx], doc.Ledger.Entries[idx+1:]...)
 	}
 }

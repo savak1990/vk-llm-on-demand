@@ -43,6 +43,10 @@ func TestOpenRefreshClose(t *testing.T) {
 	if e.End == nil || !e.End.Equal(t0.Add(2*time.Hour)) || e.EstUSD != 1.20 {
 		t.Fatalf("CloseEntry after 2h: End=%v EstUSD=%v, want 1.20", e.End, e.EstUSD)
 	}
+	c.CloseEntry(&doc, t0.Add(3*time.Hour), 7) // repeat close of the same gen
+	if doc.Ledger.TotalUSD != 1.20 {
+		t.Fatalf("TotalUSD = %v, want 1.20 (added once at close, never twice)", doc.Ledger.TotalUSD)
+	}
 }
 
 func TestCloseEntryDoesNothingForUnknownGen(t *testing.T) {
@@ -64,17 +68,20 @@ func TestFoldOnOverflow(t *testing.T) {
 		doc.Ledger.Entries = append(doc.Ledger.Entries, store.LedgerEntry{
 			Gen: gen, Start: start, End: &start, DPH: 1.0, EstUSD: 0.01,
 		})
+		doc.Ledger.TotalUSD += 0.01 // CloseEntry would already have added this; fold must not re-add it
 	}
-	wantFoldedUSD := doc.Ledger.Entries[0].EstUSD // the oldest closed entry
+	totalBeforeFold := doc.Ledger.TotalUSD
 
 	c.OpenEntry(&doc, t0.Add(101*time.Hour), 101, 0.71)
 	c.CloseEntry(&doc, t0.Add(101*time.Hour+time.Minute), 101)
+	newEntryCost := doc.Ledger.Entries[len(doc.Ledger.Entries)-1].EstUSD
 
 	if len(doc.Ledger.Entries) != 100 {
 		t.Fatalf("len(Entries) = %d, want 100 after folding", len(doc.Ledger.Entries))
 	}
-	if doc.Ledger.TotalUSD != wantFoldedUSD {
-		t.Fatalf("TotalUSD = %v, want %v (the oldest closed entry's EstUSD folded in)", doc.Ledger.TotalUSD, wantFoldedUSD)
+	wantTotal := totalBeforeFold + newEntryCost
+	if doc.Ledger.TotalUSD != wantTotal {
+		t.Fatalf("TotalUSD = %v, want %v (fold removes the array entry only; its cost was already added when it closed)", doc.Ledger.TotalUSD, wantTotal)
 	}
 	last := doc.Ledger.Entries[len(doc.Ledger.Entries)-1]
 	if last.Gen != 101 || last.End == nil {
