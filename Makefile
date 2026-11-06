@@ -44,11 +44,17 @@ image-build: require-svc ## Build a single-arch local image for SVC (docker buil
 image-push: require-svc buildx-init ## Build and push a multi-arch image for SVC
 	docker buildx build --builder vk --push --platform linux/amd64,linux/arm64 --provenance=false -f deploy/docker/$(SVC).Dockerfile -t $(IMAGE) .
 
+HELM_TEST_SET = --set image.tag=test \
+	--set existingSecrets.provider=p --set existingSecrets.apiKeys=k --set existingSecrets.ssh=s \
+	--set config.model.url=https://example.com/m.gguf \
+	--set config.model.sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
+	--set config.worker.image=example/worker
+
 helm-lint: ## Lint the deploy/helm/<CHART> chart
-	helm lint deploy/helm/$(CHART)
+	helm lint deploy/helm/$(CHART) $(HELM_TEST_SET)
 
 helm-template: ## Render the deploy/helm/<CHART> chart
-	helm template deploy/helm/$(CHART)
+	helm template deploy/helm/$(CHART) $(HELM_TEST_SET)
 
 helm-package: ## Package the chart at VERSION into dist/
 	helm package deploy/helm/$(CHART) --version $(VERSION) --app-version $(VERSION) -d dist/
