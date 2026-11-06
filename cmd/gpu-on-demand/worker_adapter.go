@@ -31,9 +31,9 @@ func (a *workerAdapter) WorkerKey(seed []byte, installationID string, gen int64)
 	return worker.WorkerKey(seed, installationID, gen)
 }
 
-// BuildCreate's error path is unreachable: config.LoadWorker already
-// validates these fields at startup. A panic here means a config
-// invariant broke, not a request-time condition.
+// BuildCreate's error path is unreachable: wire() already validates
+// these same fields once at startup via worker.BuildCreate directly.
+// A panic here means that check and this call disagree.
 func (a *workerAdapter) BuildCreate(offer provider.Offer, label, workerKey string) provider.CreateRequest {
 	req, err := worker.BuildCreate(worker.CreateParams{
 		Image: a.cfg.WorkerImage, DiskGB: a.diskGB, Label: label,

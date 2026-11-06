@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -112,6 +113,15 @@ func TestWireServesInferenceAndManagementThroughOneMux(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /api/v1/gpu/status: code = %d, want 200", rec.Code)
 	}
+	var status struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&status); err != nil {
+		t.Fatalf("decode status response: %v", err)
+	}
+	if status.State == "STOPPED" {
+		t.Fatalf("status state = %q, want something other than STOPPED after start", status.State)
+	}
 	// Start's effects (search, then create) run on the controller's own
 	// spawned goroutines, not inline in the mgmt handler, so give them a
 	// short real-time window before failing.
@@ -121,5 +131,66 @@ func TestWireServesInferenceAndManagementThroughOneMux(t *testing.T) {
 	}
 	if prov.Calls("create") < 1 {
 		t.Fatal("wire: starting through the mounted mgmt handler never reached the fake provider's create")
+	}
+}
+
+// TestWireBudgetOverridesMgmtBudgetMonthUSD proves wire() makes
+// Budget.MonthlyUSD the one source of truth for the cost document, not
+// whatever Mgmt.BudgetMonthUSD happened to carry in.
+func TestWireBudgetOverridesMgmtBudgetMonthUSD(t *testing.T) {
+	clk := fakeclock.New(time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC))
+	prov := fakeprovider.NewSeeded(clk)
+	st := fakestore.New("test-iid")
+
+	clientKeysPath := writeTestKeyFile(t, "client-keys", "sk-vkllm-clientkey1")
+	mgmtTokensPath := writeTestKeyFile(t, "management-tokens", "sk-vkllm-mgmttoken1")
+	keys, err := auth.Load(clientKeysPath, mgmtTokensPath, clk, noopTestLogger())
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
+	}
+	seed, err := gateway.LoadWorkerSeed(writeTestKeyFile(t, "worker-seed", "seed-bytes"), clk)
+	if err != nil {
+		t.Fatalf("gateway.LoadWorkerSeed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	d := wireDeps{
+		Ctx: ctx, Clock: clk, Provider: prov, Store: st,
+		Dialer: tunnel.NewDirect("unused:0"), Keys: keys,
+		Seed: seed, WorkerSeedFunc: func() ([]byte, error) { return seed.Bytes(), nil },
+		InstallationID: "test-iid", ModelAlias: "qwen3.6-35b-a3b",
+		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3},
+		Budget:     config.Budget{MonthlyUSD: 42, WarnFraction: 0.8, MaxHourlyPriceUSD: 0.80},
+		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
+		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, BudgetMonthUSD: 99, RateLimitPerKeyRPM: 60},
+		Worker:     testWorkerCfg(),
+		Reg:        prometheus.NewRegistry(), Log: noopTestLogger(),
+	}
+
+	apiMux, ctl, gw, err := wire(d)
+	if err != nil {
+		t.Fatalf("wire: %v", err)
+	}
+	t.Cleanup(func() { _ = gw.Shutdown(context.Background()) })
+	go func() { _ = ctl.Run(d.Ctx) }()
+
+	req := httptest.NewRequest("GET", "/api/v1/gpu/cost", nil)
+	req.Header.Set("Authorization", "Bearer sk-vkllm-mgmttoken1")
+	rec := httptest.NewRecorder()
+	apiMux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/gpu/cost: code = %d, want 200", rec.Code)
+	}
+
+	var cost struct {
+		BudgetMonthUSD float64 `json:"budgetMonthUSD"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&cost); err != nil {
+		t.Fatalf("decode cost response: %v", err)
+	}
+	if cost.BudgetMonthUSD != 42 {
+		t.Fatalf("budgetMonthUSD = %v, want 42 (Budget.MonthlyUSD, not Mgmt.BudgetMonthUSD=99)", cost.BudgetMonthUSD)
 	}
 }

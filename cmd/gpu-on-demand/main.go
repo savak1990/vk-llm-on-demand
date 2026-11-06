@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -24,6 +25,7 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider/vastai"
+	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/store/configmap"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
@@ -137,7 +139,6 @@ func main() {
 		slog.Error("config error", "err", err)
 		os.Exit(1)
 	}
-	mgmtCfg.BudgetMonthUSD = budgetCfg.MonthlyUSD // one source of truth, not a second copy
 	workerCfg, err := config.LoadWorker(controllerCfg.IdleShutdownTimeout)
 	if err != nil {
 		slog.Error("config error", "err", err)
@@ -156,12 +157,13 @@ func main() {
 		slog.Error("store init error", "err", err)
 		os.Exit(1)
 	}
+	readinessChecks = append(readinessChecks, store.Ready(storeClient))
 
 	var prov provider.Provider
 	switch mgmtCfg.ProviderName {
 	case "fake":
 		prov = fakeprovider.NewSeeded(clk)
-	default:
+	case "vastai":
 		//nolint:gosec // backoff jitter, not a credential
 		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
 		prov = vastai.New("https://console.vast.ai", http.DefaultClient,
@@ -169,6 +171,9 @@ func main() {
 				b, err := os.ReadFile(workerCfg.ProviderAPIKeyFile)
 				return strings.TrimSpace(string(b)), err
 			}, clk, rnd, slog.Default(), reg)
+	default:
+		slog.Error("config error", "err", fmt.Errorf("unrecognized VKLLM_PROVIDER_NAME %q", mgmtCfg.ProviderName))
+		os.Exit(1)
 	}
 
 	var dialer tunnel.Dialer
@@ -200,7 +205,11 @@ func main() {
 		slog.Error("wire error", "err", err)
 		os.Exit(1)
 	}
-	go func() { _ = ctl.Run(ctx) }()
+	go func() {
+		if err := ctl.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("controller run exited", "err", err)
+		}
+	}()
 
 	api := &http.Server{
 		Addr:              ":8080",

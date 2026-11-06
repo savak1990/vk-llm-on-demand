@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -46,8 +47,22 @@ type wireDeps struct {
 // handlers on one mux. ctl's Run must be started by the caller — wire
 // only constructs it, so a test can inspect it before starting the loop.
 func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, error) {
+	d.Mgmt.BudgetMonthUSD = d.Budget.MonthlyUSD // one source of truth, not a second copy
+
+	if _, err := worker.BuildCreate(worker.CreateParams{
+		Image: d.Worker.WorkerImage, DiskGB: d.Controller.ProviderFilter.MinDiskGB, Label: "wire-validate",
+		ModelURL: d.Worker.ModelURL, ModelSHA256: d.Worker.ModelSHA256, Alias: d.ModelAlias,
+		Ctx: d.Mgmt.ModelContextSize, Parallel: d.Worker.ModelParallel,
+		DeadMan: d.Worker.WorkerDeadManTimeout, WorkerKey: "wire-validate",
+	}); err != nil {
+		return nil, nil, nil, fmt.Errorf("worker config: %w", err)
+	}
+
 	exp := worker.NewExporter()
 	w := newWorkerAdapter(d.Worker, d.Controller.ProviderFilter.MinDiskGB, d.ModelAlias, d.Mgmt.ModelContextSize, exp)
+	controller.RegisterMetrics(d.Reg)
+	store.RegisterMetrics(d.Reg)
+	d.Reg.MustRegister(exp)
 	b := budget.New(budget.Config{MonthlyUSD: d.Budget.MonthlyUSD, WarnFraction: d.Budget.WarnFraction, MaxHourlyPriceUSD: d.Budget.MaxHourlyPriceUSD})
 
 	ctl, err := controller.New(controller.Deps{
