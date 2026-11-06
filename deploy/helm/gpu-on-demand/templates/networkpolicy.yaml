@@ -1,0 +1,66 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "svc.fullname" . }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "svc.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: TCP
+        - port: 53
+          protocol: UDP
+    - to:
+        {{- if .Values.networkPolicy.apiServerCidrs }}
+        {{- range .Values.networkPolicy.apiServerCidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- else }}
+        {{- $ep := lookup "v1" "Endpoints" "default" "kubernetes" }}
+        {{- if not $ep }}
+        {{- fail "networkPolicy.apiServerCidrs is required: lookup could not resolve the kube-apiserver Endpoints (helm template / Argo rendering has no live-cluster access)" }}
+        {{- end }}
+        {{- range (index $ep.subsets 0).addresses }}
+        - ipBlock:
+            cidr: {{ printf "%s/32" .ip }}
+        {{- end }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        {{- if .Values.networkPolicy.vastApiCidrs }}
+        {{- range .Values.networkPolicy.vastApiCidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+        {{- else }}
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+    - ports:
+        - port: {{ .Values.networkPolicy.sshPorts.from }}
+          endPort: {{ .Values.networkPolicy.sshPorts.to }}
+          protocol: TCP
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.gatewayNamespace }}
+      ports:
+        - port: http
+    - ports:
+        - port: metrics
+{{- end }}
