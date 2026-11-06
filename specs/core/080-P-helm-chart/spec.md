@@ -103,6 +103,9 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.tunnel.dialer` | `ssh` | `VKLLM_TUNNEL_DIALER` — `ssh` or `direct`; `direct` only for the kind job with the fake worker (architecture §9) |
 | `config.tunnel.directAddr` | `""` | `VKLLM_TUNNEL_DIRECT_ADDR` — host:port of the fake worker when `direct` (architecture §9) |
 | `config.tunnel.sshKeyFile` | `/etc/vkllm/secrets/ssh/id_ed25519` | `VKLLM_TUNNEL_SSH_KEY_FILE` |
+| `config.auth.clientKeysFile` | `/etc/vkllm/api-keys/client-keys` | `VKLLM_AUTH_CLIENT_KEYS_FILE` |
+| `config.auth.managementTokensFile` | `/etc/vkllm/api-keys/management-tokens` | `VKLLM_AUTH_MANAGEMENT_TOKENS_FILE` |
+| `config.auth.workerSeedFile` | `/etc/vkllm/api-keys/worker-seed` | `VKLLM_AUTH_WORKER_SEED_FILE` |
 | `config.model.alias` | `qwen3.6-35b-a3b` | `VKLLM_MODEL_ALIAS` |
 | `config.model.url` | no default, required | `VKLLM_MODEL_URL` |
 | `config.model.sha256` | no default, required | `VKLLM_MODEL_SHA256` |
@@ -117,7 +120,7 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 
 `config.mgmt.budgetMonthUSD`/`VKLLM_MGMT_BUDGET_MONTH_USD` is deliberately not a chart value — `cmd/gpu-on-demand/wire.go` always overrides it from `config.budget.monthlyUSD`, so rendering it would let an operator set a value with no effect.
 
-40 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
+43 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
 
 | Env var | Value | Why it is not a `config.*` row |
 |---|---|---|
@@ -166,7 +169,7 @@ Two checks beyond plain types, both load-bearing for safety (R-I):
 ```
 
 1. `config.lifecycle.provisioningMode` accepts only `explicit` in the MVP; `on-demand` fails schema validation naming the field (ADR 0010 §1 — `on-demand` is parsed by the Go binary but this chart never ships a value for it).
-2. `config.lifecycle.idleShutdown.enabled: false` is refused unless `config.lifecycle.safety.maxLifetime` is a non-empty string, so no installation can rent a GPU with neither stop condition active (ADR 0011 §5, FR-3.12). With the default `maxLifetime: 12h` already set, disabling `idleShutdown` alone never trips this guard; only an installation that also clears `maxLifetime` does. The `pattern` requires at least one digit `1`-`9` somewhere in the string: a duration string with no such digit (`"0s"`, `"0h0m"`, even `""`-adjacent nonsense like `"s"`) always evaluates to zero, which is the same as having no lifetime bound at all.
+2. `config.lifecycle.idleShutdown.enabled: false` is refused unless `config.lifecycle.safety.maxLifetime` is a non-empty string, so no installation can rent a GPU with neither stop condition active (ADR 0011 §5, FR-3.12). With the default `maxLifetime: 12h` already set, disabling `idleShutdown` alone never trips this guard; only an installation that also clears `maxLifetime` does. The `pattern` requires at least one digit `1`-`9` somewhere in the string: a duration string with no such digit (`"0s"`, `"0h0m"`) always evaluates to zero, which is the same as having no lifetime bound at all.
 
 ### State ConfigMap shell
 
@@ -316,7 +319,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 - R10. `strategy.type` MUST be `Recreate`; the chart MUST fail its render when `replicaCount` is not exactly `1`. (source: ADR 0003 §1)
 - R11. Probes MUST target `/healthz` and `/readyz` on container port 9090, matching CORE-010 R6/R7, and MUST NOT depend on a GPU instance existing. (source: CORE-010 R6, R7, FR-1.7)
 - R12. Each `existingSecrets.*` Secret MUST be mounted as files — `provider` and `ssh` under `/etc/vkllm/secrets/{provider,ssh}`, `apiKeys` under `/etc/vkllm/api-keys/` — and MUST NOT be exposed through `env` or `envFrom`. (source: ADR 0009 §1)
-- R13. The rendered application `ConfigMap` MUST contain exactly the 40 `VKLLM_*` keys listed in this spec's `config.*` table plus the two fixed keys `VKLLM_STATE_CONFIGMAP` and `VKLLM_INSTALLATION_ID`, 42 total, with no other key. (source: architecture §9)
+- R13. The rendered application `ConfigMap` MUST contain exactly the 43 `VKLLM_*` keys listed in this spec's `config.*` table plus the two fixed keys `VKLLM_STATE_CONFIGMAP` and `VKLLM_INSTALLATION_ID`, 45 total, with no other key. (source: architecture §9)
 - R14. `values.yaml` MUST NOT contain a hostname, a domain, an `fqdn` value or a secret value anywhere in its defaults. (source: C-14, NFR-8.6)
 - R15. The chart MUST render without error, and without any `HTTPRoute` or `Ingress` object, when both `httpRoute.enabled` and `ingress.enabled` are `false`, and MUST install on any Kubernetes cluster with no ingress controller present. (source: NFR-9.2, C-23)
 - R16. `helm uninstall` MUST leave no `ConfigMap` behind, including the state document's `ConfigMap`; `helm upgrade` MUST leave the state document's content untouched. (source: NFR-9.1, ADR 0004 §1)
@@ -336,7 +339,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 
 1. `Chart.yaml`, `values.yaml` with every key and default from this spec, `values.schema.json` enforcing types, the `provisioningMode` enum, and the `idleShutdown`/`maxLifetime` `if`/`then` guard — other required fields are guarded in the templates (`required "message" .Values.x`) so every missing-value error comes from one place with one message. Test: `helm lint deploy/helm/gpu-on-demand` exits 0.
 2. `_helpers.tpl` copied and extended from `vk-ahorro`'s (`svc.name`, `svc.fullname`, `svc.labels`, `svc.selectorLabels`, `svc.host`, `svc.image`, `svc.pullPolicy`) plus `svc.configEnv`. Test: `helm template` with minimal `--set` values renders a `Deployment` with a resolved image reference.
-3. `deployment.yaml`, `service.yaml`, `configmap.yaml`, `serviceaccount.yaml`. Test: `helm template` output contains the `checksum/config` annotation and exactly the 40 `VKLLM_*` keys from the `config.*` table, plus the 2 fixed keys.
+3. `deployment.yaml`, `service.yaml`, `configmap.yaml`, `serviceaccount.yaml`. Test: `helm template` output contains the `checksum/config` annotation and exactly the 43 `VKLLM_*` keys from the `config.*` table, plus the 2 fixed keys.
 4. `role.yaml`, `rolebinding.yaml`. Test: `helm template --set rbac.create=true` output's `Role` has exactly one rule block matching the RBAC section verbatim; `grep -cE 'create|patch'` on its verbs is `0`.
 5. `httproute.yaml`, `ingress.yaml`. Test: three `helm template` invocations (no route / httpRoute / ingress) each produce exactly the expected object set; the `httpRoute` render's `HTTPRoute` has exactly 2 rules, paths `/v1` and `/api/v1`.
 6. `servicemonitor.yaml`, `networkpolicy.yaml`, `externalsecrets.yaml`. Test: enabling each in isolation renders the right object set — `externalsecrets.yaml` renders exactly 5 `ExternalSecret` objects; the `networkpolicy.yaml` render adds `--set networkPolicy.apiServerCidrs={10.0.0.1/32}`, since `helm template` cannot resolve `lookup` and would otherwise hit the `fail` guard.
