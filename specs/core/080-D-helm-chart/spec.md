@@ -48,8 +48,8 @@ Excludes: the `gitops/` app-of-apps chart and the platform pointer `Application`
 | `ingress.yaml` | `networking.k8s.io/v1` `Ingress`, one `/` prefix rule to the same `Service` | if `ingress.enabled` |
 | `servicemonitor.yaml` | `monitoring.coreos.com/v1` `ServiceMonitor` only (`PrometheusRule` and the dashboard `ConfigMap` are CORE-090's own templates, added when that spec is implemented) | if `serviceMonitor.enabled` |
 | `networkpolicy.yaml` | one `NetworkPolicy`, egress + ingress | if `networkPolicy.enabled` |
-| `externalsecrets.yaml` | five `external-secrets.io/v1` `ExternalSecret` objects, one `range` | if `externalSecrets.enabled` |
-| `NOTES.txt` | post-install text; never prints `.Values.host` or a Secret value; prints the three-command workflow (`curl .../api/v1/gpu/start` / client curl / `curl .../api/v1/gpu/stop`) with placeholders, an OpenCode config pointer, the `installationId` warning, and the drain-before-uninstall reminder | yes |
+| `externalsecrets.yaml` | three `external-secrets.io/v1` `ExternalSecret` objects, one per target Secret — the `api-keys` object carries 3 `data` entries | if `externalSecrets.enabled` |
+| `NOTES.txt` | post-install text; never prints `.Values.host` or a Secret value; prints the three-command workflow (`curl .../api/v1/gpu/start` / client curl / `curl .../api/v1/gpu/stop`) with placeholders, the `installationId` warning, and the drain-before-uninstall reminder | yes |
 
 `Chart.yaml`: `apiVersion: v2`, `name: gpu-on-demand`, `type: application`, placeholder `version: "0.1.0"` overridden by `--version` at publish, placeholder `appVersion: "0.1.0"` overridden by `--app-version` to the commit SHA (ADR 0008 §4, copied pattern).
 
@@ -99,7 +99,7 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.controller.reconcileInterval` | `60s` | `VKLLM_CONTROLLER_RECONCILE_INTERVAL` |
 | `config.gateway.maxBodyBytes` | `1048576` | `VKLLM_GATEWAY_MAX_BODY_BYTES` |
 | `config.gateway.maxTokensCap` | `8192` | `VKLLM_GATEWAY_MAX_TOKENS_CAP` |
-| `config.gateway.rateLimitPerKeyRPM` | `60` | `VKLLM_GATEWAY_RATE_LIMIT_PER_KEY_RPM` — inference keys and management tokens alike |
+| `config.gateway.rateLimitPerKeyRPM` | `60` | `VKLLM_GATEWAY_RATE_LIMIT_PER_KEY_RPM` — inference keys only |
 | `config.tunnel.dialer` | `ssh` | `VKLLM_TUNNEL_DIALER` — `ssh` or `direct`; `direct` only for the kind job with the fake worker (architecture §9) |
 | `config.tunnel.directAddr` | `""` | `VKLLM_TUNNEL_DIRECT_ADDR` — host:port of the fake worker when `direct` (architecture §9) |
 | `config.tunnel.sshKeyFile` | `/etc/vkllm/secrets/ssh/id_ed25519` | `VKLLM_TUNNEL_SSH_KEY_FILE` |
@@ -143,7 +143,7 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 {{- end -}}
 ```
 
-`values.schema.json` adds one `pattern` beyond types: `installationId`, when non-empty, matches `^[a-z0-9][a-z0-9-]{0,31}$` — the same pattern CORE-040's `NewDocument` enforces, so a value like `e2e-<user>` (`docs/testing-strategy.md`) passes both and a value CORE-040 would reject never reaches it. CORE-040's `NewDocument` reads `installationId` from configuration rather than generating one at random (ADR 0004 §6, amended); this chart's `svc.installationId` helper is that value's source, fixed ahead of time so it survives a lost-and-recreated `ConfigMap` and so two tier-3 kind installs (one per laptop user) never collide. `NOTES.txt` prints a one-line warning: changing `installationId` on an existing release changes every future instance's label, so the running instance (if any) stops matching it and the next reconcile treats it as an orphan and destroys it (ADR 0003 §4).
+`values.schema.json` adds one `pattern` beyond types: `installationId`, when non-empty, matches `^[a-z0-9][a-z0-9-]{0,31}$` — the same pattern CORE-040's `NewDocument` enforces, so a value like `e2e-<user>` (`docs/testing-strategy.md`) passes both and a value CORE-040 would reject never reaches it. CORE-040's `NewDocument` reads `installationId` from configuration rather than generating one at random (ADR 0004 §6, amended); this chart's `svc.installationId` helper is that value's source, fixed ahead of time so it survives a lost-and-recreated `ConfigMap` and so two tier-3 kind installs (one per laptop user) never collide. `NOTES.txt` prints a warning: changing `installationId` on an existing release makes the stored state document mismatch what the controller expects, so `configmap.Load` returns `ErrInstallation`, `controller.recover` propagates it, and the controller's `Run` loop exits entirely — `/readyz` fails forever while `/healthz` stays `200`, and no reconcile (orphan sweep, idle/lifetime enforcement, budget drain) ever runs again. A GPU that was running keeps billing until the worker's own dead-man timer fires; the install itself stays stuck until someone manually fixes the state document.
 
 ### `values.schema.json` — provisioning mode and the idle/lifetime guard
 
@@ -247,14 +247,14 @@ The `.apiKeys` mount path matches `internal/config/auth.go`'s real shipped defau
 
 ### `ExternalSecret` contract, when `externalSecrets.enabled`
 
-`externalsecrets.yaml` ranges over the five rows below, rendering one `external-secrets.io/v1` `ExternalSecret` per row. `target.name` MUST equal the matching `existingSecrets.*` value — the Secret mounts above are keyed by that name, not by anything `ExternalSecret` invents — so ESO and this chart must agree on the name even though neither renders the other's object.
+`externalsecrets.yaml` renders exactly three `external-secrets.io/v1` `ExternalSecret` objects, one per TARGET Secret — not one per remote key — because External Secrets Operator's ownership model (`creationPolicy: Owner`, the default) makes whichever `ExternalSecret` reconciles first own its target Secret; a second object targeting the same Secret fails permanently with `ErrSecretIsOwned` instead of being requeued. The `api-keys` object (targeting `existingSecrets.apiKeys`) therefore carries three `data` entries, one per remote key below, rather than being three separate objects. `target.name` MUST equal the matching `existingSecrets.*` value — the Secret mounts above are keyed by that name, not by anything `ExternalSecret` invents — so ESO and this chart must agree on the name even though neither renders the other's object.
 
 | Remote key (`externalSecrets.prefix` + suffix, ADR 0009 §3) | `target.name` | `target` Secret key |
 |---|---|---|
 | `/vast-api-key` | `.Values.existingSecrets.provider` | `VAST_API_KEY` |
-| `/client-keys` | `.Values.existingSecrets.apiKeys` | `client-keys` |
-| `/management-tokens` | `.Values.existingSecrets.apiKeys` (same Secret, second key) | `management-tokens` |
-| `/worker-seed` | `.Values.existingSecrets.apiKeys` (same Secret, third key) | `worker-seed` |
+| `/client-keys` | `.Values.existingSecrets.apiKeys` (same Secret, one of 3 `data` entries) | `client-keys` |
+| `/management-tokens` | `.Values.existingSecrets.apiKeys` (same Secret, one of 3 `data` entries) | `management-tokens` |
+| `/worker-seed` | `.Values.existingSecrets.apiKeys` (same Secret, one of 3 `data` entries) | `worker-seed` |
 | `/ssh-private-key` | `.Values.existingSecrets.ssh` | `id_ed25519` |
 
 `secretStoreRef.name` is `externalSecrets.storeRef`, kind `ClusterSecretStore`. The `external-secrets.io/v1` API group and the `ClusterSecretStore`/`ExternalSecret` kinds are taken from ADR 0009 §3's prose, not from `research.md`, which has no External Secrets Operator section — recorded in Open questions.
@@ -307,7 +307,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 5. `curl -X POST .../api/v1/gpu/start -H "Authorization: Bearer <management token>"` returns `202`; poll with `curl -s -H "Authorization: Bearer <management token>" .../api/v1/gpu/status | jq -r .state` until it reports `READY` (the fake provider's instant offer and instance make this fast, no manual seeding beyond step 2).
 6. `curl -H "Authorization: Bearer <client key>" .../v1/models` returns `200` (FR-1.2); a streamed `curl -N -X POST .../v1/chat/completions` returns SSE chunks ending `data: [DONE]`, proxied through the `direct` dialer to the fake worker.
 7. `curl -X POST .../api/v1/gpu/stop -H "Authorization: Bearer <management token>"` returns `202`; poll `curl -s -H "Authorization: Bearer <management token>" .../api/v1/gpu/status | jq -r .state` until it reports `STOPPED`.
-8. `helm upgrade` with `--set config.lifecycle.idleShutdown.timeout=10m`; observe a new `ReplicaSet` (changed `checksum/config`); re-run `curl -s -H "Authorization: Bearer <management token>" .../api/v1/gpu/status | jq -r .installationId` and assert it is unchanged — the proof that the shell `ConfigMap`'s merge left the live document alone.
+8. `helm upgrade` with `--set config.lifecycle.idleShutdown.timeout=10m`; observe a new `ReplicaSet` (changed `checksum/config`); re-run `curl -s -H "Authorization: Bearer <management token>" .../api/v1/gpu/status | jq -r .installationId` and assert it is unchanged; also capture `kubectl get configmap gpu-on-demand-state -o jsonpath='{.data.state\.json}'` before and after the upgrade and assert the two are byte-identical — the proof that the shell `ConfigMap`'s merge left the live document alone, since `installationId` alone would read the same even if the document had been wiped and regenerated.
 9. `helm uninstall`; `kubectl get configmap gpu-on-demand-state` and the application `ConfigMap` both return `NotFound`.
 
 ## Requirements
@@ -347,7 +347,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 3. `deployment.yaml`, `service.yaml`, `configmap.yaml`, `serviceaccount.yaml`. Test: `helm template` output contains the `checksum/config` annotation and exactly the 43 `VKLLM_*` keys from the `config.*` table, plus the 2 fixed keys.
 4. `role.yaml`, `rolebinding.yaml`. Test: `helm template --set rbac.create=true` output's `Role` has exactly one rule block matching the RBAC section verbatim; `grep -cE 'create|patch'` on its verbs is `0`.
 5. `httproute.yaml`, `ingress.yaml`. Test: three `helm template` invocations (no route / httpRoute / ingress) each produce exactly the expected object set; the `httpRoute` render's `HTTPRoute` has exactly 2 rules, paths `/v1` and `/api/v1`.
-6. `servicemonitor.yaml`, `networkpolicy.yaml`, `externalsecrets.yaml`. Test: enabling each in isolation renders the right object set — `externalsecrets.yaml` renders exactly 5 `ExternalSecret` objects; the `networkpolicy.yaml` render adds `--set networkPolicy.apiServerCidrs={10.0.0.1/32}`, since `helm template` cannot resolve `lookup` and would otherwise hit the `fail` guard.
+6. `servicemonitor.yaml`, `networkpolicy.yaml`, `externalsecrets.yaml`. Test: enabling each in isolation renders the right object set — `externalsecrets.yaml` renders exactly 3 `ExternalSecret` objects, the one targeting `existingSecrets.apiKeys` carrying exactly 3 `data` entries; the `networkpolicy.yaml` render adds `--set networkPolicy.apiServerCidrs={10.0.0.1/32}`, since `helm template` cannot resolve `lookup` and would otherwise hit the `fail` guard.
 7. `NOTES.txt`. Test: `helm template` with `host` set does not print that string anywhere in `NOTES.txt`'s rendered output.
 8. Add the `-schema-location` datree catalog flag to the `helm` CI job's kubeconform step. Test: the three-variant kubeconform run (CI validation section) exits 0.
 9. Write the kind job. Test: the full nine-step sequence in the kind CI job section passes locally against a throwaway kind cluster.
@@ -366,7 +366,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 - AC9. Setup: `--set httpRoute.enabled=true`, no `host`. Action: `helm template`. Expected: non-zero exit, error text containing `host is required`. (R4)
 - AC10. Setup: `--set replicaCount=2`. Action: `helm template`. Expected: non-zero exit, error text naming `replicaCount`. (R10)
 - AC11. Setup: `--set rbac.create=true`. Action: `helm template`, extract the `Role`. Expected: exactly one rule block; its verbs are exactly `["get","update"]`; no rule contains `create`, `patch`, `delete` or `list`. (R8)
-- AC12. Action: kind job steps 1–9 (CI validation / kind CI job section). Expected: step 3 (`Ready`) within 60 s; step 4's status curl reports `STOPPED`; step 5's start reaches `READY`; step 6's curl returns `200` and the streamed chat completion ends `data: [DONE]`; step 7's stop reaches `STOPPED`; step 8 produces a new `ReplicaSet` name and the same `installationId` as step 5; step 9's `kubectl get configmap` returns `NotFound` for both the application `ConfigMap` and `gpu-on-demand-state`. (R16, R21, FR-1.2)
+- AC12. Action: kind job steps 1–9 (CI validation / kind CI job section). Expected: step 3 (`Ready`) within 60 s; step 4's status curl reports `STOPPED`; step 5's start reaches `READY`; step 6's curl returns `200` and the streamed chat completion ends `data: [DONE]`; step 7's stop reaches `STOPPED`; step 8 produces a new `ReplicaSet` name, the same `installationId` as step 5, and byte-identical `gpu-on-demand-state` ConfigMap data before and after the upgrade; step 9's `kubectl get configmap` returns `NotFound` for both the application `ConfigMap` and `gpu-on-demand-state`. (R16, R21, FR-1.2)
 - AC13. Setup: `--set rbac.create=true` with release name `foo`. Action: `helm template`, extract the `Role`'s `resourceNames` and `state-configmap.yaml`'s `metadata.name`. Expected: both equal `foo-state`, not `foo-gpu-on-demand-state`. (R17)
 - AC14. Action: render `NOTES.txt` with `--set host=llm.lab.example.com`. Expected: the string `lab.example.com` does not appear in the rendered `NOTES.txt`. (R19)
 - AC15. Action: `helm template` twice with the same `--namespace`/release name and no `installationId` set. Expected: `VKLLM_INSTALLATION_ID` is identical both times; a third render with a different release name yields a different value. (R23)

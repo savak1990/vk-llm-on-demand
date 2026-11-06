@@ -87,7 +87,7 @@
             "properties": {
               "safety": {
                 "properties": {
-                  "maxLifetime": { "minLength": 1, "pattern": ".*[1-9].*" }
+                  "maxLifetime": { "minLength": 1, "pattern": "^[^-]*[1-9]" }
                 },
                 "required": ["maxLifetime"]
               }

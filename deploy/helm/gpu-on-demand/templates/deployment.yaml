@@ -23,7 +23,7 @@ spec:
       labels:
         {{- include "svc.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ .Values.serviceAccount.name | default (include "svc.fullname" .) }}
+      serviceAccountName: {{ if .Values.rbac.create }}{{ .Values.serviceAccount.name | default (include "svc.fullname" .) }}{{ else }}{{ required "serviceAccount.name is required when rbac.create is false" .Values.serviceAccount.name }}{{ end }}
       automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true

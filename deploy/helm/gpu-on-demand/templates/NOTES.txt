@@ -11,9 +11,11 @@ Three-command workflow (replace <management-token> with a value from the
     http://<service>/api/v1/gpu/stop
 
 installationId: {{ include "svc.installationId" . }}
-Changing installationId on an existing release changes every future
-instance's label; a running instance stops matching it and the next
-reconcile treats it as an orphan and destroys it.
+Changing installationId on an existing release makes the stored state
+document mismatch and the controller stop reconciling entirely (readyz
+fails, healthz does not) — a running GPU keeps billing until the
+worker's own dead-man timer fires. Do not change this on a release with
+a GPU running.
 
 Before `helm uninstall`: drain with the stop command above and wait for
 state STOPPED. Uninstall never touches a running GPU instance, only this
