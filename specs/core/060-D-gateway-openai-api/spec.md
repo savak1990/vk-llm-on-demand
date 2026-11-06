@@ -393,7 +393,7 @@ None of this is compiled into the MVP paths.
 
 - [x] AC1–AC20 are each exercised and pass (`go test ./internal/gateway/... -v -race`, 68/68), but six of them have a sub-case of their literal Expected clause not independently asserted — AC1, AC4, AC6, AC12, AC13 and AC16; see Evidence's "Known residual AC gaps" for exactly which sub-case in each. AC21 (`sdk-compat` job) deliberately deferred — spec marks it optional/non-blocking; not built this round.
 - [x] `main` loads and periodically reloads `auth.Load`/`gateway.LoadWorkerSeed`, and `/readyz` includes both their readiness checks.
-- [ ] `main` wires `gateway.New`, `Shutdown`, and mounts `/v1/` on `apiMux` — **not done**. No branch (CORE-050, CORE-055, or this one) has constructed a real `*controller.Controller` inside `cmd/gpu-on-demand/main.go` yet; that construction is this item's prerequisite and belongs to whichever follow-up task does it first. See Evidence.
+- [x] `main` wires `gateway.New`, `Shutdown`, and mounts `/v1/` on `apiMux` (closed by commit 92aeaf8 and the wiring plan; see Evidence).
 - [x] Status flipped to DONE in the same PR, folder renamed to `060-D-gateway-openai-api`.
 - [x] Evidence section filled.
 
@@ -440,6 +440,6 @@ None of this is compiled into the MVP paths.
 
 **Real-host findings:** none — this spec never touched a real Vast.ai instance; `Admit`/`RequestEnd`/`ObserveFirstToken`/`ReportUpstreamFailure` are exercised only against `internal/controller`'s real public surface via fakes, never a live backend.
 
-**Open gap, not closed by this spec:** `cmd/gpu-on-demand/main.go` still has no real `*controller.Controller` construction — a pre-existing gap this spec did not create (CORE-050 merged without wiring it, CORE-055 hasn't either). `internal/gateway`'s own half of the eventual wiring is ready: `gateway.New(gateway.Deps{Controller: ctl, Keys: keys, Seed: seed, Config: gwCfg, InstallationID: cfg.InstallationID, Reg: reg, Log: slog.Default()})`, `apiMux.Handle("/v1/", gw.Handler())`, and `gw.Shutdown(ctx)` alongside the HTTP servers' own `Shutdown` in `waitAndShutdown` — whoever writes that construction block next connects these three calls.
+**Open gap, closed:** `cmd/gpu-on-demand/main.go` constructor now wires the real controller, gateway, and management API (commit 92aeaf8 on the wire-gpu-on-demand-main plan). The full assembly is `gateway.New(gateway.Deps{Controller: ctl, Keys: keys, Seed: seed, Config: gwCfg, InstallationID: cfg.InstallationID, Reg: reg, Log: slog.Default()})`, `apiMux.Handle("/v1/", gw.Handler())`, and `gw.Shutdown(ctx)` integrated into the bootstrap and shutdown flow.
 
 **Pre-existing, unrelated validation failures** (run in this session, not touched by this fix wave): `make helm-lint` fails with `Error unable to check Chart.yaml file in chart: stat deploy/helm/gpu-on-demand/Chart.yaml: no such file or directory`; `make helm-template` fails with `Error: repo deploy not found`. Both fail because `deploy/helm/` does not exist anywhere in this repository's history — that is CORE-080, a separate, not-yet-built spec. `make specs-check` passes in this session.
