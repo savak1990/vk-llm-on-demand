@@ -5,17 +5,27 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/gateway"
+	"github.com/savak1990/vk-llm-on-demand/internal/provider"
+	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
+	"github.com/savak1990/vk-llm-on-demand/internal/provider/vastai"
+	"github.com/savak1990/vk-llm-on-demand/internal/store/configmap"
+	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
 
 // readinessChecks holds every registered readiness probe; it stays empty until checks exist, so readyz never needs restructuring when one is added.
@@ -36,7 +46,7 @@ func readyz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // run starts both servers, blocks until ctx is done, then drains each for up to 30s total.
-func run(ctx context.Context, api, health *http.Server) error {
+func run(ctx context.Context, api, health *http.Server, gw *gateway.Gateway) error {
 	errs := make(chan error, 2)
 	go func() {
 		if err := api.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -49,7 +59,7 @@ func run(ctx context.Context, api, health *http.Server) error {
 		}
 	}()
 
-	return waitAndShutdown(ctx, errs, api.Shutdown, health.Shutdown)
+	return waitAndShutdown(ctx, errs, gw.Shutdown, api.Shutdown, health.Shutdown)
 }
 
 // waitAndShutdown blocks until ctx is done or a listen error arrives, then shuts all down
@@ -83,15 +93,8 @@ func main() {
 
 	clk := clock.Real{}
 
-	// gw stays unconstructed until a real *controller.Controller exists to hand it;
-	// mgmt wiring onto apiMux is a separate addition not yet made here either.
-
 	authCfg, err := config.LoadAuth()
 	if err != nil {
-		slog.Error("config error", "err", err)
-		os.Exit(1)
-	}
-	if _, err := config.LoadGateway(); err != nil {
 		slog.Error("config error", "err", err)
 		os.Exit(1)
 	}
@@ -109,6 +112,75 @@ func main() {
 		return nil
 	})
 
+	topCfg, err := config.Load()
+	if err != nil {
+		slog.Error("config error", "err", err)
+		os.Exit(1)
+	}
+	controllerCfg, err := config.LoadController()
+	if err != nil {
+		slog.Error("config error", "err", err)
+		os.Exit(1)
+	}
+	budgetCfg, err := config.LoadBudget()
+	if err != nil {
+		slog.Error("config error", "err", err)
+		os.Exit(1)
+	}
+	gatewayCfg, err := config.LoadGateway()
+	if err != nil {
+		slog.Error("config error", "err", err)
+		os.Exit(1)
+	}
+	mgmtCfg, err := config.LoadMgmt()
+	if err != nil {
+		slog.Error("config error", "err", err)
+		os.Exit(1)
+	}
+	mgmtCfg.BudgetMonthUSD = budgetCfg.MonthlyUSD // one source of truth, not a second copy
+	workerCfg, err := config.LoadWorker(controllerCfg.IdleShutdownTimeout)
+	if err != nil {
+		slog.Error("config error", "err", err)
+		os.Exit(1)
+	}
+
+	reg := prometheus.NewRegistry()
+
+	st, err := configmap.InCluster(topCfg.StateConfigMapName, topCfg.InstallationID)
+	if err != nil {
+		slog.Error("store config error", "err", err)
+		os.Exit(1)
+	}
+	storeClient, err := configmap.New(st)
+	if err != nil {
+		slog.Error("store init error", "err", err)
+		os.Exit(1)
+	}
+
+	var prov provider.Provider
+	switch mgmtCfg.ProviderName {
+	case "fake":
+		prov = fakeprovider.NewSeeded(clk)
+	default:
+		//nolint:gosec // backoff jitter, not a credential
+		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
+		prov = vastai.New("https://console.vast.ai", http.DefaultClient,
+			func() (string, error) {
+				b, err := os.ReadFile(workerCfg.ProviderAPIKeyFile)
+				return strings.TrimSpace(string(b)), err
+			}, clk, rnd, slog.Default(), reg)
+	}
+
+	var dialer tunnel.Dialer
+	switch controllerCfg.TunnelDialer {
+	case "direct":
+		dialer = tunnel.NewDirect(controllerCfg.TunnelDirectAddr)
+	default:
+		dialer = tunnel.NewSSH(func() ([]byte, error) {
+			return os.ReadFile(workerCfg.SSHPrivateKeyFile)
+		})
+	}
+
 	seed, err := gateway.LoadWorkerSeed(authCfg.WorkerSeedFile, clk)
 	if err != nil {
 		slog.Error("worker seed load error", "err", err)
@@ -117,11 +189,19 @@ func main() {
 	go seed.Run(ctx)
 	readinessChecks = append(readinessChecks, seed.Loaded)
 
-	// gw, and mounting it on apiMux, wait on a real *controller.Controller existing.
+	apiMux, ctl, gw, err := wire(wireDeps{
+		Ctx: ctx, Clock: clk, Provider: prov, Store: storeClient, Dialer: dialer,
+		Keys: keys, Seed: seed, WorkerSeedFunc: func() ([]byte, error) { return seed.Bytes(), nil },
+		InstallationID: topCfg.InstallationID, ModelAlias: gatewayCfg.ModelAlias,
+		Controller: controllerCfg, Budget: budgetCfg, Gateway: gatewayCfg, Mgmt: mgmtCfg, Worker: workerCfg,
+		Reg: reg, Log: slog.Default(),
+	})
+	if err != nil {
+		slog.Error("wire error", "err", err)
+		os.Exit(1)
+	}
+	go func() { _ = ctl.Run(ctx) }()
 
-	apiMux := http.NewServeMux()
-	// apiMux.Handle("/v1/", gw.Handler()) once ctl is constructed here.
-	// apiMux.Handle("/api/v1/gpu/", mg) is a separate, not-yet-made addition.
 	api := &http.Server{
 		Addr:              ":8080",
 		Handler:           apiMux,
@@ -137,9 +217,10 @@ func main() {
 	healthMux := http.NewServeMux()
 	healthMux.HandleFunc("/healthz", healthz)
 	healthMux.HandleFunc("/readyz", readyz)
+	healthMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
 	health := &http.Server{Addr: ":9090", Handler: healthMux, ReadHeaderTimeout: 10 * time.Second}
 
-	if err := run(ctx, api, health); err != nil {
+	if err := run(ctx, api, health, gw); err != nil {
 		slog.Error("server error", "err", err)
 		os.Exit(1)
 	}
