@@ -66,8 +66,7 @@ func foldOverflow(doc *store.Document) {
 
 // Rollover fires at most once per call, when now's UTC month differs
 // from the stored one. A still-open entry survives the boundary with a
-// fresh Start — its pre-rollover partial cost is dropped, matching the
-// metric counter's own rule of never decreasing.
+// fresh Start — its pre-rollover partial cost is dropped.
 func (c *Checker) Rollover(doc *store.Document, now time.Time) {
 	month := now.UTC().Format("2006-01")
 	if doc.Ledger.Month == month {
