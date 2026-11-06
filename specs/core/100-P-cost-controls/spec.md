@@ -1,6 +1,6 @@
 ---
 id: "CORE-100"
-status: "DRAFT"
+status: "READY"
 updated: "2026-11-01"
 depends_on: ["CORE-050"]
 adrs: ["0003", "0004", "0005", "0010", "0011", "0012"]
@@ -18,11 +18,11 @@ adrs: ["0003", "0004", "0005", "0010", "0011", "0012"]
 
 ## Outcome
 
-`internal/controller/budget` gives the controller one gate, `Checker.Allow`, that must pass before any offer search and again before any `CreateInstance` call, plus `InstanceSpendExceeded`, the per-instance spend check `CORE-050` polls every tick. It drives the month-to-date ledger bookkeeping on `CORE-040`'s `store.Ledger`, the $30/0.80 USD arithmetic behind `vkllm_budget_used_ratio`, and the provider-balance floor. Done, a simulated month of demand stops provisioning the instant month-to-date spend would reach `budget.monthlyUSD`, drains a `Serving` instance the same way — or the instant `lifecycle.safety.maxInstanceSpendUSD` is reached, when set above its default of `0` — never provisions with less than two hours of prepaid balance at stake, and reports estimated cost and its own blind spots through four metrics, `GET /api/v1/gpu/status` and `GET /api/v1/gpu/cost`.
+`internal/budget` gives the controller one gate, `Checker.Allow`, that must pass before any offer search and again before any `CreateInstance` call, plus `InstanceSpendExceeded`, the per-instance spend check `CORE-050` polls every tick. It drives the month-to-date ledger bookkeeping on `CORE-040`'s `store.Ledger`, the $30/0.80 USD arithmetic behind `vkllm_budget_used_ratio`, and the provider-balance floor. Done, a simulated month of demand stops provisioning the instant month-to-date spend would reach `budget.monthlyUSD`, drains a `Serving` instance the same way — or the instant `lifecycle.safety.maxInstanceSpendUSD` is reached, when set above its default of `0` — never provisions with less than two hours of prepaid balance at stake, and reports estimated cost and its own blind spots through four metrics, `GET /api/v1/gpu/status` and `GET /api/v1/gpu/cost`.
 
 ## Scope
 
-- `internal/controller/budget`: `Checker`, `Config`, `Allow`, `InstanceSpendExceeded`, `UsedRatio`, `AssertPrice`, and the ledger bookkeeping functions (`OpenEntry`, `RefreshOpenEntry`, `CloseEntry`, `Rollover`, `EstimatedMTD`) operating on `CORE-040`'s `store.Ledger`/`store.LedgerEntry` as already defined there.
+- `internal/budget`: `Checker`, `Config`, `Allow`, `InstanceSpendExceeded`, `UsedRatio`, `AssertPrice`, and the ledger bookkeeping functions (`OpenEntry`, `RefreshOpenEntry`, `CloseEntry`, `Rollover`, `EstimatedMTD`) operating on `CORE-040`'s `store.Ledger`/`store.LedgerEntry` as already defined there.
 - Month rollover (UTC, first of month): what gets dropped, what persists.
 - The cost model: how Vast.ai bills, why a `dph × uptime` estimate drifts from it, what it ignores, reconciliation against the console, and the worked arithmetic for the shipped defaults, including open question Q5.
 - Four metrics (`vkllm_budget_used_ratio`, `vkllm_cost_estimated_usd_total`, `vkllm_cost_instance_usd`, `vkllm_provider_balance_usd`): this package computes their values with pure functions; `CORE-050` calls `CORE-090`'s obs setters after each commit. The alert expectation placed on `CORE-050`'s orphan metric.
@@ -32,9 +32,9 @@ Excludes: the `State` enum, transition table, provisioning saga, reconcile loop 
 
 ## Design and contracts
 
-### Package choice: `internal/controller/budget`, not `internal/cost`
+### Package choice: `internal/budget`, not `internal/cost`
 
-The common brief's fixed package list is `internal/{gateway,controller,provider,store,tunnel,worker,config,obs}`; no `cost`/`budget` entry exists, so this spec adds no new top-level package. `internal/controller/budget` nests inside the package that calls it, mirroring `provider/vastai` and `tunnel/ssh`. `Checker` holds only `Config` and a `clock.Clock`; every method takes values the caller already has.
+The common brief's fixed package list is `internal/{gateway,controller,provider,store,tunnel,worker,config,obs,budget}`; `internal/budget` is a top-level package. `Checker` holds only `Config`; every method takes values the caller already has.
 
 ### Ledger
 
@@ -84,49 +84,44 @@ type Config struct {
 
 type Checker struct {
 	cfg Config
-	clk clock.Clock
 }
-func New(cfg Config, clk clock.Clock) *Checker
-// Allow reports whether a new provisioning attempt (offer search or create)
-// may proceed. balanceUSD is the caller's most recent Provider.Balance read.
-func (c *Checker) Allow(doc store.Document, balanceUSD float64) (ok bool, reason string)
+func New(cfg Config) *Checker
+
+// Allow returns "" when a new provisioning attempt may proceed, or one
+// of "budget_exhausted"/"balance_low" otherwise. An unknown balance
+// (known == false) is treated as "balance_low", never a separate value.
+func (c *Checker) Allow(doc store.Document, balance provider.Money, known bool) string
+
 // UsedRatio is EstimatedMTD(doc) / cfg.MonthlyUSD; it never denies by itself.
 func (c *Checker) UsedRatio(doc store.Document) float64
 ```
+
+No clock dependency — every time-sensitive method takes `now time.Time` from its caller.
+
+An unknown balance folds into `balance_low` — matches ADR 0012 §1's enum; the ADR's `balance_unknown` value is stale and is not reopened (CORE-055's own ledger already noted this fold).
 
 `Allow` runs two checks in order and returns on the first failure:
 
 | Order | Check | Deny condition | `reason` |
 |---|---|---|---|
-| 1 | Monthly cap | `EstimatedMTD(doc) >= cfg.MonthlyUSD` | `"monthly_budget_exceeded"` |
-| 2 | Balance floor | `balanceUSD < 2 * cfg.MaxHourlyPriceUSD` | `"balance_floor"` |
+| 1 | Monthly cap | `EstimatedMTD(doc) >= cfg.MonthlyUSD` | `"budget_exhausted"` |
+| 2 | Balance floor | `balance < 2 * cfg.MaxHourlyPriceUSD` | `"balance_low"` |
 
-`reason == ""`, `ok == true` otherwise. `WarnFraction` is never checked here; warning is a metric-and-alert concern (FR-6.4), not a deny.
+Empty string `""`, `Allow` returns otherwise. `WarnFraction` is never checked here; warning is a metric-and-alert concern (FR-6.4), not a deny.
 
 **Why `2 × maxHourlyPrice`, not 1×:** one hour covers a full `Serving` hour at the worst price without the account reaching $0, where Vast schedules the instance and its data for deletion (research §1.5). The second hour is margin: `lifecycle.startupTimeout` (15 min) + `lifecycle.shutdown.drainTimeout` (60s) + the attempt-backoff ceiling (30 min, ADR 0003 §5, unchanged by ADR 0011) sum to under an hour of delay before destroy confirms.
 
-### `InstanceSpendExceeded`: the per-instance spend cap
+### Per-instance spend cap
 
-```go
-// InstanceSpendExceeded reports whether the open entry for gen has reached
-// cfg.MaxInstanceSpendUSD. Always false when MaxInstanceSpendUSD == 0 (the
-// default, off). Pure; CORE-050 calls it every Tick, the same cadence as
-// its own maxLifetime check, and on true drains the instance through the
-// same path as a monthly-cap exhaustion.
-func (c *Checker) InstanceSpendExceeded(doc store.Document, gen int64) bool
-```
-
-Left at `0` (default), this always returns `false`; the implicit ceiling is then `lifecycle.safety.maxLifetime × maxHourlyPriceUSD` = `12h × $0.80/h = $9.60` at the shipped defaults — the worst case for the full allowed lifetime at the price ceiling. Set above `0`, it only ever lowers that ceiling, checked independently of the monthly cap and `maxLifetime` (ADR 0011 §5); whichever limit is reached first drains the instance.
+Already implemented and tested inline in `internal/controller/reconcile.go` (`reconcile_test.go`), reading the open ledger entry's `EstUSD` directly against `lifecycle.safety.maxInstanceSpendUSD` — never delegated to this package. R12/AC9 are satisfied by that existing code, not by anything this spec's own package builds.
 
 ### `AssertPrice`: the second price check
 
 `CORE-020`'s offer filter excludes offers above `lifecycle.safety.maxHourlyPriceUSD` at search time. Nothing guarantees the price holds between `SearchOffers` and the matching `CreateInstance` (research §1.2 is silent on atomicity), so the controller asserts again right before `CreateInstance`:
 
 ```go
-var ErrPriceTooHigh = errors.New("budget: offer price above lifecycle.safety.maxHourlyPriceUSD")
-
 // AssertPrice returns ErrPriceTooHigh when dph exceeds max; equal is allowed.
-func AssertPrice(dph, maxHourlyPriceUSD float64) error
+func (c *Checker) AssertPrice(hourlyUSD, capUSD float64) error
 ```
 
 A failed assertion is terminal for that attempt (counted against `lifecycle.safety.maxProvisionAttemptsPerHour` by `CORE-050`): C-1 extends to never creating a GPU above the configured ceiling, even once.
@@ -186,8 +181,8 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 
 ## Requirements
 
-- R1. `Checker.Allow` MUST deny with `"monthly_budget_exceeded"` when `EstimatedMTD(doc) >= cfg.MonthlyUSD`. (source: FR-6.3, C-1, C-7)
-- R2. `Checker.Allow` MUST deny with `"balance_floor"` when `balanceUSD < 2 * cfg.MaxHourlyPriceUSD`, checked only after R1 passes. (source: research §1.5, ADR 0011 §5)
+- R1. `Checker.Allow` MUST return `"budget_exhausted"` when `EstimatedMTD(doc) >= cfg.MonthlyUSD`. (source: FR-6.3, C-1, C-7)
+- R2. `Checker.Allow` MUST return `"balance_low"` when `balance < 2 * cfg.MaxHourlyPriceUSD`, checked only after R1 passes. (source: research §1.5, ADR 0011 §5)
 - R3. `EstimatedMTD` MUST equal `ledger.TotalUSD` plus the sum of every open entry's current `EstUSD`. (source: ADR 0004 Consequences, FR-6.3)
 - R4. Every `EstUSD` computation MUST round elapsed time up to the next whole second before multiplying by `dph / 3600`, so a deny-gate input is never understated. (source: C-1, FR-6.3)
 - R5. `ledger.Entries` MUST NOT exceed 100; the oldest closed entry MUST be folded into `ledger.TotalUSD` before any append exceeding the cap. (source: ADR 0004 Consequences)
@@ -197,7 +192,7 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 - R9. Budget exhaustion while `Serving` — monthly cap or `InstanceSpendExceeded` — MUST result in `Draining` then `Destroying`; new requests during that drain MUST see `503 backend_unavailable` with no `Retry-After`. (source: ADR 0011 §1, §3, ADR 0010 §2–§3)
 - R10. `Checker` MUST NOT make a `Provider` or `Store` call itself; `doc` and `balanceUSD` MUST be supplied by the caller; no metric here MUST carry an instance id or other unbounded label. (source: C-26, C-27, C-34)
 - R11. `budget.monthlyUSD`, `budget.warnFraction`, `lifecycle.safety.maxHourlyPriceUSD`, `lifecycle.safety.maxInstanceSpendUSD` MUST NOT be hard-coded inside `internal/controller/budget`; they arrive only through `Config`. (source: C-7)
-- R12. `Checker.InstanceSpendExceeded` MUST return `true` only when `cfg.MaxInstanceSpendUSD > 0` and the open entry for `gen`'s current `EstUSD >= cfg.MaxInstanceSpendUSD`; it MUST return `false` whenever `MaxInstanceSpendUSD == 0`. (source: ADR 0011 §5)
+- R12. The per-instance spend check in `internal/controller/reconcile.go` MUST return `true` only when `cfg.MaxInstanceSpendUSD > 0` and the open entry for `gen`'s current `EstUSD >= cfg.MaxInstanceSpendUSD`; it MUST return `false` whenever `MaxInstanceSpendUSD == 0`. (source: ADR 0011 §5)
 
 ## Implementation steps
 
@@ -216,7 +211,7 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 - AC6. Setup: 100 closed entries plus one about to close (101 total). Action: `CloseEntry`. Expected: `len(Entries) == 100` afterwards, the oldest closed entry's `EstUSD` added to `TotalUSD`, the just-closed entry still present. (R5, R8)
 - AC7. Setup: entry opened at `t0`, `dph = 0.71`. Action: `RefreshOpenEntry` at `t0+89.6s` and `t0+90s`. Expected: identical `EstUSD` (`0.71 × 90/3600`) both times — both round up to 90 whole seconds, the boundary only moving past `t0+90s`. (R4)
 - AC8. Action: pure arithmetic assertion in the test. Expected: `30 / 0.80 == 37.5`, matching the worked figure above. (guards the doc against silent default drift)
-- AC9. Setup: `MaxInstanceSpendUSD=5`, open entry `EstUSD=4.99`, then `5.00`. Action: `InstanceSpendExceeded`. Expected: `false`, then `true`. With `MaxInstanceSpendUSD=0` and `EstUSD=1000`: `false`. (R12)
+- AC9. The per-instance check is tested in `internal/controller/reconcile_test.go` with `MaxInstanceSpendUSD=5`, open entry `EstUSD=4.99`, then `5.00`. Expected: `false`, then `true`. With `MaxInstanceSpendUSD=0` and `EstUSD=1000`: `false`. (R12)
 
 ## Definition of done
 
