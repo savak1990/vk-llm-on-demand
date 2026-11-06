@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["image", "existingSecrets"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "required": ["tag"],
+      "properties": {
+        "repository": { "type": "string" },
+        "tag": { "type": "string", "minLength": 1 },
+        "pullPolicy": { "type": "string" }
+      }
+    },
+    "existingSecrets": {
+      "type": "object",
+      "required": ["provider", "apiKeys", "ssh"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "apiKeys": { "type": "string", "minLength": 1 },
+        "ssh": { "type": "string", "minLength": 1 }
+      }
+    },
+    "host": { "type": "string" },
+    "installationId": {
+      "type": "string",
+      "pattern": "^$|^[a-z0-9][a-z0-9-]{0,31}$"
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "auth": {
+          "type": "object",
+          "properties": {
+            "clientKeysFile": { "type": "string" },
+            "managementTokensFile": { "type": "string" },
+            "workerSeedFile": { "type": "string" }
+          }
+        },
+        "model": {
+          "type": "object",
+          "required": ["url", "sha256"],
+          "properties": {
+            "alias": { "type": "string" },
+            "url": { "type": "string", "pattern": "^https://" },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "contextSize": { "type": "integer", "minimum": 1 },
+            "parallel": { "type": "integer", "minimum": 1 },
+            "generationTimeout": { "type": "string" }
+          }
+        },
+        "worker": {
+          "type": "object",
+          "required": ["image"],
+          "properties": {
+            "image": { "type": "string", "minLength": 1 },
+            "deadManTimeout": { "type": "string" }
+          }
+        },
+        "lifecycle": {
+          "type": "object",
+          "properties": {
+            "provisioningMode": { "type": "string", "enum": ["explicit"] },
+            "idleShutdown": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "timeout": { "type": "string" }
+              }
+            },
+            "safety": {
+              "type": "object",
+              "properties": {
+                "maxHourlyPriceUSD": { "type": "number" },
+                "maxLifetime": { "type": "string" },
+                "maxInstanceSpendUSD": { "type": "number" },
+                "maxProvisionAttemptsPerHour": { "type": "integer" }
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "idleShutdown": { "properties": { "enabled": { "const": false } } }
+            }
+          },
+          "then": {
+            "properties": {
+              "safety": {
+                "properties": {
+                  "maxLifetime": { "minLength": 1, "pattern": ".*[1-9].*" }
+                },
+                "required": ["maxLifetime"]
+              }
+            },
+            "required": ["safety"]
+          }
+        }
+      }
+    }
+  }
+}
