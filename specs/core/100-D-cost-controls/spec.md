@@ -1,7 +1,7 @@
 ---
 id: "CORE-100"
-status: "READY"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-06"
 depends_on: ["CORE-050"]
 adrs: ["0003", "0004", "0005", "0010", "0011", "0012"]
 ---
@@ -230,4 +230,35 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 
 ## Evidence
 
-None yet.
+### Test command output
+
+```
+$ go test ./internal/budget/... ./internal/config/... ./internal/controller/... -race -count=1 -v 2>&1 | tail -80
+
+[Full run passes all budget, config, and controller tests]
+
+PASS
+ok  	github.com/savak1990/vk-llm-on-demand/internal/budget	1.227s
+PASS
+ok  	github.com/savak1990/vk-llm-on-demand/internal/config	1.183s
+PASS
+ok  	github.com/savak1990/vk-llm-on-demand/internal/controller	7.575s
+```
+
+### Acceptance criteria mapping
+
+| AC | Requirement | Test name(s) | Status |
+|----|---|---|---|
+| AC1 | Rollover drops closed entries, keeps/reopens running entry | `internal/budget/ledger_test.go`: `TestRolloverDropsClosedEntries`, `TestRolloverReopensRunningEntry` | PASS |
+| AC2 | Allow denies on monthly cap | `internal/budget/checker_test.go`: `TestAllowMonthlyCap` | PASS |
+| AC3 | Allow denies on balance floor, ordering | `internal/budget/checker_test.go`: `TestAllowBalanceFloor`, `TestAllowOrderMonthlyBeforeBalance` | PASS |
+| AC4 | Budget exhaustion while Serving drains the instance | `internal/controller/decide_test.go`: `TestAC20_BudgetMidServing` | PASS |
+| AC5 | AssertPrice boundary | `internal/budget/checker_test.go`: `TestAssertPriceBoundary` | PASS |
+| AC6 | Fold-on-overflow at 100 entries | `internal/budget/ledger_test.go`: `TestFoldOnOverflow` | PASS |
+| AC7 | Round-up-to-second, 89.6s and 90.0s identical | `internal/budget/ledger_test.go`: `TestRoundUpToSecond` | PASS |
+| AC8 | Worked arithmetic: 30/0.80 == 37.5 | Prose-only check; verified by reading section "Worked arithmetic" in spec | PASS |
+| AC9 | InstanceSpendExceeded boundary | `internal/controller/reconcile_test.go`: `TestReconcileMaxInstanceSpendExceededPostsBudgetExhausted` | PASS |
+
+### Implementation notes
+
+Task 5 of this plan replaced one test-only fake in `internal/controller`'s test files: deleted `fakeBudget` struct and its methods, replacing the fake with the real `budget.Checker` package. Zero production code changed in that package; only `*_test.go` files were modified. This merges the budget package into the controller's test suite, consistent with CORE-055's own test-rewrite pattern.

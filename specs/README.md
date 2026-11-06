@@ -69,7 +69,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [070](core/070-D-worker-runtime/spec.md) | Worker onstart, model download, llama-server contract | 030 |
 | [080](core/080-P-helm-chart/spec.md) | Helm chart `gpu-on-demand` | 060 |
 | [090](core/090-P-observability/spec.md) | Metrics catalog, logs, dashboard, alerts | 050, 060 |
-| [100](core/100-P-cost-controls/spec.md) | Budget, limits, orphan sweep, cost visibility | 050 |
+| [100](core/100-D-cost-controls/spec.md) | Budget, limits, orphan sweep, cost visibility | 050 |
 | [110](core/110-P-security-and-secrets/spec.md) | Keys, rotation, limits, SSRF, threat model | 060, 080 |
 | [120](core/120-P-release-pipeline/spec.md) | Publish, deploy and release workflows, OCI chart, GoReleaser CLI binaries | 010, 080 |
 | [130](core/130-P-platform-integration/spec.md) | Pointer Application and secrets path in `vk-lab-platform` | 080, 110, 120 |
