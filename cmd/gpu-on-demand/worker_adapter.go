@@ -31,12 +31,9 @@ func (a *workerAdapter) WorkerKey(seed []byte, installationID string, gen int64)
 	return worker.WorkerKey(seed, installationID, gen)
 }
 
-// BuildCreate's error path (malformed ModelSHA256/ModelURL, Ctx/Parallel
-// below 1) is unreachable in practice: config.LoadWorker already
-// rejects an empty ModelURL/ModelSHA256 at startup, and modelCtx/
-// ModelParallel come from config loaders with their own positive
-// defaults — a panic here means a config invariant broke, not a
-// request-time condition the controller can recover from.
+// BuildCreate's error path is unreachable: config.LoadWorker already
+// validates these fields at startup. A panic here means a config
+// invariant broke, not a request-time condition.
 func (a *workerAdapter) BuildCreate(offer provider.Offer, label, workerKey string) provider.CreateRequest {
 	req, err := worker.BuildCreate(worker.CreateParams{
 		Image: a.cfg.WorkerImage, DiskGB: a.diskGB, Label: label,
