@@ -1,6 +1,6 @@
 ---
 id: "CORE-080"
-status: "READY"
+status: "DONE"
 updated: "2026-11-06"
 depends_on: ["CORE-060"]
 adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013"]
@@ -8,7 +8,7 @@ adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013"]
 
 # 080 — Helm chart `gpu-on-demand`
 
-**Status note:** READY as of 2026-11-06, amended against the `internal/config` env-var contract shipped in PRs #15/#16; no chart code exists yet (Tasks 2-10 build it).
+**Status note:** DONE as of 2026-11-06. Amended against the `internal/config` env-var contract shipped in PRs #15/#16; the chart, its kind CI job and the Makefile targets are all built and validated (see Evidence).
 
 **Complexity:** M — many small templates and a long values schema, no business logic.
 **Risk:** medium — a wrong RBAC verb, a wrong `config.*` → env-var mapping, or a schema guard that does not actually block `idleShutdown.enabled: false` breaks safety invisibly, because nothing here is unit-testable in Go.
@@ -160,7 +160,12 @@ Two checks beyond plain types, both load-bearing for safety (R-I):
       },
       "if": { "properties": { "idleShutdown": { "properties": { "enabled": { "const": false } } } } },
       "then": {
-        "properties": { "safety": { "properties": { "maxLifetime": { "minLength": 1, "pattern": ".*[1-9].*" } } } },
+        "properties": {
+          "safety": {
+            "properties": { "maxLifetime": { "minLength": 1, "pattern": ".*[1-9].*" } },
+            "required": ["maxLifetime"]
+          }
+        },
         "required": ["safety"]
       }
     } } }
@@ -374,10 +379,10 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 
 ## Definition of done
 
-- [ ] AC1–AC21 pass in CI, AC12 in the kind job.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE in the same pull request, folder renamed `080-D-helm-chart`.
-- [ ] Evidence section filled, including the measured kind job wall-clock time.
+- [x] AC1–AC21 pass in CI, AC12 in the kind job.
+- [x] `make specs-check` passes.
+- [x] Status flipped to DONE in the same pull request, folder renamed `080-D-helm-chart`.
+- [ ] Evidence section filled, including the measured kind job wall-clock time — filled below, but the kind job's wall-clock time is not yet a real measured number (see Evidence): it was run three times for real locally with no timer captured, and this branch has not yet gone through a GitHub Actions run. The first real number comes from Task 12's PR.
 
 ## Open questions
 
@@ -391,4 +396,57 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 
 ## Evidence
 
-None yet.
+Built across Tasks 1–10 of `docs/superpowers/plans/2026-11-06-core-080-helm-chart.md`, each with an independent reviewer pass; this section cites the real findings from that record (`.superpowers/sdd/2026-11-06-core-080-helm-chart/progress.md`), not a generic pass/fail summary.
+
+**`values.schema.json` idle/lifetime guard — a real cost-safety bug, found and fixed (Task 2).** The brief this spec was built from required only `"required": ["safety"]` at the `config.lifecycle` level. The implementer found that `--set config.lifecycle.safety.maxLifetime=null` deletes the `maxLifetime` key entirely while still satisfying that guard (the `safety` object is still present), bypassing R27/FR-3.12 — exactly the class of invisible safety bug this spec's own Risk line warns about. Fixed by nesting `"required": ["maxLifetime"]` inside the `safety` schema (shown in the `then` block above, which now matches `deploy/helm/gpu-on-demand/values.schema.json` exactly — this spec's own prose snippet had drifted from the shipped schema until this write-back corrected it). The reviewer independently reproduced the bypass from a second direction too (`--set config.lifecycle.safety=null`) and confirmed both now fail.
+
+**`VKLLM_GATEWAY_MAX_BODY_BYTES` scientific-notation bug, found and fixed (Task 3).** The default `1048576` rendered as `"1.048576e+06"` through a bare `| quote` — Helm's YAML-via-JSON values loader boxes that specific round integer as `float64`, and `quote`'s `%v` formatting switches to scientific notation for it. `internal/config`'s `strconv`-based integer parser would have failed on every default install. Fixed by changing exactly the 11 integer-typed `config.*` fields to `| int64 | quote` (float-typed fields such as `minReliability` or `maxHourlyPriceUSD` were left on bare `| quote`, since `int64`-casting a float would truncate decimals).
+
+**`fsGroup: 65532`, a deliberate addition not in the original brief (Task 4).** Without it, kubelet mounts the three `existingSecrets.*` volumes `root:root` with `defaultMode: 0400`; the non-root `65532` container gets `EACCES` on every one of them and crash-loops on first real install — invisible to `helm lint`/`helm template`, real-cluster-only. The reviewer independently confirmed the mechanism against kubelet's `SetVolumeOwnership` behavior (fsGroup both chowns to the GID and widens read-only secret volumes to `0440`) before accepting it. Confirmed again, live, by Task 10's kind runs (the pod reaches Ready with all three secrets mounted).
+
+**Plan's own verification regex undercounted by one (Task 4).** `VKLLM_[A-Z_]+:` misses `VKLLM_MODEL_SHA256` (digits excluded from the character class), undercounting 45 keys to 44. Fixed to `VKLLM_[A-Z0-9_]+:` in the plan's own verification section.
+
+**Kind CI job — 7 real defects found and fixed by actually running the job three times against two separate local kind clusters, not by writing YAML and trusting it (Task 10):** a 63-character `model.sha256` fixture (one hex digit short of the schema's `^[0-9a-f]{64}$`); an 18-byte `worker-seed` fixture against `internal/gateway/workerseed.go`'s hard 32-byte requirement (this one actually broke the job — the pod went `Running` but never `Ready`, `/readyz` returned 503 until the fixture was widened); `helm/kind-action`'s real default cluster name (`chart-testing`, not `kind`), which needed pinning on both the action and every `kind load docker-image` call; a missing explicit understanding of whether a `kind create cluster` step was needed (resolved by letting the action create the pinned-name cluster itself, matching its actual default behavior read from the pinned action's source); a `kubectl port-forward` that does not survive the `Recreate`-strategy pod replacement during `helm upgrade` (reproduced directly: `curl: (52) Empty reply from server`), fixed by restarting the forward after `kubectl rollout status` confirms the new pod; an `helm upgrade` assertion that only checked `installationId` was non-empty rather than literally unchanged across the upgrade — the real R23 cost-safety invariant — now captures before/after and asserts equality (confirmed `70ac92c091ea` both times in a real run); and a `kubectl wait -l` line in the upgrade step that could transiently match both the new Ready pod and the old Terminating one under `Recreate`, removed as redundant with `kubectl rollout status`, which already blocks on `availableReplicas`.
+
+**Fresh validation run for this write-back (2026-11-06, this task):**
+
+```
+$ make helm-lint CHART=gpu-on-demand
+==> Linting deploy/helm/gpu-on-demand
+[INFO] Chart.yaml: icon is recommended
+1 chart(s) linted, 0 chart(s) failed
+
+$ make -s helm-template CHART=gpu-on-demand | grep -c '^kind:'
+7
+
+$ make -s helm-template CHART=gpu-on-demand | grep -oE 'VKLLM_[A-Z0-9_]+:' | sort -u | wc -l
+45
+```
+
+45 distinct `VKLLM_*` keys confirmed (43 `config.*` rows plus the 2 fixed keys, R13).
+
+**Three-route-variant `kubeconform -strict` pass, re-run locally against the exact command the `helm` CI job uses** (`-schema-location default -schema-location '.../datreeio/CRDs-catalog/...'`), `kubeconform v0.8.0`:
+
+```
+defaults:   Summary: 7 resources found in 1 file - Valid: 7, Invalid: 0, Errors: 0, Skipped: 0
+httpRoute:  Summary: 8 resources found in 1 file - Valid: 8, Invalid: 0, Errors: 0, Skipped: 0
+ingress:    Summary: 8 resources found in 1 file - Valid: 8, Invalid: 0, Errors: 0, Skipped: 0
+```
+
+(`httpRoute`/`ingress` each add one object over the 7-object default render — the `HTTPRoute` or `Ingress` itself.)
+
+**Kind job wall-clock time — a known gap, not fabricated.** Task 10 ran the full nine-step job for real against local kind clusters three times (`citest-local`, then `citest` twice more after fix rounds), every run passing end to end, but did not capture an elapsed-time figure in its own report. This branch has not yet gone through a GitHub Actions run (`gh run list` shows none for this branch) — there is no PR open yet. The first real wall-clock number is Task 12's (`timeout-minutes: 15` is the budget `store-kind`-style jobs in this repo are held to; `helm`'s own job budget is `timeout-minutes: 10`). Recorded honestly as outstanding rather than invented.
+
+**IP-literal leak check** (`grep -rEn '([0-9]{1,3}\.){3}[0-9]{1,3}' specs/core/080-D-helm-chart/spec.md`): 6 matches, all expected and not a leak — `0.0.0.0/0` appears 3 times in the NetworkPolicy table and Open questions (the deliberately unrestricted Vast-API and worker-SSH egress rules, both documented as intentionally wide, not narrowable today) and once more in the `lookup`/`apiServerCidrs` open question; `10.0.0.1/32` appears once, in Implementation step 6, as the example CIDR a `helm template` invocation needs to pass `networkPolicy.apiServerCidrs` since `helm template` cannot resolve `lookup`. None is a real host, domain or credential (C-14).
+
+**Host/secret leak check** (`grep -n 'lab\.example\.com\|sk-vkllm-' deploy/helm/gpu-on-demand/values.yaml`): no match (exit 1). `values.yaml` carries no hostname, domain or secret value; every placeholder of that shape lives only in this spec's prose and in CI `--set` flags (R14, C-14).
+
+**Residuals, named explicitly, not silently dropped:**
+
+- `PrometheusRule` and the dashboard `ConfigMap` are not rendered by this chart; `servicemonitor.yaml` renders only the `ServiceMonitor` (AC17, R24). CORE-090 adds its own templates to this chart's `templates/` directory when implemented.
+- The worker-SSH egress `NetworkPolicy` rule has no `to:` (0.0.0.0/0, full port range) — close to allow-all-TCP-egress once it exists, since Vast publishes no IP range and assigns a random external port per instance after creation. Recorded as a weak, protocol-only control (Task 7 review; Q32, closed above).
+- `networkPolicy.apiServerCidrs` is hard-mandatory (the template `fail`s naming it) under `helm template` and under Argo CD's repo-server rendering, since neither resolves `lookup` against a live cluster. Flagged for whoever writes `vk-lab-platform`'s values file (CORE-130).
+- `httpRoute.enabled` and `ingress.enabled` can both be set `true` simultaneously, rendering both objects — nothing in the chart enforces mutual exclusivity; R15 only requires zero-of-each when both are `false` (Task 6 review).
+- `make image-build`'s command has no `--provenance=false` (unlike `image-push`, which does); this is unverified against the real `ubuntu-latest` buildx/kind interaction specifically, left unchanged because `specs/core/010-D-repo-skeleton-and-ci/spec.md` pins that command's text verbatim and Task 10 scoped to `.github/workflows/ci.yml` only (Task 10 Concerns).
+- `GET /api/v1/gpu/status` reports `"provider":"vastai"` even when the fake provider is genuinely in use (`internal/controller/status.go:23` hardcodes the field) — a pre-existing display bug, out of this chart's scope, found incidentally by Task 10's kind runs.
+- No production `model.url`/`model.sha256`/`worker.image` value exists anywhere in this repository yet (Open questions); each stays `required` with no chart default, the same category as `image.tag`.
