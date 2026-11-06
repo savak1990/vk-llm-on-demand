@@ -96,6 +96,14 @@ func TestWireServesInferenceAndManagementThroughOneMux(t *testing.T) {
 		t.Fatalf("POST /v1/chat/completions before start: code = %d, want 503", rec.Code)
 	}
 
+	// Run's startup reconcile reads the provider balance on its own
+	// goroutine (controller.go's lastBalanceKnown); without waiting for
+	// it, Allow races an unknown balance and denies start as balance_low.
+	balanceDeadline := time.Now().Add(2 * time.Second)
+	for ctl.Status().ProviderBalanceUSD == nil && time.Now().Before(balanceDeadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	// Management path: start, then status reports something other than
 	// STOPPED — proves mgmt.New is really driving the same controller.
 	req = httptest.NewRequest("POST", "/api/v1/gpu/start", nil)
