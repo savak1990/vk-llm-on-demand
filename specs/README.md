@@ -67,7 +67,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [055](core/055-D-management-api/spec.md) | Management API `/api/v1/gpu/*`, management tokens | 050 |
 | [060](core/060-D-gateway-openai-api/spec.md) | OpenAI-compatible gateway, inference keys, streaming, `backend_unavailable` | 040, 050 |
 | [070](core/070-D-worker-runtime/spec.md) | Worker onstart, model download, llama-server contract | 030 |
-| [080](core/080-P-helm-chart/spec.md) | Helm chart `gpu-on-demand` | 060 |
+| [080](core/080-D-helm-chart/spec.md) | Helm chart `gpu-on-demand` | 060 |
 | [090](core/090-P-observability/spec.md) | Metrics catalog, logs, dashboard, alerts | 050, 060 |
 | [100](core/100-D-cost-controls/spec.md) | Budget, limits, orphan sweep, cost visibility | 050 |
 | [110](core/110-P-security-and-secrets/spec.md) | Keys, rotation, limits, SSRF, threat model | 060, 080 |

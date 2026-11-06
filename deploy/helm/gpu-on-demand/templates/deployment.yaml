@@ -1,0 +1,89 @@
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount must be exactly 1: one state writer, one provider label owner" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "svc.fullname" . }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/change-cause: {{ printf "%s (%s)" .Chart.Version (.Chart.AppVersion | trunc 7) | quote }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "svc.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "svc.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ if .Values.rbac.create }}{{ .Values.serviceAccount.name | default (include "svc.fullname" .) }}{{ else }}{{ required "serviceAccount.name is required when rbac.create is false" .Values.serviceAccount.name }}{{ end }}
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ include "svc.name" . }}
+          image: {{ include "svc.image" . }}
+          imagePullPolicy: {{ include "svc.pullPolicy" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          envFrom:
+            - configMapRef:
+                name: {{ include "svc.fullname" . }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: provider-secret
+              mountPath: /etc/vkllm/secrets/provider
+              readOnly: true
+            - name: api-keys-secret
+              mountPath: /etc/vkllm/api-keys
+              readOnly: true
+            - name: ssh-secret
+              mountPath: /etc/vkllm/secrets/ssh
+              readOnly: true
+      volumes:
+        - name: provider-secret
+          secret:
+            secretName: {{ required "existingSecrets.provider is required" .Values.existingSecrets.provider }}
+            defaultMode: 0400
+        - name: api-keys-secret
+          secret:
+            secretName: {{ required "existingSecrets.apiKeys is required" .Values.existingSecrets.apiKeys }}
+            defaultMode: 0400
+        - name: ssh-secret
+          secret:
+            secretName: {{ required "existingSecrets.ssh is required" .Values.existingSecrets.ssh }}
+            defaultMode: 0400

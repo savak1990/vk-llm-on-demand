@@ -1,0 +1,8 @@
+apiVersion: v2
+name: gpu-on-demand
+description: The GPU on-demand control plane - a Deployment, a Service, and the inference/management APIs on the platform gateway.
+type: application
+version: 0.1.0
+# A placeholder. The pipeline overrides both with --version and --app-version;
+# the version is a git tag, so there is no hand bump to forget.
+appVersion: "0.1.0"

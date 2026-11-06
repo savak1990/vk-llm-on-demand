@@ -1,0 +1,130 @@
+image:
+  repository: ghcr.io/savak1990/vk-llm-on-demand/gpu-on-demand
+  tag: ""
+  pullPolicy: ""
+
+existingSecrets:
+  provider: ""
+  apiKeys: ""
+  ssh: ""
+
+host: ""
+installationId: ""
+
+config:
+  provider:
+    name: vastai
+    apiKeyFile: /etc/vkllm/secrets/provider/VAST_API_KEY
+    filter:
+      gpuName: L40S
+      numGpus: 1
+      minCpuCores: 8
+      minCpuRamGB: 32
+      minDiskGB: 60
+      minReliability: 0.95
+      minInetDownMBps: 500
+      minDiskBwMBps: 500
+      minCudaVersion: 12.8
+      geolocation: ""
+  lifecycle:
+    provisioningMode: explicit
+    idleShutdown:
+      enabled: true
+      timeout: 30m
+    shutdown:
+      drainTimeout: 60s
+      allowForce: false
+    startupTimeout: 15m
+    safety:
+      maxHourlyPriceUSD: 0.80
+      maxLifetime: 12h
+      maxInstanceSpendUSD: 0
+      maxProvisionAttemptsPerHour: 3
+  budget:
+    monthlyUSD: 30
+    warnFraction: 0.8
+  controller:
+    reconcileInterval: 60s
+  gateway:
+    maxBodyBytes: 1048576
+    maxTokensCap: 8192
+    rateLimitPerKeyRPM: 60
+  mgmt:
+    rateLimitPerKeyRPM: 60
+  tunnel:
+    dialer: ssh
+    directAddr: ""
+    sshKeyFile: /etc/vkllm/secrets/ssh/id_ed25519
+  auth:
+    clientKeysFile: /etc/vkllm/api-keys/client-keys
+    managementTokensFile: /etc/vkllm/api-keys/management-tokens
+    workerSeedFile: /etc/vkllm/api-keys/worker-seed
+  model:
+    alias: qwen3.6-35b-a3b
+    url: ""
+    sha256: ""
+    contextSize: 32768
+    parallel: 1
+    generationTimeout: 10m
+  worker:
+    image: ""
+    deadManTimeout: ""
+
+httpRoute:
+  enabled: false
+  parentRef:
+    name: platform-gateway
+    namespace: envoy
+    sectionName: https
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  labels: {}
+
+networkPolicy:
+  enabled: false
+  gatewayNamespace: envoy
+  vastApiCidrs: []
+  apiServerCidrs: []
+  sshPorts:
+    from: 1
+    to: 65535
+
+externalSecrets:
+  enabled: false
+  storeRef: ""
+  prefix: ""
+
+rbac:
+  create: true
+
+serviceAccount:
+  name: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+probes:
+  readiness:
+    periodSeconds: 5
+  liveness:
+    periodSeconds: 20
+
+replicaCount: 1

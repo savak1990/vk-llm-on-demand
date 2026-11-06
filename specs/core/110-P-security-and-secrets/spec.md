@@ -22,7 +22,7 @@ credential that spends real money
 of each runbook
 **Recommended model:** strong — RBAC shape, key derivation and redaction
 must be exact
-**Depends on:** [CORE-060](../060-D-gateway-openai-api/spec.md), [CORE-080](../080-P-helm-chart/spec.md)
+**Depends on:** [CORE-060](../060-D-gateway-openai-api/spec.md), [CORE-080](../080-D-helm-chart/spec.md)
 
 ## Outcome
 
