@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/budget"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
@@ -68,7 +69,7 @@ type harness struct {
 	store  *fakestore.Fake
 	dial   *fakeDialerForHarness
 	worker *fakeWorker
-	budget *fakeBudget
+	budget Budget
 	reg    *prometheus.Registry
 }
 
@@ -82,16 +83,16 @@ func buildHarness(t *testing.T) *harness {
 	prov.SetBalance(provider.Money(100_000_000)) // $100, the AC preamble's default
 	st := fakestore.New("iid")
 	worker := newFakeWorker()
-	budget := newFakeBudget(1.60, 30)
+	bgt := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.80})
 	reg := prometheus.NewRegistry()
 	RegisterMetrics(reg)
 	store.RegisterMetrics(reg)
 
-	h := &harness{t: t, clk: clk, prov: prov, store: st, dial: newFakeDialerForHarness(), worker: worker, budget: budget, reg: reg}
+	h := &harness{t: t, clk: clk, prov: prov, store: st, dial: newFakeDialerForHarness(), worker: worker, budget: bgt, reg: reg}
 
 	ctl, err := New(Deps{
 		Provider: prov, Store: st, Dialer: h.dial, Clock: clk,
-		Budget: budget, Worker: worker,
+		Budget: bgt, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
 		Config: config.Controller{

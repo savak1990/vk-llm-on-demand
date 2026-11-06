@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/budget"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
@@ -373,7 +374,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredRunning
 		doc.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{DPH: 0.6}, CreatedAt: now}
 		doc.Ops = []store.Op{{Key: "create-1", StartedAt: now}}
-		b := newFakeBudget(1, 30)
+		b := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.5})
 		next, mutate, effects := decide(Creating, Event{Kind: EvCreated, Gen: 1, ProviderID: provider.InstanceID(99)}, Facts{Now: now, Doc: doc, Budget: b})
 		if next != Booting || mutate == nil || effects != nil {
 			t.Fatalf("T8: next=%v mutate=%v effects=%v", next, mutate != nil, effects)
@@ -399,7 +400,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredStopped
 		doc.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", CreatedAt: now}
 		doc.Ops = []store.Op{{Key: "create-1", StartedAt: now}}
-		next, mutate, _ := decide(Creating, Event{Kind: EvCreated, Gen: 1, ProviderID: provider.InstanceID(5)}, Facts{Now: now, Doc: doc, Budget: newFakeBudget(1, 30)})
+		next, mutate, _ := decide(Creating, Event{Kind: EvCreated, Gen: 1, ProviderID: provider.InstanceID(5)}, Facts{Now: now, Doc: doc, Budget: budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.5})})
 		if next != Destroying || mutate == nil {
 			t.Fatalf("T8 cancelled: next=%v mutate=%v", next, mutate != nil)
 		}
@@ -429,7 +430,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredRunning // snapshot: decide picks Booting
 		doc.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", CreatedAt: now}
 		doc.Ops = []store.Op{{Key: "create-1", StartedAt: now}}
-		next, mutate, _ := decide(Creating, Event{Kind: EvCreated, Gen: 1, ProviderID: provider.InstanceID(9)}, Facts{Now: now, Doc: doc, Budget: newFakeBudget(1, 30)})
+		next, mutate, _ := decide(Creating, Event{Kind: EvCreated, Gen: 1, ProviderID: provider.InstanceID(9)}, Facts{Now: now, Doc: doc, Budget: budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.5})})
 		if next != Booting {
 			t.Fatalf("T8: next=%v, want Booting", next)
 		}
@@ -473,7 +474,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Generation = 1
 		doc.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{DPH: 0.6}}
 		doc.Ops = []store.Op{{Key: "create-1", StartedAt: now}}
-		b := newFakeBudget(1, 30)
+		b := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.5})
 		next, mutate, effects := decide(Creating, Event{Kind: EvCreateFailed, Gen: 1, Duplicate: true}, Facts{Now: now, Doc: doc, Budget: b})
 		if next != Destroying || mutate == nil || effects != nil {
 			t.Fatalf("T11: next=%v mutate=%v effects=%v", next, mutate != nil, effects)
@@ -862,7 +863,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Generation = 3
 		doc.Desired = store.DesiredRunning
 		doc.Instance = &store.Instance{State: Ready.String()}
-		b := newFakeBudget(1, 30)
+		b := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.5})
 		next, mutate, effects := decide(Ready, Event{Kind: EvVanished, Gen: 3}, Facts{Now: now, Doc: doc, Budget: b})
 		if next != Idle || mutate == nil || effects != nil {
 			t.Fatalf("T23: next=%v mutate=%v effects=%v", next, mutate != nil, effects)
@@ -938,7 +939,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredRunning
 		doc.Instance = &store.Instance{State: Loading.String()}
 		doc.Ops = []store.Op{{Key: "create-1", StartedAt: now, Outcome: "created"}}
-		next, mutate, effects := decide(Loading, Event{Kind: EvVanished, Gen: 1}, Facts{Now: now, Doc: doc, Budget: newFakeBudget(1, 30)})
+		next, mutate, effects := decide(Loading, Event{Kind: EvVanished, Gen: 1}, Facts{Now: now, Doc: doc, Budget: budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.5})})
 		if next != Idle || mutate == nil || effects != nil {
 			t.Fatalf("T27: next=%v mutate=%v effects=%v", next, mutate != nil, effects)
 		}
@@ -977,7 +978,7 @@ func TestTransitionTable(t *testing.T) {
 		doc.Desired = store.DesiredRunning // a Start revived it while it was still mid-destroy
 		doc.Instance = &store.Instance{State: Destroying.String()}
 		doc.Ops = []store.Op{{Key: "destroy-4", StartedAt: now}}
-		b := newFakeBudget(1, 30)
+		b := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.5})
 		next, mutate, effects := decide(Destroying, Event{Kind: EvGone, Gen: 4}, Facts{Now: now, Doc: doc, Budget: b})
 		if next != Idle || mutate == nil || effects != nil {
 			t.Fatalf("T29: next=%v mutate=%v effects=%v", next, mutate != nil, effects)

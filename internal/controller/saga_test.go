@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/budget"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
@@ -14,14 +15,14 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
 
-func newTestController(t *testing.T) (*Controller, *fakeprovider.Fake, *fakeclock.Clock, *fakeBudget, *fakeWorker) {
+func newTestController(t *testing.T) (*Controller, *fakeprovider.Fake, *fakeclock.Clock, Budget, *fakeWorker) {
 	t.Helper()
 	clk := fakeclock.New(time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC))
 	prov := fakeprovider.New(clk)
-	budget := newFakeBudget(1.60, 30)
+	bgt := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.80})
 	worker := newFakeWorker()
 	c, err := New(Deps{
-		Provider: prov, Store: fakestore.New("iid"), Dialer: &recordDialer{}, Clock: clk, Budget: budget, Worker: worker,
+		Provider: prov, Store: fakestore.New("iid"), Dialer: &recordDialer{}, Clock: clk, Budget: bgt, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
 		Config: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxProvisionAttemptsPerHour: 3, IdleShutdownEnabled: true, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second},
@@ -30,7 +31,7 @@ func newTestController(t *testing.T) (*Controller, *fakeprovider.Fake, *fakecloc
 		t.Fatalf("New: %v", err)
 	}
 	c.lastBalance, c.lastBalanceKnown = provider.Money(100_000_000), true
-	return c, prov, clk, budget, worker
+	return c, prov, clk, bgt, worker
 }
 
 func recvEvent(t *testing.T, c *Controller) (Event, bool) {
