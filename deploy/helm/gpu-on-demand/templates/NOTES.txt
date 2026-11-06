@@ -1,0 +1,20 @@
+gpu-on-demand installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+Three-command workflow (replace <management-token> with a value from the
+{{ .Values.existingSecrets.apiKeys }} Secret's management-tokens key):
+
+  curl -X POST -H "Authorization: Bearer <management-token>" \
+    http://<service>/api/v1/gpu/start
+  curl -H "Authorization: Bearer <management-token>" \
+    http://<service>/api/v1/gpu/status
+  curl -X POST -H "Authorization: Bearer <management-token>" \
+    http://<service>/api/v1/gpu/stop
+
+installationId: {{ include "svc.installationId" . }}
+Changing installationId on an existing release changes every future
+instance's label; a running instance stops matching it and the next
+reconcile treats it as an orphan and destroys it.
+
+Before `helm uninstall`: drain with the stop command above and wait for
+state STOPPED. Uninstall never touches a running GPU instance, only this
+chart's own Kubernetes objects.
