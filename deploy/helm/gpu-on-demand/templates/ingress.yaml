@@ -1,0 +1,33 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "svc.fullname" . }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ include "svc.host" . | quote }}
+      secretName: {{ required "ingress.tls.secretName is required when ingress.tls.enabled" .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ include "svc.host" . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "svc.fullname" . }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}
