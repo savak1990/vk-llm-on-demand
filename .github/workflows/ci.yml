@@ -40,6 +40,7 @@ jobs:
               - 'test/kind/**'
             helm:
               - 'deploy/helm/**'
+              - 'test/kind/**'
             workflows:
               - '.github/**'
             cli:
@@ -196,6 +197,163 @@ jobs:
 
       - run: go test -tags integration ./internal/store/... -count=1 -run 'TestKind' -v
 
+  # Drives the real control plane against a real kind cluster: the fake
+  # provider and a direct tunnel to a fake-worker Deployment stand in for
+  # Vast.ai and llama-server, so no GPU or network egress is needed.
+  chart-kind:
+    needs: changes
+    if: needs.changes.outputs.go == 'true' || needs.changes.outputs.helm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    concurrency:
+      group: ci-chart-kind-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build local images
+        run: |
+          set -euo pipefail
+          make image-build SVC=gpu-on-demand IMAGE_TAG=citest
+          make image-build SVC=fake-worker IMAGE_TAG=citest
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+
+      # A named cluster, because the default kind context is "kind", not
+      # this action's own default of "chart-testing": the load step below
+      # must target the same name this creates.
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          cluster_name: citest
+
+      - name: Load images into the kind node
+        run: |
+          set -euo pipefail
+          kind load docker-image ghcr.io/savak1990/vk-llm-on-demand/gpu-on-demand:citest --name citest
+          kind load docker-image ghcr.io/savak1990/vk-llm-on-demand/fake-worker:citest --name citest
+
+      - name: Create the fixture Secrets and the fake-worker Deployment
+        run: |
+          set -euo pipefail
+          kubectl create secret generic provider-secret --from-literal=VAST_API_KEY=x
+          kubectl create secret generic api-keys-secret \
+            --from-literal=client-keys=sk-vkllm-citestclientkey \
+            --from-literal=management-tokens=sk-vkllm-citestmgmttoken \
+            --from-literal=worker-seed=citest-worker-seed-0123456789abc
+          ssh-keygen -t ed25519 -N "" -f id_ed25519
+          kubectl create secret generic ssh-secret --from-file=id_ed25519
+          kubectl create deployment fake-worker --image=ghcr.io/savak1990/vk-llm-on-demand/fake-worker:citest --port=8080
+          kubectl expose deployment fake-worker --port=8080
+          kubectl wait --for=condition=Available deployment/fake-worker --timeout=60s
+
+      - name: helm install
+        run: |
+          set -euo pipefail
+          helm install gpu-on-demand deploy/helm/gpu-on-demand \
+            --set image.tag=citest --set image.pullPolicy=Never \
+            --set config.provider.name=fake \
+            --set config.tunnel.dialer=direct --set config.tunnel.directAddr=fake-worker.default.svc.cluster.local:8080 \
+            --set config.model.url=https://example.com/m.gguf \
+            --set config.model.sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
+            --set config.worker.image=example/worker \
+            --set existingSecrets.provider=provider-secret \
+            --set existingSecrets.apiKeys=api-keys-secret \
+            --set existingSecrets.ssh=ssh-secret
+
+      - name: Wait for Ready with no GPU running
+        run: |
+          set -euo pipefail
+          kubectl rollout status deployment/gpu-on-demand --timeout=60s
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=gpu-on-demand --timeout=60s
+
+      - name: Confirm initial state is STOPPED
+        run: |
+          set -euo pipefail
+          kubectl port-forward svc/gpu-on-demand 18080:80 >/dev/null 2>&1 &
+          sleep 2
+          state=$(curl -sf -H "Authorization: Bearer sk-vkllm-citestmgmttoken" http://localhost:18080/api/v1/gpu/status | jq -r .state)
+          test "$state" = "STOPPED"
+
+      - name: Start, poll for Ready
+        run: |
+          set -euo pipefail
+          curl -sf -X POST -H "Authorization: Bearer sk-vkllm-citestmgmttoken" http://localhost:18080/api/v1/gpu/start
+          for _ in $(seq 1 30); do
+            state=$(curl -sf -H "Authorization: Bearer sk-vkllm-citestmgmttoken" http://localhost:18080/api/v1/gpu/status | jq -r .state)
+            [ "$state" = "READY" ] && break
+            sleep 1
+          done
+          test "$state" = "READY"
+
+      - name: Inference API reachable
+        run: |
+          set -euo pipefail
+          curl -sf -H "Authorization: Bearer sk-vkllm-citestclientkey" http://localhost:18080/v1/models
+          curl -sf -N -X POST -H "Authorization: Bearer sk-vkllm-citestclientkey" \
+            -H "Content-Type: application/json" \
+            -d '{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"hi"}],"stream":true}' \
+            http://localhost:18080/v1/chat/completions | grep -q 'data: \[DONE\]'
+
+      - name: Stop, poll for STOPPED
+        run: |
+          set -euo pipefail
+          curl -sf -X POST -H "Authorization: Bearer sk-vkllm-citestmgmttoken" http://localhost:18080/api/v1/gpu/stop
+          for _ in $(seq 1 30); do
+            state=$(curl -sf -H "Authorization: Bearer sk-vkllm-citestmgmttoken" http://localhost:18080/api/v1/gpu/status | jq -r .state)
+            [ "$state" = "STOPPED" ] && break
+            sleep 1
+          done
+          test "$state" = "STOPPED"
+
+      - name: helm upgrade with a changed config value, confirm rollout and unchanged installationId
+        run: |
+          set -euo pipefail
+          before=$(curl -sf -H "Authorization: Bearer sk-vkllm-citestmgmttoken" http://localhost:18080/api/v1/gpu/status | jq -r .installationId)
+          helm upgrade gpu-on-demand deploy/helm/gpu-on-demand \
+            --set image.tag=citest --set image.pullPolicy=Never \
+            --set config.provider.name=fake \
+            --set config.tunnel.dialer=direct --set config.tunnel.directAddr=fake-worker.default.svc.cluster.local:8080 \
+            --set config.lifecycle.idleShutdown.timeout=10m \
+            --set config.model.url=https://example.com/m.gguf \
+            --set config.model.sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
+            --set config.worker.image=example/worker \
+            --set existingSecrets.provider=provider-secret \
+            --set existingSecrets.apiKeys=api-keys-secret \
+            --set existingSecrets.ssh=ssh-secret
+          kubectl rollout status deployment/gpu-on-demand --timeout=60s
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=gpu-on-demand --timeout=60s
+          pkill -f "port-forward svc/gpu-on-demand" || true
+          kubectl port-forward svc/gpu-on-demand 18080:80 >/dev/null 2>&1 &
+          sleep 2
+          after=$(curl -sf -H "Authorization: Bearer sk-vkllm-citestmgmttoken" http://localhost:18080/api/v1/gpu/status | jq -r .installationId)
+          test -n "$after"
+          test "$after" = "$before"
+
+      - name: helm uninstall, confirm no ConfigMap remains
+        run: |
+          set -euo pipefail
+          helm uninstall gpu-on-demand
+          if kubectl get configmap gpu-on-demand 2>/dev/null; then
+            echo "gpu-on-demand ConfigMap must not survive uninstall" >&2
+            exit 1
+          fi
+          if kubectl get configmap gpu-on-demand-state 2>/dev/null; then
+            echo "gpu-on-demand-state ConfigMap must not survive uninstall" >&2
+            exit 1
+          fi
+
   worker-script:
     needs: changes
     if: needs.changes.outputs.go == 'true'
@@ -324,6 +482,7 @@ jobs:
       - image
       - helm
       - store-kind
+      - chart-kind
       - worker-script
       - workflows
       - repo
