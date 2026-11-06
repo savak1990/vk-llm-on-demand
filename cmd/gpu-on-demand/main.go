@@ -52,9 +52,9 @@ func run(ctx context.Context, api, health *http.Server) error {
 	return waitAndShutdown(ctx, errs, api.Shutdown, health.Shutdown)
 }
 
-// waitAndShutdown blocks until ctx is done or a listen error arrives, then shuts both down
+// waitAndShutdown blocks until ctx is done or a listen error arrives, then shuts all down
 // concurrently, each on its own 30s deadline started at the same instant.
-func waitAndShutdown(ctx context.Context, errs <-chan error, shutdownA, shutdownB func(context.Context) error) error {
+func waitAndShutdown(ctx context.Context, errs <-chan error, shutdowns ...func(context.Context) error) error {
 	select {
 	case err := <-errs:
 		return err
@@ -62,21 +62,17 @@ func waitAndShutdown(ctx context.Context, errs <-chan error, shutdownA, shutdown
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
-	//nolint:gosec // ctx is already cancelled; a fresh context is needed for the 30s drain deadline
-	go func() {
-		defer wg.Done()
-		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = shutdownA(c)
-	}()
-	//nolint:gosec // ctx is already cancelled; a fresh context is needed for the 30s drain deadline
-	go func() {
-		defer wg.Done()
-		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = shutdownB(c)
-	}()
+	wg.Add(len(shutdowns))
+	for _, shutdown := range shutdowns {
+		shutdown := shutdown
+		//nolint:gosec // ctx is already cancelled; a fresh context is needed for the 30s drain deadline
+		go func() {
+			defer wg.Done()
+			c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = shutdown(c)
+		}()
+	}
 	wg.Wait()
 	return nil
 }
