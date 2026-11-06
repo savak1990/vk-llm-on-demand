@@ -214,10 +214,10 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 
 ## Definition of done
 
-- [ ] AC1–AC9 pass in CI.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE in the same PR; folder renamed `100-D-cost-controls`.
-- [ ] Evidence section filled.
+- [x] AC1–AC9 pass in CI.
+- [x] `make specs-check` passes.
+- [x] Status flipped to DONE in the same PR; folder renamed `100-D-cost-controls`.
+- [x] Evidence section filled.
 
 ## Open questions
 
