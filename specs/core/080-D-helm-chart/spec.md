@@ -379,7 +379,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 
 ## Definition of done
 
-- [x] AC1–AC21 pass in CI, AC12 in the kind job.
+- [x] AC1–AC21 pass in CI, AC12 in the kind job. (local reproduction of the CI commands; first Actions run is Task 12's PR)
 - [x] `make specs-check` passes.
 - [x] Status flipped to DONE in the same pull request, folder renamed `080-D-helm-chart`.
 - [ ] Evidence section filled, including the measured kind job wall-clock time — filled below, but the kind job's wall-clock time is not yet a real measured number (see Evidence): it was run three times for real locally with no timer captured, and this branch has not yet gone through a GitHub Actions run. The first real number comes from Task 12's PR.

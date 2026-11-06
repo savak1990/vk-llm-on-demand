@@ -1140,14 +1140,14 @@ New job, gated on the same `helm`/`go` path filters (it needs both: the chart an
 ### Task 11: Write-back
 
 **Files:**
-- Modify: `specs/core/080-D-helm-chart/spec.md` → `specs/core/080-D-helm-chart/spec.md`
+- Modify: the `080-P-`-lettered helm-chart spec folder, renamed to `specs/core/080-D-helm-chart/spec.md`
 - Modify: `specs/README.md`
 - Modify: any spec cross-referencing `080-D-helm-chart`
 
 - [ ] **Step 1:** Fill the Evidence section: `helm lint`/`helm template` output, the 45-key count confirmation, the three-route-variant kubeconform pass, the kind job's measured wall-clock time, and the known residual: `PrometheusRule`/dashboard ConfigMap deferred to CORE-090 (named explicitly, not silently dropped).
 - [ ] **Step 2:** Check every Definition of Done box; AC17 updated to its amended (ServiceMonitor-only) wording.
-- [ ] **Step 3:** `git mv specs/core/080-D-helm-chart specs/core/080-D-helm-chart`; flip `status: "DONE"`.
-- [ ] **Step 4:** `grep -rn '080-D-helm-chart'` across the repo; fix every stale cross-reference.
+- [ ] **Step 3:** `git mv` the `080-P-`-lettered helm-chart spec folder to `specs/core/080-D-helm-chart`; flip `status: "DONE"`.
+- [ ] **Step 4:** `grep -rn` the stale `080-P-`-lettered folder name across the repo; fix every stale cross-reference.
 - [ ] **Step 5:** `grep -rEn '([0-9]{1,3}\.){3}[0-9]{1,3}' specs/core/080-D-helm-chart/spec.md` — leak check; also `grep -n 'lab\.example\.com\|sk-vkllm-' deploy/helm/gpu-on-demand/values.yaml` (should be empty, C-14).
 - [ ] **Step 6:** `make specs-check`.
 - [ ] **Step 7:** `git add -A && git commit -m "docs: CORE-080 Helm chart DONE"`.
