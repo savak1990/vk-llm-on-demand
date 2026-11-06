@@ -38,7 +38,7 @@ The common brief's fixed package list is `internal/{gateway,controller,provider,
 
 ### Ledger
 
-`internal/budget` uses `store.Ledger`/`store.LedgerEntry` (CORE-040) as already defined there: `Month`, `TotalUSD` (folded cost of entries evicted past the cap), `Entries` (oldest first, at most 100); each `LedgerEntry` carries `Gen`, `Start`, `End` (nil while open), `DPH`, `EstUSD`. No amendment to CORE-040's types is needed.
+`internal/budget` uses `store.Ledger`/`store.LedgerEntry` (CORE-040) as already defined there: `Month`, `TotalUSD` (running month-to-date total of every closed entry's cost, added when each entry closes), `Entries` (oldest first, at most 100); each `LedgerEntry` carries `Gen`, `Start`, `End` (nil while open), `DPH`, `EstUSD`. No amendment to CORE-040's types is needed.
 
 `MaxLedgerEntries = 100`. With `lifecycle.safety.maxInstances = 1`, one entry opens and closes per cycle, so 100 is months of history; the cap guards the pathological case (attempt-budget churn), not normal operation.
 
@@ -52,8 +52,9 @@ func OpenEntry(doc *store.Document, now time.Time, gen int64, dph float64)
 // RefreshOpenEntry recomputes EstUSD for the single open entry. Called
 // every Tick so vkllm_cost_instance_usd and EstimatedMTD stay current.
 func RefreshOpenEntry(doc *store.Document, now time.Time)
-// CloseEntry runs on Destroying→Idle: sets End, does a final refresh, then
-// folds the oldest closed entries into TotalUSD past MaxLedgerEntries.
+// CloseEntry runs on Destroying→Idle: sets End, does a final refresh, adds
+// the entry's final EstUSD to TotalUSD, then drops the oldest closed
+// entries past MaxLedgerEntries (their cost is already in TotalUSD).
 func CloseEntry(doc *store.Document, now time.Time, gen int64)
 // EstimatedMTD is TotalUSD + the sum of every open entry's current EstUSD.
 func EstimatedMTD(doc store.Document) float64
@@ -184,7 +185,7 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 - R2. `Checker.Allow` MUST return `"balance_low"` when `balance < 2 * cfg.MaxHourlyPriceUSD`, checked only after R1 passes. (source: research §1.5, ADR 0011 §5)
 - R3. `EstimatedMTD` MUST equal `ledger.TotalUSD` plus the sum of every open entry's current `EstUSD`. (source: ADR 0004 Consequences, FR-6.3)
 - R4. Every `EstUSD` computation MUST round elapsed time up to the next whole second before multiplying by `dph / 3600`, so a deny-gate input is never understated. (source: C-1, FR-6.3)
-- R5. `ledger.Entries` MUST NOT exceed 100; the oldest closed entry MUST be folded into `ledger.TotalUSD` before any append exceeding the cap. (source: ADR 0004 Consequences)
+- R5. `ledger.Entries` MUST NOT exceed 100 after any `CloseEntry` call returns; a closed entry's cost MUST already be in `ledger.TotalUSD` by the time it is folded away, so folding never changes `TotalUSD` — the array MAY transiently hold up to 101 entries between an `OpenEntry` and its matching `CloseEntry` (single-instance, one open generation at a time), never permanently. (source: ADR 0004 Consequences)
 - R6. Rollover MUST fire when `now.UTC().Format("2006-01") != ledger.Month`, reset `TotalUSD` to `0`, drop every closed entry, and re-open any still-running entry with `Start = now`; `vkllm_cost_estimated_usd_total` MUST NOT decrease, ever. (source: ADR 0004 Consequences; architecture §5)
 - R7. `AssertPrice` MUST return `ErrPriceTooHigh` for any `dph` strictly above `lifecycle.safety.maxHourlyPriceUSD`, called immediately before every `CreateInstance`, in addition to `CORE-020`'s search-time filter. (source: FR-6.1, C-1)
 - R8. `OpenEntry` MUST run on the `Created` event with the offer's `dph` and MUST NOT run twice for the same generation; `CloseEntry` MUST run once `Destroying` confirms and MUST set `End` before any fold-on-overflow check. (source: ADR 0003 §2, C-1)
@@ -198,7 +199,7 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 1. `OpenEntry`, `RefreshOpenEntry`, `CloseEntry`, fold-on-overflow, `Rollover`, operating on `CORE-040`'s `store.Ledger`. Tests: `TestRoundUpToSecond`, `TestOpenRefreshClose`, `TestFoldOnOverflow`, `TestRolloverDropsClosedEntries`, `TestRolloverReopensRunningEntry`.
 2. `EstimatedMTD`, `Checker.Allow`, `Checker.UsedRatio` — the pure values `CORE-050` feeds to `CORE-090`'s obs setters, and its own drain trigger, after each commit. Tests: `TestAllowMonthlyCap`, `TestAllowBalanceFloor`, `TestAllowOrderMonthlyBeforeBalance`, `TestUsedRatio`.
 3. `AssertPrice`. Test: `TestAssertPriceBoundary`.
-4. Simulation harness reusing `CORE-050`'s fake clock/store/provider: month-boundary crossing, budget exhaustion mid-`Serving` signalled to a fake state observer. Tests: `TestSimMonthBoundary`, `TestSimExhaustionSignalDuringServing`.
+4. Simulation harness reusing `CORE-050`'s fake clock/store/provider: month-boundary crossing, budget exhaustion mid-`Serving` signalled to a fake state observer. No new tests are owed by this step; existing tests provide the coverage: month-boundary crossing by `internal/budget/ledger_test.go`'s `TestRolloverDropsClosedEntries` and `TestRolloverReopensRunningEntry`, and budget exhaustion mid-`Serving` by `internal/controller/sim_test.go`'s `TestAC20_BudgetMidServing` (CORE-050's simulation harness, run against the real `budget.Checker`).
 
 ## Tests / acceptance criteria
 
@@ -207,7 +208,7 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 - AC3. Setup: `EstimatedMTD < MonthlyUSD`; `MaxHourlyPriceUSD=0.80` (floor `1.60`). Action: `Allow(doc, balance, known=true)` with `balance=1.59`, then `1.60`. Expected: return values `"balance_low"`, then `""` (allow). A variant where both R1 and R2 would fail yields `"budget_exhausted"` only, never `"balance_low"` (monthly cap checked first). (R2, R2 ordering)
 - AC4. Setup: a fake state observer reporting `Serving` receives a `BudgetExhausted` signal. Action: the simulation harness delivers it. Expected: recorded transitions exactly `Serving → Draining → Destroying`; the ledger entry's `End` is set only after `Destroying→Idle`. (R9 — the state machine itself is `CORE-050`'s own simulation; this AC proves the signal and the ledger's response.)
 - AC5. Setup: `dph = 0.80001`, `maxHourlyPriceUSD = 0.80`. Action: `AssertPrice`. Expected: `ErrPriceTooHigh`. With `dph = 0.80`: `nil`. (R7)
-- AC6. Setup: 100 closed entries plus one about to close (101 total). Action: `CloseEntry`. Expected: `len(Entries) == 100` afterwards, the oldest closed entry's `EstUSD` added to `TotalUSD`, the just-closed entry still present. (R5, R8)
+- AC6. Setup: 100 closed entries plus one about to close (101 total). Action: `CloseEntry`. Expected: `len(Entries) == 100` afterwards; `TotalUSD` unchanged by the fold itself (the oldest entry's cost was already added when IT closed, earlier); the just-closed entry (gen 101) still present, having added its own cost to `TotalUSD` when `CloseEntry` ran. (R5, R8)
 - AC7. Setup: entry opened at `t0`, `dph = 0.71`. Action: `RefreshOpenEntry` at `t0+89.6s` and `t0+90s`. Expected: identical `EstUSD` (`0.71 × 90/3600`) both times — both round up to 90 whole seconds, the boundary only moving past `t0+90s`. (R4)
 - AC8. Action: pure arithmetic assertion in the test. Expected: `30 / 0.80 == 37.5`, matching the worked figure above. (guards the doc against silent default drift)
 - AC9. The per-instance check is tested in `internal/controller/reconcile_test.go` with `MaxInstanceSpendUSD=5`, open entry `EstUSD=4.99`, then `5.00`. Expected: `false`, then `true`. With `MaxInstanceSpendUSD=0` and `EstUSD=1000`: `false`. (R12)
@@ -234,15 +235,133 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 
 ```
 $ go test ./internal/budget/... ./internal/config/... ./internal/controller/... -race -count=1 -v 2>&1 | tail -80
-
-[Full run passes all budget, config, and controller tests]
-
+=== RUN   TestAC11_RestartAfterDeadlinePassed
+=== RUN   TestAC11_RestartAfterDeadlinePassed/deadline_already_past:_destroy_without_redialing
+=== RUN   TestAC11_RestartAfterDeadlinePassed/deadline_still_ahead:_redial_and_idle_out_normally_later
+--- PASS: TestAC11_RestartAfterDeadlinePassed (0.05s)
+    --- PASS: TestAC11_RestartAfterDeadlinePassed/deadline_already_past:_destroy_without_redialing (0.01s)
+    --- PASS: TestAC11_RestartAfterDeadlinePassed/deadline_still_ahead:_redial_and_idle_out_normally_later (0.04s)
+=== RUN   TestAC12_RestartWithReadyInstance
+--- PASS: TestAC12_RestartWithReadyInstance (0.00s)
+=== RUN   TestAC13_StartupTimeout
+--- PASS: TestAC13_StartupTimeout (0.16s)
+=== RUN   TestAC14_ProviderListError
+--- PASS: TestAC14_ProviderListError (0.02s)
+=== RUN   TestAC15_InstanceVanishes
+--- PASS: TestAC15_InstanceVanishes (0.01s)
+=== RUN   TestAC16_OrphanInjection
+=== RUN   TestAC16_OrphanInjection/behind_the_current_generation:_destroyed_after_two_observations
+=== RUN   TestAC16_OrphanInjection/ahead_of_the_current_generation:_advances_the_fence,_then_destroys
+=== RUN   TestAC16_OrphanInjection/a_foreign_installation_id_is_never_a_destroy_target
+--- PASS: TestAC16_OrphanInjection (0.10s)
+    --- PASS: TestAC16_OrphanInjection/behind_the_current_generation:_destroyed_after_two_observations (0.00s)
+    --- PASS: TestAC16_OrphanInjection/ahead_of_the_current_generation:_advances_the_fence,_then_destroys (0.00s)
+    --- PASS: TestAC16_OrphanInjection/a_foreign_installation_id_is_never_a_destroy_target (0.10s)
+=== RUN   TestAC17_RestartWithEmptyStore
+--- PASS: TestAC17_RestartWithEmptyStore (0.00s)
+=== RUN   TestAC18_DestroyRetries
+--- PASS: TestAC18_DestroyRetries (0.02s)
+=== RUN   TestAC19_MaxLifetime
+--- PASS: TestAC19_MaxLifetime (0.19s)
+=== RUN   TestAC20_BudgetMidServing
+=== RUN   TestAC20_BudgetMidServing/the_request_ending_destroys_at_once
+=== RUN   TestAC20_BudgetMidServing/no_RequestEnd_still_destroys_at_the_drain_timeout
+--- PASS: TestAC20_BudgetMidServing (0.02s)
+    --- PASS: TestAC20_BudgetMidServing/the_request_ending_destroys_at_once (0.01s)
+    --- PASS: TestAC20_BudgetMidServing/no_RequestEnd_still_destroys_at_the_drain_timeout (0.01s)
+=== RUN   TestAC21_CASConflictStorm
+--- PASS: TestAC21_CASConflictStorm (0.63s)
+=== RUN   TestAC22_TerminalStatus
+--- PASS: TestAC22_TerminalStatus (0.02s)
+=== RUN   TestAC23_NonTerminalString
+--- PASS: TestAC23_NonTerminalString (0.20s)
+=== RUN   TestAC24_AttemptsCap
+--- PASS: TestAC24_AttemptsCap (0.29s)
+=== RUN   TestAC25_ReadyGate
+--- PASS: TestAC25_ReadyGate (0.06s)
+=== RUN   TestAC26_SSRFBoundaryAndHostKey
+=== RUN   TestAC26_SSRFBoundaryAndHostKey/dials_the_provider's_live_address,_never_the_stored_one
+=== RUN   TestAC26_SSRFBoundaryAndHostKey/a_flaky_recovery_get_never_dials_before_it_resolves
+=== RUN   TestAC26_SSRFBoundaryAndHostKey/a_host_key_mismatch_destroys_without_ever_creating
+--- PASS: TestAC26_SSRFBoundaryAndHostKey (0.07s)
+    --- PASS: TestAC26_SSRFBoundaryAndHostKey/dials_the_provider's_live_address,_never_the_stored_one (0.00s)
+    --- PASS: TestAC26_SSRFBoundaryAndHostKey/a_flaky_recovery_get_never_dials_before_it_resolves (0.06s)
+    --- PASS: TestAC26_SSRFBoundaryAndHostKey/a_host_key_mismatch_destroys_without_ever_creating (0.00s)
+=== RUN   TestAC27_WorkerCrash
+=== RUN   TestAC27_WorkerCrash/two_misses_destroy_the_instance
+=== RUN   TestAC27_WorkerCrash/a_Ready_probe_at_the_second_check_saves_the_instance
+=== RUN   TestAC27_WorkerCrash/a_balance_already_under_the_floor_denies_Start_before_searching
+--- PASS: TestAC27_WorkerCrash (0.19s)
+    --- PASS: TestAC27_WorkerCrash/two_misses_destroy_the_instance (0.13s)
+    --- PASS: TestAC27_WorkerCrash/a_Ready_probe_at_the_second_check_saves_the_instance (0.06s)
+    --- PASS: TestAC27_WorkerCrash/a_balance_already_under_the_floor_denies_Start_before_searching (0.00s)
+=== RUN   TestIdleShutdownDisabledColdStartNeverDestroys
+--- PASS: TestIdleShutdownDisabledColdStartNeverDestroys (0.17s)
+=== RUN   TestIdleShutdownDisabledWarmRestartIgnoresLeftoverDeadline
+--- PASS: TestIdleShutdownDisabledWarmRestartIgnoresLeftoverDeadline (0.11s)
+=== RUN   TestGaugesRefreshWithoutStatusCall
+--- PASS: TestGaugesRefreshWithoutStatusCall (0.02s)
+=== RUN   TestReportUpstreamFailureStopsOnShutdown
+--- PASS: TestReportUpstreamFailureStopsOnShutdown (0.15s)
+=== RUN   TestPublicStateMap
+--- PASS: TestPublicStateMap (0.00s)
+=== RUN   TestStateString
+--- PASS: TestStateString (0.00s)
+=== RUN   TestStatusReflectsMemoryAndDocument
+--- PASS: TestStatusReflectsMemoryAndDocument (0.00s)
+=== RUN   TestStatusNeverCallsProvider
+--- PASS: TestStatusNeverCallsProvider (0.00s)
+=== RUN   TestStatusProviderBalanceUnknownUntilFirstRead
+--- PASS: TestStatusProviderBalanceUnknownUntilFirstRead (0.00s)
 PASS
-ok  	github.com/savak1990/vk-llm-on-demand/internal/budget	1.227s
+ok  	github.com/savak1990/vk-llm-on-demand/internal/controller	7.421s
+```
+
+```
+$ go test ./internal/budget/... -race -count=1 -v
+=== RUN   TestAllowMonthlyCap
+--- PASS: TestAllowMonthlyCap (0.00s)
+=== RUN   TestAllowBalanceFloor
+--- PASS: TestAllowBalanceFloor (0.00s)
+=== RUN   TestAllowUnknownBalanceFoldsIntoBalanceLow
+--- PASS: TestAllowUnknownBalanceFoldsIntoBalanceLow (0.00s)
+=== RUN   TestAllowOrderMonthlyBeforeBalance
+--- PASS: TestAllowOrderMonthlyBeforeBalance (0.00s)
+=== RUN   TestUsedRatio
+--- PASS: TestUsedRatio (0.00s)
+=== RUN   TestUsedRatioZeroMonthlyCap
+--- PASS: TestUsedRatioZeroMonthlyCap (0.00s)
+=== RUN   TestEstimatedMTD
+--- PASS: TestEstimatedMTD (0.00s)
+=== RUN   TestAssertPriceBoundary
+--- PASS: TestAssertPriceBoundary (0.00s)
+=== RUN   TestClosedEntryCountsTowardMonthlyCap
+--- PASS: TestClosedEntryCountsTowardMonthlyCap (0.00s)
+=== RUN   TestWorkedArithmeticMonthlyHoursAtCap
+--- PASS: TestWorkedArithmeticMonthlyHoursAtCap (0.00s)
+=== RUN   TestRoundUpToSecond
+--- PASS: TestRoundUpToSecond (0.00s)
+=== RUN   TestOpenRefreshClose
+--- PASS: TestOpenRefreshClose (0.00s)
+=== RUN   TestCloseEntryDoesNothingForUnknownGen
+--- PASS: TestCloseEntryDoesNothingForUnknownGen (0.00s)
+=== RUN   TestFoldOnOverflow
+--- PASS: TestFoldOnOverflow (0.00s)
+=== RUN   TestRolloverDropsClosedEntries
+--- PASS: TestRolloverDropsClosedEntries (0.00s)
+=== RUN   TestRolloverReopensRunningEntry
+--- PASS: TestRolloverReopensRunningEntry (0.00s)
+=== RUN   TestRolloverNoOpWithinSameMonth
+--- PASS: TestRolloverNoOpWithinSameMonth (0.00s)
 PASS
+ok  	github.com/savak1990/vk-llm-on-demand/internal/budget	1.263s
+```
+
+```
+$ go test ./internal/budget/... ./internal/config/... ./internal/controller/... -race -count=1
+ok  	github.com/savak1990/vk-llm-on-demand/internal/budget	1.229s
 ok  	github.com/savak1990/vk-llm-on-demand/internal/config	1.183s
-PASS
-ok  	github.com/savak1990/vk-llm-on-demand/internal/controller	7.575s
+ok  	github.com/savak1990/vk-llm-on-demand/internal/controller	7.507s
 ```
 
 ### Acceptance criteria mapping
@@ -250,13 +369,13 @@ ok  	github.com/savak1990/vk-llm-on-demand/internal/controller	7.575s
 | AC | Requirement | Test name(s) | Status |
 |----|---|---|---|
 | AC1 | Rollover drops closed entries, keeps/reopens running entry | `internal/budget/ledger_test.go`: `TestRolloverDropsClosedEntries`, `TestRolloverReopensRunningEntry` | PASS |
-| AC2 | Allow denies on monthly cap | `internal/budget/checker_test.go`: `TestAllowMonthlyCap` | PASS |
+| AC2 | Allow denies on monthly cap | `internal/budget/checker_test.go`: `TestAllowMonthlyCap`, `TestClosedEntryCountsTowardMonthlyCap` (closed spend counts toward the cap) | PASS |
 | AC3 | Allow denies on balance floor, ordering | `internal/budget/checker_test.go`: `TestAllowBalanceFloor`, `TestAllowOrderMonthlyBeforeBalance` | PASS |
-| AC4 | Budget exhaustion while Serving drains the instance | `internal/controller/decide_test.go`: `TestAC20_BudgetMidServing` | PASS |
+| AC4 | Budget exhaustion while Serving drains the instance | `internal/controller/sim_test.go`: `TestAC20_BudgetMidServing` | PASS |
 | AC5 | AssertPrice boundary | `internal/budget/checker_test.go`: `TestAssertPriceBoundary` | PASS |
 | AC6 | Fold-on-overflow at 100 entries | `internal/budget/ledger_test.go`: `TestFoldOnOverflow` | PASS |
 | AC7 | Round-up-to-second, 89.6s and 90.0s identical | `internal/budget/ledger_test.go`: `TestRoundUpToSecond` | PASS |
-| AC8 | Worked arithmetic: 30/0.80 == 37.5 | Prose-only check; verified by reading section "Worked arithmetic" in spec | PASS |
+| AC8 | Worked arithmetic: 30/0.80 == 37.5 | `internal/budget/checker_test.go`: `TestWorkedArithmeticMonthlyHoursAtCap` | PASS |
 | AC9 | InstanceSpendExceeded boundary | `internal/controller/reconcile_test.go`: `TestReconcileMaxInstanceSpendExceededPostsBudgetExhausted` | PASS |
 
 ### Implementation notes
