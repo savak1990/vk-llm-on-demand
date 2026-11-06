@@ -8,7 +8,7 @@ adrs: ["0003", "0004", "0005", "0010", "0011", "0012"]
 
 # 100 — Cost controls
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** Originally written before CORE-050 existed; amended to match the shipped `controller.Budget` interface.
 
 **Complexity:** M
 **Risk:** medium — a bug either lets spend run past C-1/C-7's caps or wrongly kills a paying request
@@ -18,11 +18,11 @@ adrs: ["0003", "0004", "0005", "0010", "0011", "0012"]
 
 ## Outcome
 
-`internal/budget` gives the controller one gate, `Checker.Allow`, that must pass before any offer search and again before any `CreateInstance` call, plus `InstanceSpendExceeded`, the per-instance spend check `CORE-050` polls every tick. It drives the month-to-date ledger bookkeeping on `CORE-040`'s `store.Ledger`, the $30/0.80 USD arithmetic behind `vkllm_budget_used_ratio`, and the provider-balance floor. Done, a simulated month of demand stops provisioning the instant month-to-date spend would reach `budget.monthlyUSD`, drains a `Serving` instance the same way — or the instant `lifecycle.safety.maxInstanceSpendUSD` is reached, when set above its default of `0` — never provisions with less than two hours of prepaid balance at stake, and reports estimated cost and its own blind spots through four metrics, `GET /api/v1/gpu/status` and `GET /api/v1/gpu/cost`.
+`internal/budget` gives the controller one gate, `Checker.Allow`, that must pass before any offer search and again before any `CreateInstance` call. It drives the month-to-date ledger bookkeeping on `CORE-040`'s `store.Ledger`, the $30/0.80 USD arithmetic behind `vkllm_budget_used_ratio`, and the provider-balance floor. Done, a simulated month of demand stops provisioning the instant month-to-date spend would reach `budget.monthlyUSD`, drains a `Serving` instance the same way — never provisions with less than two hours of prepaid balance at stake, and reports estimated cost and its own blind spots through four metrics, `GET /api/v1/gpu/status` and `GET /api/v1/gpu/cost`.
 
 ## Scope
 
-- `internal/budget`: `Checker`, `Config`, `Allow`, `InstanceSpendExceeded`, `UsedRatio`, `AssertPrice`, and the ledger bookkeeping functions (`OpenEntry`, `RefreshOpenEntry`, `CloseEntry`, `Rollover`, `EstimatedMTD`) operating on `CORE-040`'s `store.Ledger`/`store.LedgerEntry` as already defined there.
+- `internal/budget`: `Checker`, `Config`, `Allow`, `UsedRatio`, `AssertPrice`, and the ledger bookkeeping functions (`OpenEntry`, `RefreshOpenEntry`, `CloseEntry`, `Rollover`, `EstimatedMTD`) operating on `CORE-040`'s `store.Ledger`/`store.LedgerEntry` as already defined there.
 - Month rollover (UTC, first of month): what gets dropped, what persists.
 - The cost model: how Vast.ai bills, why a `dph × uptime` estimate drifts from it, what it ignores, reconciliation against the console, and the worked arithmetic for the shipped defaults, including open question Q5.
 - Four metrics (`vkllm_budget_used_ratio`, `vkllm_cost_estimated_usd_total`, `vkllm_cost_instance_usd`, `vkllm_provider_balance_usd`): this package computes their values with pure functions; `CORE-050` calls `CORE-090`'s obs setters after each commit. The alert expectation placed on `CORE-050`'s orphan metric.
@@ -38,7 +38,7 @@ The common brief's fixed package list is `internal/{gateway,controller,provider,
 
 ### Ledger
 
-`internal/controller/budget` uses `store.Ledger`/`store.LedgerEntry` (CORE-040) as already defined there: `Month`, `TotalUSD` (folded cost of entries evicted past the cap), `Entries` (oldest first, at most 100); each `LedgerEntry` carries `Gen`, `Start`, `End` (nil while open), `DPH`, `EstUSD`. No amendment to CORE-040's types is needed.
+`internal/budget` uses `store.Ledger`/`store.LedgerEntry` (CORE-040) as already defined there: `Month`, `TotalUSD` (folded cost of entries evicted past the cap), `Entries` (oldest first, at most 100); each `LedgerEntry` carries `Gen`, `Start`, `End` (nil while open), `DPH`, `EstUSD`. No amendment to CORE-040's types is needed.
 
 `MaxLedgerEntries = 100`. With `lifecycle.safety.maxInstances = 1`, one entry opens and closes per cycle, so 100 is months of history; the cap guards the pathological case (attempt-budget churn), not normal operation.
 
@@ -76,10 +76,9 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 
 ```go
 type Config struct {
-	MonthlyUSD          float64
-	WarnFraction        float64
-	MaxHourlyPriceUSD   float64
-	MaxInstanceSpendUSD float64 // 0 = off (ADR 0011 §5)
+	MonthlyUSD        float64
+	WarnFraction      float64
+	MaxHourlyPriceUSD float64
 }
 
 type Checker struct {
@@ -107,7 +106,7 @@ An unknown balance folds into `balance_low` — matches ADR 0012 §1's enum; the
 | 1 | Monthly cap | `EstimatedMTD(doc) >= cfg.MonthlyUSD` | `"budget_exhausted"` |
 | 2 | Balance floor | `balance < 2 * cfg.MaxHourlyPriceUSD` | `"balance_low"` |
 
-Empty string `""`, `Allow` returns otherwise. `WarnFraction` is never checked here; warning is a metric-and-alert concern (FR-6.4), not a deny.
+`Allow` returns the empty string `""` otherwise. `WarnFraction` is never checked here; warning is a metric-and-alert concern (FR-6.4), not a deny.
 
 **Why `2 × maxHourlyPrice`, not 1×:** one hour covers a full `Serving` hour at the worst price without the account reaching $0, where Vast schedules the instance and its data for deletion (research §1.5). The second hour is margin: `lifecycle.startupTimeout` (15 min) + `lifecycle.shutdown.drainTimeout` (60s) + the attempt-backoff ceiling (30 min, ADR 0003 §5, unchanged by ADR 0011) sum to under an hour of delay before destroy confirms.
 
@@ -128,13 +127,13 @@ A failed assertion is terminal for that attempt (counted against `lifecycle.safe
 
 ### Max instances: owned by `CORE-050`
 
-FR-6.2 (at most `lifecycle.safety.maxInstances` surviving) is enforced by `CORE-050`'s orphan reconcile rows, not by this package: the saga adopts the lowest provider id on a race, and the orphan rows destroy every id that is not `providerId`. `internal/controller/budget` has no survivor-selection function.
+FR-6.2 (at most `lifecycle.safety.maxInstances` surviving) is enforced by `CORE-050`'s orphan reconcile rows, not by this package: the saga adopts the lowest provider id on a race, and the orphan rows destroy every id that is not `providerId`. `internal/budget` has no survivor-selection function.
 
 ### Kill switch and exhaustion while `Serving`
 
 `POST /api/v1/gpu/stop` (ADR 0012 §1) sets `desired = STOPPED`, indistinguishable here from the monthly cap or `maxInstanceSpendUSD` being hit: all three raise a `StopRequested`/`BudgetExhausted` event treated like idle timeout or max lifetime — stop admitting, drain, destroy. `Allow` needs no special case for `desired == STOPPED`: the controller never calls it once desired is `STOPPED`.
 
-Budget exhaustion while `Serving` — monthly cap or `InstanceSpendExceeded` — follows the same `Draining → Destroying` path (ADR 0011 §1, §3) and increments `vkllm_shutdowns_total{reason=budget}` (`CORE-050`). New requests during that drain get `503 backend_unavailable` with no `Retry-After` (ADR 0010 §2–§3) so clients stop polling rather than hammer a GPU that will not come back this month. In-flight requests finish inside `lifecycle.shutdown.drainTimeout` (60s); the ledger entry closes when `Destroying` confirms, at whatever `EstUSD` the elapsed drain time produced — drain time is billed time, and the estimate says so.
+Budget exhaustion while `Serving` — monthly cap or per-instance spend limit — follows the same `Draining → Destroying` path (ADR 0011 §1, §3) and increments `vkllm_shutdowns_total{reason=budget}` (`CORE-050`). New requests during that drain get `503 backend_unavailable` with no `Retry-After` (ADR 0010 §2–§3) so clients stop polling rather than hammer a GPU that will not come back this month. In-flight requests finish inside `lifecycle.shutdown.drainTimeout` (60s); the ledger entry closes when `Destroying` confirms, at whatever `EstUSD` the elapsed drain time produced — drain time is billed time, and the estimate says so.
 
 ### `GET /api/v1/gpu/cost` payload
 
@@ -189,23 +188,23 @@ The ledger functions and `Allow` are pure and call no `obs` setter; they run ins
 - R6. Rollover MUST fire when `now.UTC().Format("2006-01") != ledger.Month`, reset `TotalUSD` to `0`, drop every closed entry, and re-open any still-running entry with `Start = now`; `vkllm_cost_estimated_usd_total` MUST NOT decrease, ever. (source: ADR 0004 Consequences; architecture §5)
 - R7. `AssertPrice` MUST return `ErrPriceTooHigh` for any `dph` strictly above `lifecycle.safety.maxHourlyPriceUSD`, called immediately before every `CreateInstance`, in addition to `CORE-020`'s search-time filter. (source: FR-6.1, C-1)
 - R8. `OpenEntry` MUST run on the `Created` event with the offer's `dph` and MUST NOT run twice for the same generation; `CloseEntry` MUST run once `Destroying` confirms and MUST set `End` before any fold-on-overflow check. (source: ADR 0003 §2, C-1)
-- R9. Budget exhaustion while `Serving` — monthly cap or `InstanceSpendExceeded` — MUST result in `Draining` then `Destroying`; new requests during that drain MUST see `503 backend_unavailable` with no `Retry-After`. (source: ADR 0011 §1, §3, ADR 0010 §2–§3)
+- R9. Budget exhaustion while `Serving` — monthly cap or per-instance spend limit — MUST result in `Draining` then `Destroying`; new requests during that drain MUST see `503 backend_unavailable` with no `Retry-After`. (source: ADR 0011 §1, §3, ADR 0010 §2–§3)
 - R10. `Checker` MUST NOT make a `Provider` or `Store` call itself; `doc` and `balanceUSD` MUST be supplied by the caller; no metric here MUST carry an instance id or other unbounded label. (source: C-26, C-27, C-34)
-- R11. `budget.monthlyUSD`, `budget.warnFraction`, `lifecycle.safety.maxHourlyPriceUSD`, `lifecycle.safety.maxInstanceSpendUSD` MUST NOT be hard-coded inside `internal/controller/budget`; they arrive only through `Config`. (source: C-7)
+- R11. `budget.monthlyUSD`, `budget.warnFraction`, `lifecycle.safety.maxHourlyPriceUSD`, `lifecycle.safety.maxInstanceSpendUSD` MUST NOT be hard-coded inside `internal/budget`; they arrive only through `Config`. (source: C-7)
 - R12. The per-instance spend check in `internal/controller/reconcile.go` MUST return `true` only when `cfg.MaxInstanceSpendUSD > 0` and the open entry for `gen`'s current `EstUSD >= cfg.MaxInstanceSpendUSD`; it MUST return `false` whenever `MaxInstanceSpendUSD == 0`. (source: ADR 0011 §5)
 
 ## Implementation steps
 
 1. `OpenEntry`, `RefreshOpenEntry`, `CloseEntry`, fold-on-overflow, `Rollover`, operating on `CORE-040`'s `store.Ledger`. Tests: `TestRoundUpToSecond`, `TestOpenRefreshClose`, `TestFoldOnOverflow`, `TestRolloverDropsClosedEntries`, `TestRolloverReopensRunningEntry`.
-2. `EstimatedMTD`, `Checker.Allow`, `Checker.UsedRatio`, `Checker.InstanceSpendExceeded` — the pure values `CORE-050` feeds to `CORE-090`'s obs setters, and its own drain trigger, after each commit. Tests: `TestAllowMonthlyCap`, `TestAllowBalanceFloor`, `TestAllowOrderMonthlyBeforeBalance`, `TestUsedRatio`, `TestInstanceSpendExceeded`, `TestInstanceSpendOffByDefault`.
+2. `EstimatedMTD`, `Checker.Allow`, `Checker.UsedRatio` — the pure values `CORE-050` feeds to `CORE-090`'s obs setters, and its own drain trigger, after each commit. Tests: `TestAllowMonthlyCap`, `TestAllowBalanceFloor`, `TestAllowOrderMonthlyBeforeBalance`, `TestUsedRatio`.
 3. `AssertPrice`. Test: `TestAssertPriceBoundary`.
 4. Simulation harness reusing `CORE-050`'s fake clock/store/provider: month-boundary crossing, budget exhaustion mid-`Serving` signalled to a fake state observer. Tests: `TestSimMonthBoundary`, `TestSimExhaustionSignalDuringServing`.
 
 ## Tests / acceptance criteria
 
 - AC1. Setup: `Month="2026-11"`, `TotalUSD=12.34`, open entry `gen=5, dph=0.71, start=2026-11-30T20:00:00Z`. Action: `Rollover` at `2026-12-01T00:00:00Z`. Expected: `Month=="2026-12"`, `TotalUSD==0`, one entry (`gen=5`) with `Start==2026-12-01T00:00:00Z`, `End==nil`, `EstUSD==0`; `vkllm_cost_estimated_usd_total` unchanged. (R6)
-- AC2. Setup: `TotalUSD=29.90`, one open entry whose `RefreshOpenEntry` yields `EstUSD=0.15` (`EstimatedMTD=30.05`). Action: `Allow(doc, balanceUSD=100)`. Expected: `ok=false, reason="monthly_budget_exceeded"`. (FR-6.3, R1)
-- AC3. Setup: `EstimatedMTD < MonthlyUSD`; `MaxHourlyPriceUSD=0.80` (floor `1.60`). Action: `Allow` with `balanceUSD=1.59`, then `1.60`. Expected: `ok=false, reason="balance_floor"`, then `ok=true`. A variant where both R1 and R2 would fail yields `"monthly_budget_exceeded"` only, never `"balance_floor"`. (R2, R2 ordering)
+- AC2. Setup: `TotalUSD=29.90`, one open entry whose `RefreshOpenEntry` yields `EstUSD=0.15` (`EstimatedMTD=30.05`). Action: `Allow(doc, balance=100, known=true)`. Expected: return value `"budget_exhausted"` (monthly cap exceeded). (FR-6.3, R1)
+- AC3. Setup: `EstimatedMTD < MonthlyUSD`; `MaxHourlyPriceUSD=0.80` (floor `1.60`). Action: `Allow(doc, balance, known=true)` with `balance=1.59`, then `1.60`. Expected: return values `"balance_low"`, then `""` (allow). A variant where both R1 and R2 would fail yields `"budget_exhausted"` only, never `"balance_low"` (monthly cap checked first). (R2, R2 ordering)
 - AC4. Setup: a fake state observer reporting `Serving` receives a `BudgetExhausted` signal. Action: the simulation harness delivers it. Expected: recorded transitions exactly `Serving → Draining → Destroying`; the ledger entry's `End` is set only after `Destroying→Idle`. (R9 — the state machine itself is `CORE-050`'s own simulation; this AC proves the signal and the ledger's response.)
 - AC5. Setup: `dph = 0.80001`, `maxHourlyPriceUSD = 0.80`. Action: `AssertPrice`. Expected: `ErrPriceTooHigh`. With `dph = 0.80`: `nil`. (R7)
 - AC6. Setup: 100 closed entries plus one about to close (101 total). Action: `CloseEntry`. Expected: `len(Entries) == 100` afterwards, the oldest closed entry's `EstUSD` added to `TotalUSD`, the just-closed entry still present. (R5, R8)
