@@ -333,7 +333,6 @@ jobs:
             --set existingSecrets.apiKeys=api-keys-secret \
             --set existingSecrets.ssh=ssh-secret
           kubectl rollout status deployment/gpu-on-demand --timeout=60s
-          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=gpu-on-demand --timeout=60s
           pkill -f "port-forward svc/gpu-on-demand" || true
           kubectl port-forward svc/gpu-on-demand 18080:80 >/dev/null 2>&1 &
           sleep 2
