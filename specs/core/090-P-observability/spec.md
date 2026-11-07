@@ -30,8 +30,9 @@ the process-wide `*prometheus.Registry`, the `slog` JSON logger with
 redaction, and request-id propagation. Every metric any package in this
 repository emits appears, under one name, in the catalog below. A Grafana
 dashboard ConfigMap and a `PrometheusRule` with four alerts ship with the
-chart. `curl :9090/metrics` on a kind cluster shows exactly the 43
-catalogued metric families and no label outside the bounded enumerations.
+chart. `curl :9090/metrics` on a kind cluster shows exactly 40 of the 43
+catalogued metric families when the fake provider is wired (43 with the real
+Vast.ai provider; see AC6), and no label outside the bounded enumerations.
 
 ## Scope
 
@@ -239,7 +240,7 @@ replaced — a client cannot inject an arbitrary string into logs via this
 header. The id is attached to the request context, read by the logging
 middleware, and echoed on the response header on every status code.
 
-`internal/gateway`'s existing request-id generator predates this spec and produces 16 hex characters, not this section's required 32 (`^[0-9a-f]{32}$}`); CORE-090 fixes this by having `internal/gateway`'s existing middleware call site delegate to `obs.NewRequestID`/`obs.RequestIDMiddleware` internally, and has `internal/mgmt`'s already-documented 'the caller wraps it' design actually wired up for the first time, in `wire.go`.
+`internal/gateway`'s existing request-id generator predates this spec and produces 16 hex characters, not this section's required 32 (`^[0-9a-f]{32}$`); CORE-090 fixes this by having `internal/gateway`'s existing middleware call site delegate to `obs.NewRequestID`/`obs.RequestIDMiddleware` internally, and has `internal/mgmt`'s already-documented 'the caller wraps it' design actually wired up for the first time, in `wire.go`.
 
 ### Cardinality audit
 
@@ -387,7 +388,7 @@ retried on the next demand, not a failure.
 | CORE-050's own Observability table and simulation ACs (e.g. AC1, AC3, AC22) still emit `vkllm_gpu_state` with the nine internal `State.String()` values (`Idle`, `Searching`, `Creating`, `Booting`, `Loading`, `Ready`, `Serving`, `Draining`, `Destroying`), not the eight public states this catalog defines (R12, ADR 0011 §6) | Two specs disagree on the only label of a one-hot gauge; whichever ships first makes the other's dashboard panel and `VkllmDestroyStuck` alert wrong | CORE-050, before either spec leaves DRAFT | **closed** (CORE-050 DONE, Design Decision 6): the shipped setter uses `PublicState()` and the eight public-state names, matching this catalog; CORE-050's own spec text and fixtures were corrected to match in that write-back |
 | R9's "every label combination initialized to zero at process start" is only tested by AC1 for 2 of the catalog's labeled metrics (`vkllm_coldstart_stage_seconds`, `vkllm_gpu_state`) | Pre-initializing every other labeled metric's full combination set (e.g. `vkllm_gateway_requests_total`'s `route`×`code`) is real, untested-by-this-spec work | Implementation time, CORE-090 | Scoped to AC1's 2 metrics for this spec; a future spec or CI assertion can widen it |
 | Only `first_token` is observed with a real duration in `vkllm_coldstart_stage_seconds` today, the other 7 stages' instrumentation is out of this spec's scope | Metric pre-initializes all 8 stage labels but only 1 gets recorded observations; the rest are unexercised | Implementation time, CORE-090 | Scoped to `first_token` for this spec; a future spec can add instrumentation for the other 7 stages |
-| `vkllm_gateway_cancelled_streams_total` is added here to satisfy NFR-10.1 ("cancelled streams"), but CORE-060's own text and AC13 describe only `requests_total{code="499"}` on disconnect, not this counter | A metric this spec lists but no implementing spec increments fails AC6/AC1 trivially (always zero, never exercised) | CORE-060, before either spec leaves DRAFT | **closed** (CORE-090): CORE-060 shipped `DONE` without it, so this spec adds the counter itself, in `internal/gateway`, incrementing at the same point `vkllm_gateway_requests_total`'s `code` label is computed as `"499"` — a one-line addition to the single place that already decides the metric's code label, not a new call site per disconnect path. |
+| `vkllm_gateway_cancelled_streams_total` is added here to satisfy NFR-10.1 ("cancelled streams"), but CORE-060's own text and AC13 describe only `requests_total{code="499"}` on disconnect, not this counter | A metric this spec lists but no implementing spec increments fails AC6/AC1 trivially (always zero, never exercised) | CORE-090 | **closed** (CORE-090): CORE-060 shipped `DONE` without it, so this spec adds the counter itself, in `internal/gateway`, incrementing at the same point `vkllm_gateway_requests_total`'s `code` label is computed as `"499"` — a one-line addition to the single place that already decides the metric's code label, not a new call site per disconnect path. |
 
 ## Evidence
 
