@@ -8,7 +8,7 @@
 
 **Tech Stack:** `log/slog`, `prometheus/client_golang`, Prometheus `promtool` (new pinned CI binary), Helm.
 
-**Spec:** [specs/core/090-P-observability/spec.md](../../../specs/core/090-P-observability/spec.md)
+**Spec:** [specs/core/090-D-observability/spec.md](../../../specs/core/090-D-observability/spec.md)
 
 ## Why this plan looks different from the spec's own effort estimate
 
@@ -52,7 +52,7 @@ Ten concrete findings from that exploration, each resolved by a ruling below or 
 ### Task 1: Spec amendment — rulings, AC6 fix, DRAFT→READY
 
 **Files:**
-- Modify: `specs/core/090-P-observability/spec.md`
+- Modify: `specs/core/090-D-observability/spec.md`
 - Modify: `docs/open-questions.md`
 
 - [ ] **Step 1:** In spec 090's AC6, replace the text:
@@ -86,7 +86,7 @@ Ten concrete findings from that exploration, each resolved by a ruling below or 
 
 - [ ] **Step 9:** `make specs-check`.
 
-- [ ] **Step 10:** `git add specs/core/090-P-observability/spec.md docs/open-questions.md && git commit -m "docs: CORE-090 spec amendment — provider-conditional AC6, pre-init scope, cancelled_streams_total and request-id rulings"`.
+- [ ] **Step 10:** `git add specs/core/090-D-observability/spec.md docs/open-questions.md && git commit -m "docs: CORE-090 spec amendment — provider-conditional AC6, pre-init scope, cancelled_streams_total and request-id rulings"`.
 
 ---
 
@@ -491,9 +491,8 @@ type Config struct {
 	Addr string // ":9090"
 }
 
-// NewServer builds the health/ready/metrics server. /healthz is 200
-// once the process is running; /readyz is 200 only if every check
-// returns nil, else 503 with the first error's message; /metrics
+// NewServer builds the health/ready/metrics server: /healthz is
+// always 200, /readyz is 503 on the first failing check, /metrics
 // serves reg via promhttp.
 func NewServer(reg *prometheus.Registry, checks []func() error, cfg Config) *http.Server {
 	mux := http.NewServeMux()
@@ -626,10 +625,9 @@ type redactingHandler struct {
 	next slog.Handler
 }
 
-// RedactingHandler strips DeniedLogFields from a record whether set
-// via Handle (inline attrs) or via a logger built with Logger.With,
-// because With is how a request-scoped logger attaches key_id etc.,
-// and a handler that only filtered Handle's own attrs would miss it.
+// RedactingHandler strips DeniedLogFields whether set via Handle or
+// via Logger.With — a request-scoped logger attaches fields through
+// With, so filtering only Handle's own attrs would miss them.
 func RedactingHandler(next slog.Handler) slog.Handler {
 	return &redactingHandler{next: next}
 }
@@ -814,10 +812,9 @@ func RequestIDFromContext(ctx context.Context) string {
 	return id
 }
 
-// RequestIDMiddleware reuses an inbound X-Request-Id that matches
-// ^[0-9a-f]{32}$, generates a fresh one otherwise, and always echoes
-// it on the response — success or error — so a client can't inject an
-// arbitrary string into logs via this header.
+// RequestIDMiddleware reuses a valid inbound X-Request-Id, generates
+// a fresh one otherwise, and always echoes it on the response — so a
+// client can't inject an arbitrary string into logs via this header.
 func RequestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-Id")
@@ -844,9 +841,8 @@ import (
 var DeniedMetricLabels = []string{"request_id", "key", "instance_id", "ip"}
 
 // AuditCardinality gathers reg and returns one error naming every
-// family×label whose name matches denylist case-insensitively. CI runs
-// this against a registry built from every real collector, catching a
-// label added later without a spec update.
+// family×label whose name matches denylist case-insensitively, so a
+// label added later without review still gets caught.
 func AuditCardinality(reg *prometheus.Registry, denylist []string) error {
 	families, err := reg.Gather()
 	if err != nil {
@@ -1019,10 +1015,9 @@ func RegisterMetrics(reg prometheus.Registerer) {
 	}
 }
 
-// publishCostMetrics republishes the budget/cost gauges and adds this
-// tick's non-negative spend delta to the monotonic counter; called
-// from processEvent's own doc-derived gauge point, so it stays fresh
-// on every reconcile tick, not only when something polls Status().
+// publishCostMetrics republishes the budget/cost gauges and adds
+// this tick's non-negative spend delta to the monotonic counter —
+// called every reconcile tick, not only when something polls Status.
 func (c *Controller) publishCostMetrics(doc store.Document) {
 	mtd := c.deps.Budget.EstimatedMTD(doc)
 	obs.SetBudgetUsedRatio(c.deps.Budget.UsedRatio(doc))
@@ -1383,6 +1378,82 @@ func TestWireMetricsCatalogComplete(t *testing.T) {
 
 ---
 
+### Task 9b: Pre-initialize 12 Vec metrics (closes the R9 residual for real)
+
+**Added mid-plan.** Task 9's own implementation work proved the Task 1 ruling that scoped R9's pre-init requirement down to just `vkllm_coldstart_stage_seconds`/`vkllm_gpu_state` was too narrow: a `*Vec` collector emits no family at all until something calls `.WithLabelValues(...)` on it, and `wire()`'s own test never drives enough real traffic or waits long enough to touch 12 of the catalog's Vec-typed metrics. Rather than leave this as a residual, this task pre-initializes all 12 — following the exact pattern `coldstartStageSeconds`'s pre-init loop already uses — closing R9 in full for every metric whose label set is a small, closed enum (every catalog metric except the 3 vastai-only and 8 worker-scrape-gated ones, which are correctly excluded on their own separate grounds).
+
+**Files:**
+- Modify: `internal/controller/metrics.go`
+- Modify: `internal/store/metrics.go`
+- Modify: `internal/mgmt/metrics.go`
+- Modify: `internal/gateway/metrics.go`
+
+This is a merged-package touch to 4 already-shipped packages — additive only.
+
+- [ ] **Step 1: `internal/controller/metrics.go`** — in `RegisterMetrics`, right after the existing coldstart pre-init loop, add:
+
+```go
+	for _, s := range []string{"STOPPED", "ALLOCATING", "STARTING", "LOADING_MODEL", "READY", "DRAINING", "DELETING", "FAILED"} {
+		gpuState.WithLabelValues(s)
+	}
+	for _, r := range []string{"idle", "manual", "lifetime", "budget", "failure", "orphan"} {
+		shutdownsTotal.WithLabelValues(r)
+	}
+	for _, o := range []string{"ok", "no_offer", "provider_error", "deadline_exceeded", "attempts_exhausted", "budget_exhausted", "failed_status", "lost", "cancelled"} {
+		provisionAttemptsTotal.WithLabelValues(o)
+	}
+	for _, o := range []string{"ok", "retryable", "terminal", "fatal"} {
+		destroyAttemptsTotal.WithLabelValues(o)
+	}
+	for _, o := range []string{"ok", "error"} {
+		reconcileRunsTotal.WithLabelValues(o)
+	}
+```
+
+- [ ] **Step 2: `internal/store/metrics.go`** — in `RegisterMetrics`, add (op×outcome, every combination the catalog declares):
+
+```go
+	for _, op := range []string{"load", "save", "transition"} {
+		for _, outcome := range []string{"ok", "conflict", "exhausted", "too_large", "corrupt", "error", "reset", "installation", "missing"} {
+			storeOpsTotal.WithLabelValues(op, outcome)
+		}
+	}
+```
+
+- [ ] **Step 3: `internal/mgmt/metrics.go`** — in `registerMetrics`, add:
+
+```go
+	for _, op := range []string{"start", "status", "stop", "cost", "other"} {
+		mgmtRequestSeconds.WithLabelValues(op)
+		for _, code := range []string{"200", "202", "400", "401", "403", "404", "405", "413", "429", "500", "503"} {
+			mgmtRequestsTotal.WithLabelValues(op, code)
+		}
+	}
+```
+
+- [ ] **Step 4: `internal/gateway/metrics.go`** — in `newGatewayMetrics`, after constructing `m` and before `return m`, add:
+
+```go
+	for _, route := range []string{"chat_completions", "models", "other"} {
+		m.requestSeconds.WithLabelValues(route)
+		for _, code := range []string{"200", "400", "401", "403", "404", "405", "413", "429", "499", "500", "502", "503", "504", "stream_error"} {
+			m.requestsTotal.WithLabelValues(route, code)
+		}
+	}
+	for _, reason := range []string{"missing", "malformed", "unknown_key", "wrong_surface"} {
+		m.authFailuresTotal.WithLabelValues(reason)
+	}
+	for _, outcome := range []string{"ready", "gpu_cold_start", "queue_full", "gpu_unavailable", "client_gone", "shutting_down"} {
+		m.coldStartOutcomesTotal.WithLabelValues(outcome)
+	}
+```
+
+- [ ] **Step 5:** `go build ./... && go test ./internal/controller/... ./internal/store/... ./internal/mgmt/... ./internal/gateway/... -race -count=1` — every touched package's full suite green; pre-touching a label with no `.Inc()`/`.Observe()` must not change any existing test's assertions about counts (a pre-touched zero-value child is indistinguishable from an absent one to anything that was checking a specific label's value, only `Gather()`'s family-presence changes).
+
+- [ ] **Step 6:** `git add internal/controller/metrics.go internal/store/metrics.go internal/mgmt/metrics.go internal/gateway/metrics.go && git commit -m "feat: pre-initialize the remaining 12 Vec metrics at registration time"`.
+
+---
+
 ### Task 10: Chart — `PrometheusRule`, Grafana dashboard `ConfigMap`, CI
 
 **Files:**
@@ -1581,7 +1652,7 @@ HELM_TEST_SET = --set image.tag=test \
 
 - [ ] **Step 13:** In the same job's `helm install` and `helm upgrade` steps, add `--set prometheusRule.enabled=true --set dashboard.enabled=true` to each command's existing flag list (both already span multiple `--set` lines; append these as one more line to each, changing nothing else).
 
-- [ ] **Step 14:** Add a new step right after "Confirm initial state is STOPPED" (same port-forward pattern, a second port on `:9090`), asserting the provider-conditional family count this plan's AC6 ruling set (Task 1, Step 1): 40 families, since this job's `config.provider.name=fake`.
+- [ ] **Step 14:** Add a new step right after "Inference API reachable" — not after "Confirm initial state is STOPPED" — because the 8 `vkllm_inference_*` families only appear once the worker Exporter has been `Update`d by a real successful scrape, which only happens after a real inference call has gone through. Running this check any earlier would see 32 families, not 40, for a reason that has nothing to do with the chart. Same port-forward pattern as the existing steps, a second port on `:9090`, asserting the provider-conditional family count this plan's AC6 ruling set (Task 1, Step 1): 40 families, since this job's `config.provider.name=fake`.
 
 ```yaml
       - name: Metrics endpoint reachable, catalog complete for the fake provider
@@ -1602,7 +1673,7 @@ HELM_TEST_SET = --set image.tag=test \
 ### Task 11: Write-back
 
 **Files (for final DONE state):**
-- Rename: `specs/core/090-P-observability` → `specs/core/090-D-*` (the D letter for DONE status)
+- Rename the spec folder's status letter from P to D (DONE status); folder becomes `specs/core/090-D-observability`
 - Modify: `specs/README.md` to point at the renamed spec
 - Modify: any spec whose cross-reference still points at `090-P-...`
 
@@ -1612,7 +1683,7 @@ HELM_TEST_SET = --set image.tag=test \
 - [ ] **Step 2:** Check every box in spec 090's Definition of done against this plan's real AC1-AC11 results.
 - [ ] **Step 3:** Rename folder (folder becomes `090-D-observability` when status flips to "DONE") and update front-matter `status: "DONE"`.
 - [ ] **Step 4:** `grep -rn '090-P-observability'` across the repo; fix every stale cross-reference (at minimum `specs/README.md`).
-- [ ] **Step 5:** `grep -rEn '([0-9]{1,3}\.){3}[0-9]{1,3}' specs/core/090-P-observability/spec.md` — leak check (standing rule); this spec touches no real IPs. (After Step 3 rename, update this path to the new folder name.)
+- [ ] **Step 5:** `grep -rEn '([0-9]{1,3}\.){3}[0-9]{1,3}' specs/core/090-D-observability/spec.md` — leak check (standing rule); this spec touches no real IPs.
 - [ ] **Step 6:** `make specs-check`.
 - [ ] **Step 7:** `git add -A && git commit -m "docs: CORE-090 observability DONE"`.
 

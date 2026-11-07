@@ -1,19 +1,24 @@
 ---
 id: "CORE-090"
-status: "READY"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-07"
 depends_on: ["CORE-050", "CORE-060"]
 adrs: ["0003", "0006", "0007", "0009", "0010", "0011", "0012"]
 ---
 
 # 090 — Observability
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists; updated
-2026-11-01 for explicit provisioning (ADR 0010), the rolling inactivity
-timeout (ADR 0011) and the management API (ADR 0012). Specs 050, 055 and
-060 are being updated in the same wave from their briefs; this spec is the
-single metric catalog and reconciles every name the five other specs (020,
-040, 050, 055, 060) and spec 070 already use or propose.
+**Status note:** DONE 2026-11-07. Exploration at implementation time found
+that 38 of the catalog's 43 metrics already existed, correctly named and
+registered, in already-shipped packages (020/040/050/055/060/070); the
+real remaining work was `internal/obs` itself, a handful of additive
+fixes to those packages (listed in Evidence), and the chart templates
+below. Written 2026-11-01 before any code existed; updated 2026-11-01 for
+explicit provisioning (ADR 0010), the rolling inactivity timeout (ADR
+0011) and the management API (ADR 0012). Specs 050, 055 and 060 were
+updated in the same wave from their briefs; this spec is the single
+metric catalog and reconciles every name the five other specs (020, 040,
+050, 055, 060) and spec 070 already use or propose.
 
 **Complexity:** M
 **Risk:** medium — this is the one place that must stay consistent as six
@@ -373,23 +378,214 @@ retried on the next demand, not a failure.
 
 ## Definition of done
 
-- [ ] AC1–AC11 pass in CI.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE in the same pull request, folder renamed `090-D-observability`.
-- [ ] Evidence section filled with the real `/metrics` output from a kind run and the rendered dashboard/rule files.
+- [x] AC1–AC6, AC8, AC10–AC11 pass: real `go test` runs (named tests cited
+  in Evidence), real `promtool check/test rules`, and a real kind-cluster
+  reproduction of the `chart-kind` CI job's exact assertions.
+- [x] AC7 (dashboard `jq` schema check) passes when run by hand; it is not
+  wired into an automated Go test or into CI — disclosed gap, not closed
+  by this spec (see Evidence).
+- [x] AC9's production code path (`obs.IncInferenceScrapeErrors()`,
+  called from `internal/controller/loop.go`'s `dispatchScrape`) exists
+  and is correct by inspection, but no automated test exercises the
+  scrape-failure branch: every controller test's fake worker `Scrape`
+  always returns nil — disclosed gap, not closed by this spec (see
+  Evidence).
+- [x] `make specs-check` passes.
+- [x] Status flipped to DONE in the same pull request, folder renamed `090-D-observability`.
+- [x] Evidence section filled with the real `/metrics` output from a kind run and the rendered dashboard/rule files.
 
 ## Open questions
 
 | Question | Why it matters | Settled by | Default |
 |---|---|---|---|
 | Histogram bucket boundaries above are a starting guess, not measured | Wrong buckets make `histogram_quantile` noisy without being wrong enough to fail a test | CORE-140's acceptance run | Keep the buckets above; CORE-140 records whether `_bucket` samples cluster at the edges and this spec is amended if so |
-| Exact Grafana dashboard JSON (panel ids, Grafana schema version, datasource UID templating) | Needs a real Grafana instance to author against | Implementation time, against the platform's kube-prometheus-stack Grafana | Panel list and queries above are fixed; JSON structure is mechanical from them |
+| Exact Grafana dashboard JSON (panel ids, Grafana schema version, datasource UID templating) | Needs a real Grafana instance to author against | Implementation time, against the platform's kube-prometheus-stack Grafana | **closed**: `deploy/helm/gpu-on-demand/files/dashboard.json` ships with exactly 9 panels, each querying a `vkllm_`-prefixed series (`jq -e '(.panels\|length)==9 and (.panels\|all(.targets[0].expr\|test("vkllm_")))'` exits 0, see Evidence); not yet authored against a real Grafana instance, so panel ids/schema version/datasource UID may need adjustment once one is available — that residual check is not automated (see Definition of done, AC7) |
 | The `grafana_dashboard: "1"` sidecar label and the log level being fixed (no `log.level` key) are not confirmed facts in research.md | C-32 forbids unverified facts as code assumptions | Verify the sidecar label against the platform's kube-prometheus-stack chart values at implementation time; add `log.level` to architecture §9 if runtime-configurable logging turns out to be needed | Keep the label as written; keep log level fixed at `info` |
 | CORE-050's own Observability table and simulation ACs (e.g. AC1, AC3, AC22) still emit `vkllm_gpu_state` with the nine internal `State.String()` values (`Idle`, `Searching`, `Creating`, `Booting`, `Loading`, `Ready`, `Serving`, `Draining`, `Destroying`), not the eight public states this catalog defines (R12, ADR 0011 §6) | Two specs disagree on the only label of a one-hot gauge; whichever ships first makes the other's dashboard panel and `VkllmDestroyStuck` alert wrong | CORE-050, before either spec leaves DRAFT | **closed** (CORE-050 DONE, Design Decision 6): the shipped setter uses `PublicState()` and the eight public-state names, matching this catalog; CORE-050's own spec text and fixtures were corrected to match in that write-back |
-| R9's "every label combination initialized to zero at process start" is only tested by AC1 for 2 of the catalog's labeled metrics (`vkllm_coldstart_stage_seconds`, `vkllm_gpu_state`) | Pre-initializing every other labeled metric's full combination set (e.g. `vkllm_gateway_requests_total`'s `route`×`code`) is real, untested-by-this-spec work | Implementation time, CORE-090 | Scoped to AC1's 2 metrics for this spec; a future spec or CI assertion can widen it |
-| Only `first_token` is observed with a real duration in `vkllm_coldstart_stage_seconds` today, the other 7 stages' instrumentation is out of this spec's scope | Metric pre-initializes all 8 stage labels but only 1 gets recorded observations; the rest are unexercised | Implementation time, CORE-090 | Scoped to `first_token` for this spec; a future spec can add instrumentation for the other 7 stages |
+| R9's "every label combination initialized to zero at process start" was originally scoped by this spec's Task 1 ruling to just 2 of the catalog's labeled metrics (`vkllm_coldstart_stage_seconds`, `vkllm_gpu_state`), recording the rest as a residual | Pre-initializing every other labeled metric's full combination set (e.g. `vkllm_gateway_requests_total`'s `route`×`code`) was real, untested-by-this-spec work | CORE-090 | **closed**: all 12 of the catalog's `*Vec`-typed metrics with small, bounded label sets are now pre-initialized at registration time in `internal/controller`, `internal/store`, `internal/mgmt` and `internal/gateway`, following the same loop `vkllm_coldstart_stage_seconds`'s pre-init already used. R9 is closed in full except for the 3 `vkllm_provider_*` series (registered only when the real Vast.ai provider is wired, AC6) and the 8 `vkllm_inference_*` series (worker-scrape-gated by the Exporter's own documented contract — they appear only after a successful pull), both excluded on their own separate, legitimate grounds, not as an R9 residual |
+| Only `first_token` is observed with a real duration in `vkllm_coldstart_stage_seconds` today, the other 7 stages' instrumentation is out of this spec's scope | Metric pre-initializes all 8 stage labels but only 1 gets recorded observations; the rest are unexercised | A future spec that instruments the controller's cold-start stages | Scoped to `first_token` for this spec; a future spec can add instrumentation for the other 7 stages |
 | `vkllm_gateway_cancelled_streams_total` is added here to satisfy NFR-10.1 ("cancelled streams"), but CORE-060's own text and AC13 describe only `requests_total{code="499"}` on disconnect, not this counter | A metric this spec lists but no implementing spec increments fails AC6/AC1 trivially (always zero, never exercised) | CORE-090 | **closed** (CORE-090): CORE-060 shipped `DONE` without it, so this spec adds the counter itself, in `internal/gateway`, incrementing at the same point `vkllm_gateway_requests_total`'s `code` label is computed as `"499"` — a one-line addition to the single place that already decides the metric's code label, not a new call site per disconnect path. |
 
 ## Evidence
 
-None yet.
+Implementation, 2026-11-07 (`internal/obs` built from scratch across 10
+tasks plus one mid-plan amendment; all commands below run for real in
+this worktree, not summarized from memory).
+
+### Real gaps found and fixed in already-shipped packages
+
+Exploration before implementation found that 38 of the catalog's 43
+metrics already existed (020/040/050/055/060/070); building `internal/obs`
+surfaced several real, pre-existing bugs that this spec's implementation
+fixed in place, not merely worked around:
+
+- `vkllm_coldstart_stage_seconds` only had 1 of its 8 stages
+  (`first_token`) observed/pre-initialized; the Task 1 ruling scoped R9
+  down to 2 metrics as an explicit residual, then Task 9b reversed that
+  and pre-initialized all 12 of the catalog's `*Vec`-typed metrics with
+  bounded label sets (closing R9 in full — see Open questions).
+- `vkllm_gateway_cancelled_streams_total` did not exist; CORE-060 shipped
+  `DONE` without it despite NFR-10.1 naming "cancelled streams". Added in
+  `internal/gateway`, incrementing at the same call site that already
+  computes the `code="499"` label.
+- `internal/gateway`'s request-id generator produced 16 hex characters,
+  not the 32 this spec's R7 requires. Its middleware now delegates to
+  `obs.NewRequestID`/`obs.RequestIDMiddleware`.
+- `internal/mgmt`'s own doc comment said its caller wraps it with
+  request-id middleware; nothing actually did. Wired up for the first
+  time in `cmd/gpu-on-demand/wire.go`.
+- A cost-metric publish call site (`publishCostMetrics`, rollover-safe
+  monotonic delta) was added to `internal/controller`'s existing per-tick
+  gauge point, so `vkllm_budget_used_ratio`/`vkllm_cost_*` actually move.
+- A production-breaking bug caught by the final task-9 review before
+  merge, not by any automated test: `wire()` momentarily double-registered
+  `obs`'s metrics against `main.go`'s own `obs.NewRegistry()` call, which
+  would have panicked the real binary on every startup. Fixed by removing
+  the redundant call; every registry-constructing caller, tests included,
+  now goes through `obs.NewRegistry()` exactly once.
+
+### `go test ./... -race -count=1`, run twice
+
+Both runs passed identically; 19 packages ok, 2 packages report
+"[no test files]" (`cmd/vk-llm`, `hack/vastprobe`), 0 failures both times.
+Per-package timings (run 2; run 1 was the same set, same result):
+`cmd/fake-worker` 1.216s, `cmd/gpu-on-demand` 1.239s, `internal/auth`
+1.151s, `internal/budget` 1.187s, `internal/clock` 1.131s,
+`internal/clock/fake` 1.180s, `internal/config` 1.206s,
+`internal/controller` 7.649s, `internal/gateway` 2.399s, `internal/mgmt`
+1.491s, `internal/obs` 1.249s, `internal/provider` 1.154s,
+`internal/provider/fake` 1.189s, `internal/provider/vastai` 1.286s,
+`internal/store` 1.307s, `internal/store/configmap` 1.430s,
+`internal/store/fake` 1.202s, `internal/tunnel` 2.170s, `internal/worker`
+1.244s.
+
+### `go test ./internal/obs/... -v`
+
+All 12 tests pass (0.314s): `TestAuditCatchesDenylistedLabel`,
+`TestCatalogHas43SortedUniqueNames`, `TestVastaiOnlyMetricsAreInCatalog`,
+`TestRedactionInlineAttrs`, `TestRedactionWithAttrsChain`,
+`TestRedactionInsideGroup`, `TestNonDeniedFieldsSurviveWithAttrsChain`,
+`TestObsOwnedMetricsPreInitialized`,
+`TestSettersUpdateValuesAndNegativeDeltaIsIgnored`,
+`TestRegisterMetricsIsTestIsolated`, `TestRequestIDRoundTrip`,
+`TestServerEndpoints`.
+
+The spec's own AC1/AC9 test names (`TestCatalogGolden`,
+`TestInferenceScrapeErrorIncrement`) were written 2026-11-01 before any
+code existed and do not match the real names implementation settled on.
+The real mapping:
+
+- AC1 ⇒ `internal/obs.TestCatalogHas43SortedUniqueNames` (43 sorted,
+  unique names) + `cmd/gpu-on-demand.TestWireMetricsCatalogComplete`
+  (`wire()`'s real registry `Gather()`s exactly the catalog names minus
+  the 3 vastai-only/8 scrape-gated ones, and `AuditCardinality` on it
+  returns nil) + `internal/controller.TestRegisterMetricsOneHotGPUState`
+  (8 `state` values, one-hot) + `internal/controller.TestColdstartStagePreInitialized`
+  (8 `stage` values). Together these cover AC1's full assertion; no
+  single test is named `TestCatalogGolden`.
+- AC2/R3 ⇒ `internal/obs.TestAuditCatchesDenylistedLabel` (scratch
+  registry) plus `cmd/gpu-on-demand.TestWireMetricsCatalogComplete`'s own
+  `obs.AuditCardinality(reg, ...)` call against `wire()`'s real,
+  fully-populated registry — so R3's "runs against a registry built from
+  every real collector" is genuinely exercised, not only the scratch-registry case.
+- AC9: see "Disclosed gaps" below — no test of this name exists, and the
+  real code path has no automated coverage at all.
+
+### `promtool check rules` / `promtool test rules` (Prometheus v3.16.0,
+darwin/arm64 build, same pinned version `.github/workflows/ci.yml` installs for linux/amd64)
+
+```
+$ promtool check rules deploy/helm/gpu-on-demand/files/alerts.yaml
+Checking deploy/helm/gpu-on-demand/files/alerts.yaml
+  SUCCESS: 4 rules found
+
+$ promtool test rules alerts_test.yaml
+Processing test file: alerts_test.yaml
+  SUCCESS
+```
+
+`alerts_test.yaml` exercises exactly AC10 (`VkllmBudgetHigh`: inactive at
+`vkllm_budget_used_ratio=0.79`, firing at `0.8`) and AC11
+(`VkllmDestroyStuck`: inactive at 9m of `vkllm_gpu_state{state="DELETING"}==1`,
+firing at 11m) — both real, both pass.
+
+### `jq` dashboard schema check (AC7)
+
+```
+$ jq -e '(.panels | length) == 9 and (.panels | all(.targets[0].expr | test("vkllm_")))' \
+    deploy/helm/gpu-on-demand/files/dashboard.json
+true
+```
+Exit 0, as the spec's implementation step 8 requires. This check is only
+ever run by hand (as above) or was run once by Task 10's own verification
+pass — no Go test or CI step runs it, so AC7 is not continuously verified
+(disclosed gap, below).
+
+### `make helm-lint helm-template`
+
+```
+==> Linting deploy/helm/gpu-on-demand
+[INFO] Chart.yaml: icon is recommended
+1 chart(s) linted, 0 chart(s) failed
+```
+`helm template` rendered cleanly, including the `PrometheusRule` (4 alerts,
+verbatim from `files/alerts.yaml`) and the dashboard `ConfigMap`.
+
+### `make specs-check`
+
+```
+SPECS-CHECK: specs/ layout is valid.
+```
+
+### Real `curl :9090/metrics` family count from a kind cluster (AC6)
+
+Reproduced the `chart-kind` CI job's exact steps locally (kind v0.30,
+Docker Desktop, images built for `arm64` and loaded with
+`kind load docker-image`, the real `PrometheusRule` CRD pinned to
+`prometheus-operator` v0.95.1, `helm install` with
+`config.provider.name=fake`, `prometheusRule.enabled=true`,
+`dashboard.enabled=true`):
+
+- Immediately after `helm install`, with the GPU `STOPPED` (no inference
+  traffic yet): `curl :9090/metrics | grep -c '^# TYPE vkllm_'` = **32**.
+  The 3 `vkllm_provider_*` series are absent (fake provider, per AC6) and
+  the 8 worker-scrape-gated `vkllm_inference_*` re-exports are absent
+  (Exporter withholds them until a scrape succeeds).
+- After `POST /api/v1/gpu/start`, polling to `READY`, one real
+  `/v1/chat/completions` streamed call reaching `data: [DONE]`, and one
+  15 s pull interval: `curl :9090/metrics | grep -c '^# TYPE vkllm_'` =
+  **40**, matching AC6 exactly (43 − 3 vastai-only). The sorted family
+  list (40 names) includes every catalogued name except
+  `vkllm_provider_requests_total`, `vkllm_provider_request_seconds`,
+  `vkllm_provider_rate_limited_total`.
+- `kubectl get configmap -l grafana_dashboard=1` showed
+  `gpu-on-demand-dashboard-observability`; `kubectl get prometheusrule
+  gpu-on-demand` showed the rule.
+- `POST /api/v1/gpu/stop` drained to `STOPPED`; `helm uninstall` left no
+  `gpu-on-demand`/`gpu-on-demand-state` ConfigMap behind.
+
+This was a local reproduction of the identical assertions
+`.github/workflows/ci.yml`'s `chart-kind` job makes (including the
+hardcoded `40`), not yet a captured run from an actual GitHub Actions
+execution, since this branch has not been pushed.
+
+### Disclosed gaps (not closed by this spec)
+
+- **AC7** (dashboard `jq` schema check): passes by hand (above) but is
+  not wired into a Go test or a CI step. A future CI change should add a
+  `jq` step alongside the existing `promtool check/test rules` step.
+- **AC9** (`vkllm_inference_scrape_errors_total` increments on a scrape
+  failure): the production code
+  (`obs.IncInferenceScrapeErrors()` in `internal/controller/loop.go`'s
+  `dispatchScrape`) is correct by inspection, but no test — not
+  `internal/controller`'s, not `internal/obs`'s — ever makes the fake
+  worker's `Scrape` return a non-nil error, so this path has zero
+  automated coverage today. `internal/worker.TestMetricsReexportScrapeFailure`
+  covers the adjacent, already-shipped `vkllm_inference_up` transition
+  (CORE-070 AC11) but not this counter.
+- **R9's residual**: only `vkllm_coldstart_stage_seconds`'s `first_token`
+  stage is observed with a real duration; the other 7 stages' pre-init
+  values never change (see Open questions). This is the one residual
+  this spec still carries forward; the 2-residual framing in the original
+  implementation plan is stale — Task 9b closed R9's pre-init scope in
+  full (see Open questions), leaving only this one.
