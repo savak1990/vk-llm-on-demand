@@ -381,10 +381,10 @@ retried on the next demand, not a failure.
 - [x] AC1–AC6, AC8, AC10–AC11 pass: real `go test` runs (named tests cited
   in Evidence), real `promtool check/test rules`, and a real kind-cluster
   reproduction of the `chart-kind` CI job's exact assertions.
-- [x] AC7 (dashboard `jq` schema check) passes when run by hand; it is not
+- [ ] AC7 (dashboard `jq` schema check) passes when run by hand; it is not
   wired into an automated Go test or into CI — disclosed gap, not closed
   by this spec (see Evidence).
-- [x] AC9's production code path (`obs.IncInferenceScrapeErrors()`,
+- [ ] AC9's production code path (`obs.IncInferenceScrapeErrors()`,
   called from `internal/controller/loop.go`'s `dispatchScrape`) exists
   and is correct by inspection, but no automated test exercises the
   scrape-failure branch: every controller test's fake worker `Scrape`
