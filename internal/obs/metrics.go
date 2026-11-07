@@ -28,7 +28,7 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		}),
 		costEstimatedUSDTotal: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "vkllm_cost_estimated_usd_total",
-			Help: "Monotonic estimated spend; never decremented within this process's lifetime.",
+			Help: "Monotonic estimated spend; never decremented within this process's lifetime. A restart resets the baseline to 0, so the next tick jumps by the current month-to-date spend — expected, not a real cost event.",
 		}),
 		costInstanceUSD: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "vkllm_cost_instance_usd",

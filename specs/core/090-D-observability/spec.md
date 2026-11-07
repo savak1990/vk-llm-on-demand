@@ -292,8 +292,13 @@ provisioning (create-side) failure: the remediation is different (a stuck
 destroy risks unbounded GPU billing; a provisioning failure risks no
 service). `VkllmDestroyStuck` uses `vkllm_gpu_state` with a `for:` clause
 rather than a new counter, because "destroy keeps failing" and "the state
-machine has been stuck in `DELETING` for 10 minutes" are the same
-observable fact and the state gauge already exists.
+machine has been stuck in `DELETING` or `FAILED` for 10 minutes" are the
+same observable fact and the state gauge already exists. It matches both
+`DELETING` and `FAILED`: `PublicState` reports `FAILED` instead of
+`DELETING` once a destroy attempt itself has failed (worker failure,
+terminal provider status, or deadline expiry), so matching `DELETING`
+alone would miss exactly the stuck-retrying-destroy case this alert
+exists to catch.
 
 The `PrometheusRule` CRD wraps one `groups` list under `spec`, which is
 what `promtool check rules` needs fed to it directly (the AC below strips
@@ -321,7 +326,7 @@ spec:
           labels: {severity: critical}
           annotations: {summary: "GPU provisioning is failing or exhausted its hourly attempt budget"}
         - alert: VkllmDestroyStuck
-          expr: vkllm_gpu_state{state="DELETING"} == 1
+          expr: vkllm_gpu_state{state=~"DELETING|FAILED"} == 1
           for: 10m
           labels: {severity: critical}
           annotations: {summary: "An instance has been deleting for over 10 minutes"}
@@ -374,7 +379,7 @@ retried on the next demand, not a failure.
 - AC8. `promtool check rules deploy/helm/gpu-on-demand/files/alerts.yaml` exits 0 and its output reports `4 rules found`. The file's top-level `groups:` key is `promtool`'s own native rule-file format, so no Helm render or `yq` envelope-stripping step is needed; the chart's `PrometheusRule` template pulls this same file verbatim via `.Files.Get`. A fifth bogus rule added to a scratch copy changes that count, proving the test is not vacuous. (R10, NFR-10.6)
 - AC9. `TestInferenceScrapeErrorIncrement`: a fixture upstream returning 500 on `GET /metrics` leaves `vkllm_inference_up` at 0 and `vkllm_inference_scrape_errors_total` at 1 after one pull cycle. (R8, NFR-10.3)
 - AC10. `promtool test rules` against `deploy/helm/gpu-on-demand/files/alerts_test.yaml` that sets `vkllm_budget_used_ratio` to 0.79 at t=0 then 0.8 at t=1m: `VkllmBudgetHigh` is `inactive` at t=0 and `firing` at t=1m. (R10, FR-6.4, NFR-10.6)
-- AC11. `promtool test rules` against `deploy/helm/gpu-on-demand/files/alerts_test.yaml` that sets `vkllm_gpu_state{state="DELETING"}` to 1 at t=0 and holds it: `VkllmDestroyStuck` is `inactive` at t=9m and `firing` at t=11m. (R10, NFR-10.6)
+- AC11. `promtool test rules` against `deploy/helm/gpu-on-demand/files/alerts_test.yaml` that sets `vkllm_gpu_state{state="DELETING"}` to 1 at t=0 and holds it, and separately that sets `vkllm_gpu_state{state="FAILED"}` to 1 at t=0 and holds it: `VkllmDestroyStuck` is `inactive` at t=9m and `firing` at t=11m in both cases, because a destroy that fails outright reports `FAILED`, not `DELETING` (R10, NFR-10.6)
 
 ## Definition of done
 
@@ -506,8 +511,9 @@ Processing test file: alerts_test.yaml
 
 `alerts_test.yaml` exercises exactly AC10 (`VkllmBudgetHigh`: inactive at
 `vkllm_budget_used_ratio=0.79`, firing at `0.8`) and AC11
-(`VkllmDestroyStuck`: inactive at 9m of `vkllm_gpu_state{state="DELETING"}==1`,
-firing at 11m) — both real, both pass.
+(`VkllmDestroyStuck`: inactive at 9m and firing at 11m, run once with
+`vkllm_gpu_state{state="DELETING"}==1` and once with
+`vkllm_gpu_state{state="FAILED"}==1`) — all real, all pass.
 
 ### `jq` dashboard schema check (AC7)
 

@@ -13,7 +13,7 @@ groups:
         labels: {severity: critical}
         annotations: {summary: "GPU provisioning is failing or exhausted its hourly attempt budget"}
       - alert: VkllmDestroyStuck
-        expr: vkllm_gpu_state{state="DELETING"} == 1
+        expr: vkllm_gpu_state{state=~"DELETING|FAILED"} == 1
         for: 10m
         labels: {severity: critical}
         annotations: {summary: "An instance has been deleting for over 10 minutes"}

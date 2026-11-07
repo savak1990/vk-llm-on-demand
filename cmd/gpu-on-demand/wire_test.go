@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -119,6 +120,9 @@ func TestWireServesInferenceAndManagementThroughOneMux(t *testing.T) {
 	apiMux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /api/v1/gpu/status: code = %d, want 200", rec.Code)
+	}
+	if reqID := rec.Header().Get("X-Request-Id"); !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(reqID) {
+		t.Fatalf("GET /api/v1/gpu/status: X-Request-Id = %q, want 32 lowercase hex chars", reqID)
 	}
 	var status struct {
 		State string `json:"state"`

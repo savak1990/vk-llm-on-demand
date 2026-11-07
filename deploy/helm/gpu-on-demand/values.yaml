@@ -96,6 +96,7 @@ serviceMonitor:
 
 prometheusRule:
   enabled: false
+  labels: {}
 dashboard:
   enabled: false
 

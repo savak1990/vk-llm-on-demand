@@ -9,7 +9,7 @@
     {"id": 5, "title": "Spend MTD vs budget", "type": "stat", "targets": [{"expr": "vkllm_budget_used_ratio"}]},
     {"id": 6, "title": "Provisioning outcomes", "type": "barchart", "targets": [{"expr": "sum by (outcome) (increase(vkllm_provision_attempts_total[1h]))"}]},
     {"id": 7, "title": "Orphan events", "type": "timeseries", "targets": [{"expr": "increase(vkllm_orphans_destroyed_total[1h])"}]},
-    {"id": 8, "title": "Idle deadline countdown", "type": "stat", "targets": [{"expr": "vkllm_gpu_idle_deadline_seconds - time()"}]},
+    {"id": 8, "title": "Idle deadline countdown", "type": "stat", "targets": [{"expr": "(vkllm_gpu_idle_deadline_seconds > 0) - time()"}]},
     {"id": 9, "title": "Shutdowns by reason", "type": "barchart", "targets": [{"expr": "sum by (reason) (increase(vkllm_shutdowns_total[1h]))"}]}
   ]
 }

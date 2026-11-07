@@ -134,13 +134,14 @@ func chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler 
 type ctxKey int
 
 func (g *Gateway) requestIDMiddleware(next http.Handler) http.Handler {
+	wrapped := obs.RequestIDMiddleware(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Theoretically races Shutdown's Wait() if a new request's Add(1)
 		// lands exactly when the counter is momentarily zero; in practice
 		// the listener that feeds this handler is already closed by then.
 		g.activeWG.Add(1)
 		defer g.activeWG.Done()
-		obs.RequestIDMiddleware(next).ServeHTTP(w, r)
+		wrapped.ServeHTTP(w, r)
 	})
 }
 

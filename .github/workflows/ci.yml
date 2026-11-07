@@ -338,7 +338,11 @@ jobs:
           set -euo pipefail
           kubectl port-forward svc/gpu-on-demand 19090:9090 >/dev/null 2>&1 &
           sleep 2
-          count=$(curl -sf http://localhost:19090/metrics | grep -c '^# TYPE vkllm_')
+          for _ in $(seq 1 30); do
+            count=$(curl -sf http://localhost:19090/metrics | grep -c '^# TYPE vkllm_')
+            [ "$count" = "40" ] && break
+            sleep 1
+          done
           test "$count" = "40"
           kubectl get configmap -l grafana_dashboard=1 | grep -q dashboard-observability
           kubectl get prometheusrule gpu-on-demand

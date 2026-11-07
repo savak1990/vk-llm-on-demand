@@ -33,3 +33,19 @@ tests:
               severity: critical
             exp_annotations:
               summary: "An instance has been deleting for over 10 minutes"
+  - interval: 1m
+    input_series:
+      - series: 'vkllm_gpu_state{state="FAILED"}'
+        values: '1+0x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: VkllmDestroyStuck
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: VkllmDestroyStuck
+        exp_alerts:
+          - exp_labels:
+              state: FAILED
+              severity: critical
+            exp_annotations:
+              summary: "An instance has been deleting for over 10 minutes"
