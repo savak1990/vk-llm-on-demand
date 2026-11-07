@@ -365,11 +365,12 @@ func TestLogRedactionFullSuite(t *testing.T) {
 	if got := testutil.ToFloat64(g.metrics.pendingRequests); got != 0 {
 		t.Errorf("pending_requests = %v, want 0 (on-demand-only metric, explicit mode never touches it)", got)
 	}
-	// coldStartOutcomesTotal is a CounterVec with no label values
-	// recorded yet; ToFloat64 would panic on zero children, so the
-	// sample count itself is the right assertion for "always 0".
-	if got, err := testutil.GatherAndCount(reg, "vkllm_gateway_cold_start_outcomes_total"); err != nil || got != 0 {
-		t.Errorf("cold_start_outcomes_total sample count = %d, err = %v, want 0 (on-demand-only metric)", got, err)
+	// Pre-init touches every outcome's child so the family shows up in
+	// /metrics, but explicit mode must never increment any of them.
+	for _, o := range []string{"ready", "gpu_cold_start", "queue_full", "gpu_unavailable", "client_gone", "shutting_down"} {
+		if got := testutil.ToFloat64(g.metrics.coldStartOutcomesTotal.WithLabelValues(o)); got != 0 {
+			t.Errorf("cold_start_outcomes_total{outcome=%q} = %v, want 0 (on-demand-only metric)", o, got)
+		}
 	}
 
 	allowedRoute := map[string]bool{"chat_completions": true, "models": true, "other": true}

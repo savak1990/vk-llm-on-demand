@@ -14,6 +14,11 @@ var (
 // RegisterMetrics registers this package's collectors; main calls it once.
 func RegisterMetrics(reg prometheus.Registerer) {
 	reg.MustRegister(conflictsTotal, opsTotal)
+	for _, op := range []string{"load", "save", "transition"} {
+		for _, outcome := range []string{"ok", "conflict", "exhausted", "too_large", "corrupt", "error", "reset", "installation", "missing"} {
+			opsTotal.WithLabelValues(op, outcome)
+		}
+	}
 }
 
 // RecordOp lets the configmap implementation record load/save outcomes.

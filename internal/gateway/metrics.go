@@ -67,5 +67,17 @@ func newGatewayMetrics(reg prometheus.Registerer) *gatewayMetrics {
 		reg.MustRegister(m.requestsTotal, m.activeRequests, m.requestSeconds, m.authFailuresTotal,
 			m.ttftSeconds, m.outputTokensPerSecond, m.pendingRequests, m.waitSeconds, m.coldStartOutcomesTotal, m.cancelledStreamsTotal)
 	}
+	for _, route := range []string{"chat_completions", "models", "other"} {
+		m.requestSeconds.WithLabelValues(route)
+		for _, code := range []string{"200", "400", "401", "403", "404", "405", "413", "429", "499", "500", "502", "503", "504", "stream_error"} {
+			m.requestsTotal.WithLabelValues(route, code)
+		}
+	}
+	for _, reason := range []string{"missing", "malformed", "unknown_key", "wrong_surface"} {
+		m.authFailuresTotal.WithLabelValues(reason)
+	}
+	for _, outcome := range []string{"ready", "gpu_cold_start", "queue_full", "gpu_unavailable", "client_gone", "shutting_down"} {
+		m.coldStartOutcomesTotal.WithLabelValues(outcome)
+	}
 	return m
 }

@@ -72,6 +72,21 @@ func RegisterMetrics(reg prometheus.Registerer) {
 	for _, stage := range []string{"search", "create", "boot", "link", "download", "load", "ready", "first_token"} {
 		coldstartStageSeconds.WithLabelValues(stage)
 	}
+	for _, s := range []string{"STOPPED", "ALLOCATING", "STARTING", "LOADING_MODEL", "READY", "DRAINING", "DELETING", "FAILED"} {
+		gpuState.WithLabelValues(s)
+	}
+	for _, r := range []string{"idle", "manual", "lifetime", "budget", "failure", "orphan"} {
+		shutdownsTotal.WithLabelValues(r)
+	}
+	for _, o := range []string{"ok", "no_offer", "provider_error", "deadline_exceeded", "attempts_exhausted", "budget_exhausted", "failed_status", "lost", "cancelled"} {
+		provisionAttemptsTotal.WithLabelValues(o)
+	}
+	for _, o := range []string{"ok", "retryable", "terminal", "fatal"} {
+		destroyAttemptsTotal.WithLabelValues(o)
+	}
+	for _, o := range []string{"ok", "error"} {
+		reconcileRunsTotal.WithLabelValues(o)
+	}
 }
 
 // publishCostMetrics republishes the budget/cost gauges and adds
