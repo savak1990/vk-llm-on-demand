@@ -8,12 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
@@ -95,11 +94,11 @@ func TestAC6_RealControllerThroughMgmt(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	go func() { _ = ctl.Run(ctx) }()
 
 	keys := authKeys(t, "sk-vkllm-clientkey1", "sk-vkllm-mgmttoken1")
-	reg := prometheus.NewRegistry()
+	reg := obs.NewRegistry()
 	h := New(Deps{Controller: ctl, Keys: keys, Limiter: auth.NewLimiter(10000, clk), Clock: clk, Config: config.Mgmt{}, Reg: reg, Log: noopLogger()})
+	go func() { _ = ctl.Run(ctx) }()
 
 	doAuthed := func(method, path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, nil)

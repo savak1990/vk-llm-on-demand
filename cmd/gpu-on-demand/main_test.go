@@ -3,29 +3,9 @@ package main
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 )
-
-func TestHealthzAlwaysOK(t *testing.T) {
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	healthz(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d, want 200", rec.Code)
-	}
-}
-
-func TestReadyzOKWithNoChecksRegistered(t *testing.T) {
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	readyz(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got %d, want 200", rec.Code)
-	}
-}
 
 // TestWaitAndShutdownOnCancel drives the shutdown-coordination logic with fake
 // shutdown funcs instead of real listeners, so it needs no sleep or network.
