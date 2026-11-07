@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 )
 
 // keyIDSinkKey holds a *string that withAuth fills in on success; a
@@ -108,7 +109,7 @@ func withObserve(next http.Handler, d Deps) http.Handler {
 
 		if d.Log != nil {
 			d.Log.Info("mgmt_request",
-				"request_id", rec.Header().Get("X-Request-Id"),
+				"request_id", obs.RequestIDFromContext(r.Context()),
 				"op", op,
 				"status_code", rec.status,
 				"code", code,
