@@ -1,0 +1,13 @@
+{{- if .Values.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "svc.fullname" . }}-dashboard-observability
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  dashboard.json: |
+{{ .Files.Get "files/dashboard.json" | indent 4 }}
+{{- end }}

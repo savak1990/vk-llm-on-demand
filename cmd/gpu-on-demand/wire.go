@@ -15,6 +15,7 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 	"github.com/savak1990/vk-llm-on-demand/internal/gateway"
 	"github.com/savak1990/vk-llm-on-demand/internal/mgmt"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
@@ -39,7 +40,7 @@ type wireDeps struct {
 	Gateway        config.Gateway
 	Mgmt           config.Mgmt
 	Worker         config.Worker
-	Reg            prometheus.Registerer
+	Reg            prometheus.Registerer // must already carry obs's metrics, e.g. built via obs.NewRegistry
 	Log            *slog.Logger
 }
 
@@ -88,6 +89,6 @@ func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, e
 
 	apiMux := http.NewServeMux()
 	apiMux.Handle("/v1/", gw.Handler())
-	apiMux.Handle("/api/v1/gpu/", mg)
+	apiMux.Handle("/api/v1/gpu/", obs.RequestIDMiddleware(mg))
 	return apiMux, ctl, gw, nil
 }

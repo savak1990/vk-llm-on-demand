@@ -16,6 +16,7 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/budget"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
@@ -84,7 +85,7 @@ func buildHarness(t *testing.T) *harness {
 	st := fakestore.New("iid")
 	worker := newFakeWorker()
 	bgt := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.80})
-	reg := prometheus.NewRegistry()
+	reg := obs.NewRegistry()
 	RegisterMetrics(reg)
 	store.RegisterMetrics(reg)
 

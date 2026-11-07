@@ -3,8 +3,6 @@ package gateway
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +17,7 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 )
 
 // Controller is the subset of *controller.Controller this package calls;
@@ -134,25 +133,15 @@ func chain(h http.Handler, mws ...func(http.Handler) http.Handler) http.Handler 
 
 type ctxKey int
 
-const ctxKeyRequestID ctxKey = iota
-
-func newRequestID() string {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
-
 func (g *Gateway) requestIDMiddleware(next http.Handler) http.Handler {
+	wrapped := obs.RequestIDMiddleware(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Theoretically races Shutdown's Wait() if a new request's Add(1)
 		// lands exactly when the counter is momentarily zero; in practice
 		// the listener that feeds this handler is already closed by then.
 		g.activeWG.Add(1)
 		defer g.activeWG.Done()
-		rid := newRequestID()
-		w.Header().Set("X-Request-Id", rid)
-		ctx := context.WithValue(r.Context(), ctxKeyRequestID, rid)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		wrapped.ServeHTTP(w, r)
 	})
 }
 
@@ -166,7 +155,7 @@ func (g *Gateway) recoverMiddleware(next http.Handler) http.Handler {
 				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(rec)
 				}
-				g.deps.Log.Error("gateway: panic", "panic", true, "request_id", r.Context().Value(ctxKeyRequestID))
+				g.deps.Log.Error("gateway: panic", "panic", true, "request_id", obs.RequestIDFromContext(r.Context()))
 				// A panic after headers are already sent cannot be turned
 				// into a fresh status line; the only safe move left is to
 				// stop, not write a 500.

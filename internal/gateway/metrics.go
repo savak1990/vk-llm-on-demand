@@ -15,6 +15,7 @@ type gatewayMetrics struct {
 	pendingRequests        prometheus.Gauge
 	waitSeconds            prometheus.Histogram
 	coldStartOutcomesTotal *prometheus.CounterVec
+	cancelledStreamsTotal  prometheus.Counter
 }
 
 func newGatewayMetrics(reg prometheus.Registerer) *gatewayMetrics {
@@ -57,10 +58,26 @@ func newGatewayMetrics(reg prometheus.Registerer) *gatewayMetrics {
 			Name: "vkllm_gateway_cold_start_outcomes_total",
 			Help: "On-demand mode only: cold-start outcomes.",
 		}, []string{"outcome"}),
+		cancelledStreamsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "vkllm_gateway_cancelled_streams_total",
+			Help: "Streamed requests ended by a client disconnect before the upstream finished.",
+		}),
 	}
 	if reg != nil {
 		reg.MustRegister(m.requestsTotal, m.activeRequests, m.requestSeconds, m.authFailuresTotal,
-			m.ttftSeconds, m.outputTokensPerSecond, m.pendingRequests, m.waitSeconds, m.coldStartOutcomesTotal)
+			m.ttftSeconds, m.outputTokensPerSecond, m.pendingRequests, m.waitSeconds, m.coldStartOutcomesTotal, m.cancelledStreamsTotal)
+	}
+	for _, route := range []string{"chat_completions", "models", "other"} {
+		m.requestSeconds.WithLabelValues(route)
+		for _, code := range []string{"200", "400", "401", "403", "404", "405", "413", "429", "499", "500", "502", "503", "504", "stream_error"} {
+			m.requestsTotal.WithLabelValues(route, code)
+		}
+	}
+	for _, reason := range []string{"missing", "malformed", "unknown_key", "wrong_surface"} {
+		m.authFailuresTotal.WithLabelValues(reason)
+	}
+	for _, outcome := range []string{"ready", "gpu_cold_start", "queue_full", "gpu_unavailable", "client_gone", "shutting_down"} {
+		m.coldStartOutcomesTotal.WithLabelValues(outcome)
 	}
 	return m
 }

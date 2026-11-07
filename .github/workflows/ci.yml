@@ -231,6 +231,24 @@ jobs:
         with:
           version: v4.3.0
 
+      - name: Install promtool
+        env:
+          PROMETHEUS_VERSION: "3.16.0"
+          PROMETHEUS_SHA256: 68727009472a2c02e1ff7f062fd5b3e637285bffc8fc2d340c76fb449d6e0f34
+        run: |
+          set -euo pipefail
+          curl -sSLo prometheus.tar.gz \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          echo "${PROMETHEUS_SHA256}  prometheus.tar.gz" | sha256sum -c -
+          tar xzf prometheus.tar.gz
+          sudo mv "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
+
+      - name: promtool check/test rules
+        run: |
+          set -euo pipefail
+          promtool check rules deploy/helm/gpu-on-demand/files/alerts.yaml
+          cd deploy/helm/gpu-on-demand/files && promtool test rules alerts_test.yaml
+
       # A named cluster, because the default kind context is "kind", not
       # this action's own default of "chart-testing": the load step below
       # must target the same name this creates.
@@ -258,6 +276,14 @@ jobs:
           kubectl expose deployment fake-worker --port=8080
           kubectl wait --for=condition=Available deployment/fake-worker --timeout=60s
 
+      # kind has no prometheus-operator installed; PrometheusRule needs only
+      # its CRD registered for helm install to apply one, not the operator.
+      - name: Install the PrometheusRule CRD
+        run: |
+          set -euo pipefail
+          kubectl apply --server-side -f \
+            "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.95.1/example/prometheus-operator-crd/monitoring.coreos.com_prometheusrules.yaml"
+
       - name: helm install
         run: |
           set -euo pipefail
@@ -270,7 +296,8 @@ jobs:
             --set config.worker.image=example/worker \
             --set existingSecrets.provider=provider-secret \
             --set existingSecrets.apiKeys=api-keys-secret \
-            --set existingSecrets.ssh=ssh-secret
+            --set existingSecrets.ssh=ssh-secret \
+            --set prometheusRule.enabled=true --set dashboard.enabled=true
 
       - name: Wait for Ready with no GPU running
         run: |
@@ -306,6 +333,20 @@ jobs:
             -d '{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"hi"}],"stream":true}' \
             http://localhost:18080/v1/chat/completions | grep -q 'data: \[DONE\]'
 
+      - name: Metrics endpoint reachable, catalog complete for the fake provider
+        run: |
+          set -euo pipefail
+          kubectl port-forward svc/gpu-on-demand 19090:9090 >/dev/null 2>&1 &
+          sleep 2
+          for _ in $(seq 1 30); do
+            count=$(curl -sf http://localhost:19090/metrics | grep -c '^# TYPE vkllm_')
+            [ "$count" = "40" ] && break
+            sleep 1
+          done
+          test "$count" = "40"
+          kubectl get configmap -l grafana_dashboard=1 | grep -q dashboard-observability
+          kubectl get prometheusrule gpu-on-demand
+
       - name: Stop, poll for STOPPED
         run: |
           set -euo pipefail
@@ -333,7 +374,8 @@ jobs:
             --set config.worker.image=example/worker \
             --set existingSecrets.provider=provider-secret \
             --set existingSecrets.apiKeys=api-keys-secret \
-            --set existingSecrets.ssh=ssh-secret
+            --set existingSecrets.ssh=ssh-secret \
+            --set prometheusRule.enabled=true --set dashboard.enabled=true
           kubectl rollout status deployment/gpu-on-demand --timeout=60s
           state_after=$(kubectl get configmap gpu-on-demand-state -o jsonpath='{.data.state\.json}')
           test -n "$state_after"

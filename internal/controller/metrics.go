@@ -5,6 +5,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
@@ -66,6 +67,55 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		gpuIdleDeadlineSeconds, gpuLastInferenceFinishedSeconds,
 		destroyAttemptsTotal, orphansDestroyedTotal, reconcileRunsTotal,
 		instanceHourlyPriceUSD)
+	// Every declared stage must appear in /metrics at process start,
+	// even though only first_token is ever really observed today.
+	for _, stage := range []string{"search", "create", "boot", "link", "download", "load", "ready", "first_token"} {
+		coldstartStageSeconds.WithLabelValues(stage)
+	}
+	for _, s := range []string{"STOPPED", "ALLOCATING", "STARTING", "LOADING_MODEL", "READY", "DRAINING", "DELETING", "FAILED"} {
+		gpuState.WithLabelValues(s)
+	}
+	for _, r := range []string{"idle", "manual", "lifetime", "budget", "failure", "orphan"} {
+		shutdownsTotal.WithLabelValues(r)
+	}
+	for _, o := range []string{"ok", "no_offer", "provider_error", "deadline_exceeded", "attempts_exhausted", "budget_exhausted", "failed_status", "lost", "cancelled"} {
+		provisionAttemptsTotal.WithLabelValues(o)
+	}
+	for _, o := range []string{"ok", "retryable", "terminal", "fatal"} {
+		destroyAttemptsTotal.WithLabelValues(o)
+	}
+	for _, o := range []string{"ok", "error"} {
+		reconcileRunsTotal.WithLabelValues(o)
+	}
+}
+
+// publishCostMetrics republishes the budget/cost gauges and adds
+// this tick's non-negative spend delta to the monotonic counter —
+// called every reconcile tick, not only when something polls Status.
+func (c *Controller) publishCostMetrics(doc store.Document) {
+	mtd := c.deps.Budget.EstimatedMTD(doc)
+	obs.SetBudgetUsedRatio(c.deps.Budget.UsedRatio(doc))
+
+	instanceUSD := 0.0
+	if e, ok := openEntry(doc); ok {
+		instanceUSD = e.EstUSD
+	}
+	obs.SetCostInstanceUSD(instanceUSD)
+
+	c.balanceMu.Lock()
+	if c.lastBalanceKnown {
+		obs.SetProviderBalanceUSD(c.lastBalance.USD())
+	}
+	c.balanceMu.Unlock()
+
+	c.costMu.Lock()
+	delta := mtd - c.lastEstimatedMTD
+	if delta < 0 {
+		delta = 0 // a monthly rollover drops the raw ledger total; never decrement the exported counter
+	}
+	c.lastEstimatedMTD = mtd
+	c.costMu.Unlock()
+	obs.AddCostEstimatedUSD(delta)
 }
 
 // setGPUState is the one-hot update over the 8 public states; call on

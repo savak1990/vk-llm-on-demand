@@ -15,13 +15,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/gateway"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider/vastai"
@@ -29,23 +27,6 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/store/configmap"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
-
-// readinessChecks holds every registered readiness probe; it stays empty until checks exist, so readyz never needs restructuring when one is added.
-var readinessChecks []func() error
-
-func healthz(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-}
-
-func readyz(w http.ResponseWriter, _ *http.Request) {
-	for _, check := range readinessChecks {
-		if err := check(); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-	}
-	w.WriteHeader(http.StatusOK)
-}
 
 // run starts both servers, blocks until ctx is done, then drains each for up to 30s total.
 func run(ctx context.Context, api, health *http.Server, gw *gateway.Gateway) error {
@@ -90,8 +71,12 @@ func waitAndShutdown(ctx context.Context, errs <-chan error, shutdowns ...func(c
 }
 
 func main() {
+	slog.SetDefault(obs.NewLogger(os.Stderr, slog.LevelInfo))
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	var readinessChecks []func() error
 
 	clk := clock.Real{}
 
@@ -145,7 +130,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	reg := prometheus.NewRegistry()
+	reg := obs.NewRegistry()
 
 	st, err := configmap.InCluster(topCfg.StateConfigMapName, topCfg.InstallationID)
 	if err != nil {
@@ -223,11 +208,7 @@ func main() {
 		WriteTimeout: 0,
 	}
 
-	healthMux := http.NewServeMux()
-	healthMux.HandleFunc("/healthz", healthz)
-	healthMux.HandleFunc("/readyz", readyz)
-	healthMux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
-	health := &http.Server{Addr: ":9090", Handler: healthMux, ReadHeaderTimeout: 10 * time.Second}
+	health := obs.NewServer(reg, readinessChecks, obs.Config{Addr: ":9090"})
 
 	if err := run(ctx, api, health, gw); err != nil {
 		slog.Error("server error", "err", err)

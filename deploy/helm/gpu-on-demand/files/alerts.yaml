@@ -1,0 +1,23 @@
+groups:
+  - name: vkllm
+    rules:
+      - alert: VkllmOrphanDestroyed
+        expr: increase(vkllm_orphans_destroyed_total[1h]) > 0
+        labels: {severity: warning}
+        annotations: {summary: "An untracked GPU instance was destroyed"}
+      - alert: VkllmProvisioningFailing
+        expr: |
+          increase(vkllm_provision_attempts_total{outcome="attempts_exhausted"}[1h]) >= 1
+          or
+          sum(increase(vkllm_provision_attempts_total{outcome=~"provider_error|deadline_exceeded|failed_status"}[1h])) >= 3
+        labels: {severity: critical}
+        annotations: {summary: "GPU provisioning is failing or exhausted its hourly attempt budget"}
+      - alert: VkllmDestroyStuck
+        expr: vkllm_gpu_state{state=~"DELETING|FAILED"} == 1
+        for: 10m
+        labels: {severity: critical}
+        annotations: {summary: "An instance has been deleting for over 10 minutes"}
+      - alert: VkllmBudgetHigh
+        expr: vkllm_budget_used_ratio >= 0.8
+        labels: {severity: warning}
+        annotations: {summary: "Month-to-date spend has reached 80% of budget"}

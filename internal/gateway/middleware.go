@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 )
 
 const ctxKeyKeyID ctxKey = iota + 100
@@ -69,6 +70,9 @@ func (g *Gateway) accessLogAndMetrics(next http.Handler) http.Handler {
 			metricCode = statusLabel(rec.status)
 		}
 		g.metrics.requestsTotal.WithLabelValues(route, metricCode).Inc()
+		if metricCode == "499" {
+			g.metrics.cancelledStreamsTotal.Inc()
+		}
 		g.metrics.requestSeconds.WithLabelValues(route).Observe(duration.Seconds())
 
 		// The log keeps the real status (e.g. "422"); only the metric
@@ -84,7 +88,7 @@ func (g *Gateway) accessLogAndMetrics(next http.Handler) http.Handler {
 		}
 
 		g.deps.Log.Info("gateway: request",
-			"request_id", r.Context().Value(ctxKeyRequestID),
+			"request_id", obs.RequestIDFromContext(r.Context()),
 			"route", route,
 			"status_code", logCode,
 			"duration_ms", duration.Milliseconds(),

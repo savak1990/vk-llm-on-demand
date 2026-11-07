@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
@@ -163,6 +164,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		setGPUState(PublicState(next, c.failing))
 	}
 	recordDocGauges(doc, next, c.inFlight, now)
+	c.publishCostMetrics(doc)
 	c.mu.Unlock()
 	if next == Searching {
 		c.setLastError("")
@@ -546,8 +548,11 @@ func (c *Controller) dispatchScrape(ctx context.Context) {
 		return
 	}
 	c.spawn(func() {
-		if err := c.deps.Worker.Scrape(ctx, conn.RoundTripper()); err != nil && c.deps.Log != nil {
-			c.deps.Log.Warn("controller: metrics scrape failed", "err", err)
+		if err := c.deps.Worker.Scrape(ctx, conn.RoundTripper()); err != nil {
+			obs.IncInferenceScrapeErrors()
+			if c.deps.Log != nil {
+				c.deps.Log.Warn("controller: metrics scrape failed", "err", err)
+			}
 		}
 	})
 }
