@@ -96,6 +96,18 @@
           }
         }
       }
+    },
+    "prometheusRule": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "dashboard": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
     }
   }
 }

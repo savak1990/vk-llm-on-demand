@@ -1,0 +1,35 @@
+rule_files:
+  - alerts.yaml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'vkllm_budget_used_ratio'
+        values: '0.79 0.8'
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: VkllmBudgetHigh
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: VkllmBudgetHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Month-to-date spend has reached 80% of budget"
+  - interval: 1m
+    input_series:
+      - series: 'vkllm_gpu_state{state="DELETING"}'
+        values: '1+0x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: VkllmDestroyStuck
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: VkllmDestroyStuck
+        exp_alerts:
+          - exp_labels:
+              state: DELETING
+              severity: critical
+            exp_annotations:
+              summary: "An instance has been deleting for over 10 minutes"

@@ -94,6 +94,11 @@ serviceMonitor:
   interval: 15s
   labels: {}
 
+prometheusRule:
+  enabled: false
+dashboard:
+  enabled: false
+
 networkPolicy:
   enabled: false
   gatewayNamespace: envoy

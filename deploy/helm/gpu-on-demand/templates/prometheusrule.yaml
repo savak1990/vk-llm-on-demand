@@ -1,0 +1,11 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "svc.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+spec:
+{{ .Files.Get "files/alerts.yaml" | indent 2 }}
+{{- end }}
