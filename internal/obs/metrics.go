@@ -17,11 +17,9 @@ type ownedMetrics struct {
 
 var current atomic.Pointer[ownedMetrics]
 
-// RegisterMetrics registers the 5 metrics obs owns directly into reg,
-// so the catalog is complete independent of which other packages are
-// wired. Safe to call more than once (e.g. once per test): it builds
-// fresh collectors each time rather than reusing package-level
-// singletons, so no state leaks across calls.
+// RegisterMetrics registers obs's 5 owned metrics into reg. Safe to
+// call more than once — each call builds fresh collectors, so no
+// state leaks across repeated calls (e.g. one per test).
 func RegisterMetrics(reg prometheus.Registerer) {
 	m := &ownedMetrics{
 		budgetUsedRatio: prometheus.NewGauge(prometheus.GaugeOpts{
@@ -55,10 +53,9 @@ func SetCostInstanceUSD(v float64)    { current.Load().costInstanceUSD.Set(v) }
 func SetProviderBalanceUSD(v float64) { current.Load().providerBalanceUSD.Set(v) }
 func IncInferenceScrapeErrors()       { current.Load().inferenceScrapeErrorsTotal.Inc() }
 
-// AddCostEstimatedUSD adds delta to the monotonic spend counter. A
-// Prometheus counter panics on a negative Add, so a caller computing a
-// delta across a value that can drop (e.g. a monthly rollover) must
-// clamp to >=0 itself; this still guards the floor defensively.
+// AddCostEstimatedUSD adds delta to the monotonic spend counter;
+// Add panics on a negative value, so this guards the floor itself
+// as a defensive backstop against a caller that forgets to clamp.
 func AddCostEstimatedUSD(delta float64) {
 	if delta > 0 {
 		current.Load().costEstimatedUSDTotal.Add(delta)

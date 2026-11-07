@@ -3,8 +3,6 @@ package obs
 
 import (
 	"testing"
-
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestObsOwnedMetricsPreInitialized(t *testing.T) {
@@ -74,7 +72,6 @@ func TestSettersUpdateValuesAndNegativeDeltaIsIgnored(t *testing.T) {
 	if values["vkllm_cost_estimated_usd_total"] != 3.0 {
 		t.Errorf("cost_estimated_usd_total = %v, want 3.0 (negative delta must be ignored)", values["vkllm_cost_estimated_usd_total"])
 	}
-	_ = testutil.ToFloat64 // kept available for a future, more targeted assertion
 }
 
 func TestRegisterMetricsIsTestIsolated(t *testing.T) {

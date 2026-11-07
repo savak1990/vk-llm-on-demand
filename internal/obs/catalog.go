@@ -3,9 +3,8 @@ package obs
 
 import "sort"
 
-// Spec is one entry in the metric catalog; Catalog's slice is the
-// single source of truth this spec document and the golden-list test
-// both read from.
+// Spec is one entry in the metric catalog — the single source of
+// truth every metric name in this codebase is checked against.
 type Spec struct {
 	Name string
 	Type string // counter, gauge, histogram
@@ -62,10 +61,8 @@ func Catalog() []Spec {
 }
 
 // VastaiOnlyMetrics names the 3 catalog entries that only register
-// when the real Vast.ai provider is wired (internal/provider/vastai's
-// metrics are constructed as a side effect of vastai.New, not of
-// obs.RegisterMetrics) — the fake provider never produces them, so a
-// test or a kind run using it sees Catalog() minus these 3.
+// when the real Vast.ai provider is constructed, not the fake one —
+// a caller using the fake provider sees Catalog() minus these 3.
 func VastaiOnlyMetrics() []string {
 	return []string{
 		"vkllm_provider_requests_total",
