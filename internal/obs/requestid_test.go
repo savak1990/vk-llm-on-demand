@@ -10,7 +10,7 @@ import (
 func TestRequestIDRoundTrip(t *testing.T) {
 	hex32 := regexp.MustCompile(`^[0-9a-f]{32}$`)
 	var seen string
-	h := RequestIDMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := RequestIDMiddleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen = RequestIDFromContext(r.Context())
 	}))
 

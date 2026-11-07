@@ -21,7 +21,7 @@ func TestCancelledStreamsTotalIncrementsOn499(t *testing.T) {
 	m := newGatewayMetrics(reg)
 	g := &Gateway{deps: Deps{Clock: fakeclock.New(time.Unix(0, 0)), Log: noopTestLogger()}, metrics: m}
 
-	h := g.accessLogAndMetrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := g.accessLogAndMetrics(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		setCodeOverride(w, "499")
 	}))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/models", nil))
