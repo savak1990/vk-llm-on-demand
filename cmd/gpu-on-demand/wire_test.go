@@ -12,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
@@ -76,7 +74,7 @@ func TestWireServesInferenceAndManagementThroughOneMux(t *testing.T) {
 		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
 		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, BudgetMonthUSD: 30, RateLimitPerKeyRPM: 60},
 		Worker:     testWorkerCfg(),
-		Reg:        prometheus.NewRegistry(), Log: noopTestLogger(),
+		Reg:        obs.NewRegistry(), Log: noopTestLogger(),
 	}
 
 	apiMux, ctl, gw, err := wire(d)
@@ -175,7 +173,7 @@ func TestWireBudgetOverridesMgmtBudgetMonthUSD(t *testing.T) {
 		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
 		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, BudgetMonthUSD: 99, RateLimitPerKeyRPM: 60},
 		Worker:     testWorkerCfg(),
-		Reg:        prometheus.NewRegistry(), Log: noopTestLogger(),
+		Reg:        obs.NewRegistry(), Log: noopTestLogger(),
 	}
 
 	apiMux, ctl, gw, err := wire(d)
@@ -227,7 +225,7 @@ func TestWireMetricsCatalogComplete(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	reg := prometheus.NewRegistry()
+	reg := obs.NewRegistry()
 	d := wireDeps{
 		Ctx: ctx, Clock: clk, Provider: prov, Store: st,
 		Dialer: tunnel.NewDirect("unused:0"), Keys: keys,

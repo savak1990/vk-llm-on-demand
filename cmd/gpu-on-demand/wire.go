@@ -40,7 +40,7 @@ type wireDeps struct {
 	Gateway        config.Gateway
 	Mgmt           config.Mgmt
 	Worker         config.Worker
-	Reg            prometheus.Registerer
+	Reg            prometheus.Registerer // must already carry obs's metrics, e.g. built via obs.NewRegistry
 	Log            *slog.Logger
 }
 
@@ -63,7 +63,6 @@ func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, e
 	w := newWorkerAdapter(d.Worker, d.Controller.ProviderFilter.MinDiskGB, d.ModelAlias, d.Mgmt.ModelContextSize, exp)
 	controller.RegisterMetrics(d.Reg)
 	store.RegisterMetrics(d.Reg)
-	obs.RegisterMetrics(d.Reg)
 	d.Reg.MustRegister(exp)
 	b := budget.New(budget.Config{MonthlyUSD: d.Budget.MonthlyUSD, WarnFraction: d.Budget.WarnFraction, MaxHourlyPriceUSD: d.Budget.MaxHourlyPriceUSD})
 
