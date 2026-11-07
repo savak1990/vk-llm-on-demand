@@ -539,8 +539,9 @@ SPECS-CHECK: specs/ layout is valid.
 
 ### Real `curl :9090/metrics` family count from a kind cluster (AC6)
 
-Reproduced the `chart-kind` CI job's exact steps locally (kind v0.30,
-Docker Desktop, images built for `arm64` and loaded with
+Reproduced the `chart-kind` CI job's exact steps locally (kind v0.33.0,
+node image `kindest/node:v1.37.0`, Docker Desktop, images built for
+`arm64` and loaded with
 `kind load docker-image`, the real `PrometheusRule` CRD pinned to
 `prometheus-operator` v0.95.1, `helm install` with
 `config.provider.name=fake`, `prometheusRule.enabled=true`,
