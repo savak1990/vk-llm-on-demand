@@ -1,6 +1,6 @@
 ---
 id: "CORE-090"
-status: "DRAFT"
+status: "READY"
 updated: "2026-11-01"
 depends_on: ["CORE-050", "CORE-060"]
 adrs: ["0003", "0006", "0007", "0009", "0010", "0011", "0012"]
@@ -182,7 +182,7 @@ requires pre-initializing every declared combination at startup.
 | `vkllm_cost_instance_usd` | gauge | none | Estimated cost of the current instance so far; 0 when no instance exists | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 | `vkllm_provider_balance_usd` | gauge | none | Last observed Vast.ai account balance (research §1.5) | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 
-43 metric families total. The pull interval for the inference metrics is 15 s over
+43 metric families total; 40 of them register unconditionally, the 3 `vkllm_provider_*` series only when the real Vast.ai provider is wired (see AC6). `vkllm_coldstart_stage_seconds` is pre-initialized to zero for all 8 stages at registration time (R9); only `first_token` is observed with a real duration today, the other 7 stages' instrumentation is out of this spec's scope (see Open questions). The pull interval for the inference metrics is 15 s over
 the tunnel while the instance is `Ready` or `Serving` (ADR 0006
 §Consequences: llama-server metrics are pulled and re-exported, never
 scraped directly); the loop itself is CORE-050's.
@@ -238,6 +238,8 @@ Inbound `X-Request-Id` is reused if it matches `^[0-9a-f]{32}$`, otherwise
 replaced — a client cannot inject an arbitrary string into logs via this
 header. The id is attached to the request context, read by the logging
 middleware, and echoed on the response header on every status code.
+
+`internal/gateway`'s existing request-id generator predates this spec and produces 16 hex characters, not this section's required 32 (`^[0-9a-f]{32}$}`); CORE-090 fixes this by having `internal/gateway`'s existing middleware call site delegate to `obs.NewRequestID`/`obs.RequestIDMiddleware` internally, and has `internal/mgmt`'s already-documented 'the caller wraps it' design actually wired up for the first time, in `wire.go`.
 
 ### Cardinality audit
 
@@ -361,12 +363,12 @@ retried on the next demand, not a failure.
 - AC3. `TestRedactionWithAttrsChain`: `logger.With("authorization", "Bearer sk-vkllm-xxxx").Info("auth check")` produces JSON output that does not contain the substring `sk-vkllm-xxxx`. Same for `prompt`, `messages`, `content`. (R4, R5, NFR-8.2, NFR-8.7)
 - AC4. `TestRequestIDRoundTrip`: a request with no `X-Request-Id` gets a response header matching `^[0-9a-f]{32}$`; a request with `X-Request-Id: not-valid` gets a *different* 32-hex value back; a request with `X-Request-Id: ` + a valid 32-hex value gets that exact value back. (R7, NFR-10.5)
 - AC5. `TestObsOwnedMetricsPreInitialized`: immediately after `NewRegistry()` plus obs's own registration, `Gather()` shows `vkllm_budget_used_ratio` 0, `vkllm_cost_estimated_usd_total` 0, `vkllm_cost_instance_usd` 0, `vkllm_provider_balance_usd` 0, `vkllm_inference_scrape_errors_total` 0. (R8)
-- AC6. On a kind cluster with the fake provider, `curl :9090/metrics` returns HTTP 200 and `grep -c '^# TYPE vkllm_'` on the body (one `# TYPE` line per family regardless of `_bucket`/`_sum`/`_count` suffixes) equals `43`. (R1, R6)
+- AC6. On a kind cluster with the fake provider, `curl :9090/metrics` returns HTTP 200 and `grep -c '^# TYPE vkllm_'` on the body equals `40`: `internal/provider/vastai`'s 3 series (`vkllm_provider_requests_total`, `vkllm_provider_request_seconds`, `vkllm_provider_rate_limited_total`) only register as a side effect of constructing the real Vast.ai client, which the fake provider path never does. A deployment with `config.provider.name=vastai` shows all 43. (R1, R6)
 - AC7. `jq` schema check on the rendered dashboard JSON exits 0 for the expression in implementation step 8; a dashboard with 8 panels fails it. (R11, NFR-10.6)
-- AC8. `yq '.spec' prometheusrule.yaml | promtool check rules /dev/stdin` exits 0 and its output reports `4 rules found`. A fifth bogus rule added to a scratch copy changes that count, proving the test is not vacuous. (R10, NFR-10.6)
+- AC8. `promtool check rules deploy/helm/gpu-on-demand/files/alerts.yaml` exits 0 and its output reports `4 rules found`. The file's top-level `groups:` key is `promtool`'s own native rule-file format, so no Helm render or `yq` envelope-stripping step is needed; the chart's `PrometheusRule` template pulls this same file verbatim via `.Files.Get`. A fifth bogus rule added to a scratch copy changes that count, proving the test is not vacuous. (R10, NFR-10.6)
 - AC9. `TestInferenceScrapeErrorIncrement`: a fixture upstream returning 500 on `GET /metrics` leaves `vkllm_inference_up` at 0 and `vkllm_inference_scrape_errors_total` at 1 after one pull cycle. (R8, NFR-10.3)
-- AC10. `promtool test rules` against a rules-test file that sets `vkllm_budget_used_ratio` to 0.79 at t=0 then 0.8 at t=1m: `VkllmBudgetHigh` is `inactive` at t=0 and `firing` at t=1m. (R10, FR-6.4, NFR-10.6)
-- AC11. `promtool test rules` against a rules-test file that sets `vkllm_gpu_state{state="DELETING"}` to 1 at t=0 and holds it: `VkllmDestroyStuck` is `inactive` at t=9m and `firing` at t=11m. (R10, NFR-10.6)
+- AC10. `promtool test rules` against `deploy/helm/gpu-on-demand/files/alerts_test.yaml` that sets `vkllm_budget_used_ratio` to 0.79 at t=0 then 0.8 at t=1m: `VkllmBudgetHigh` is `inactive` at t=0 and `firing` at t=1m. (R10, FR-6.4, NFR-10.6)
+- AC11. `promtool test rules` against `deploy/helm/gpu-on-demand/files/alerts_test.yaml` that sets `vkllm_gpu_state{state="DELETING"}` to 1 at t=0 and holds it: `VkllmDestroyStuck` is `inactive` at t=9m and `firing` at t=11m. (R10, NFR-10.6)
 
 ## Definition of done
 
@@ -383,7 +385,9 @@ retried on the next demand, not a failure.
 | Exact Grafana dashboard JSON (panel ids, Grafana schema version, datasource UID templating) | Needs a real Grafana instance to author against | Implementation time, against the platform's kube-prometheus-stack Grafana | Panel list and queries above are fixed; JSON structure is mechanical from them |
 | The `grafana_dashboard: "1"` sidecar label and the log level being fixed (no `log.level` key) are not confirmed facts in research.md | C-32 forbids unverified facts as code assumptions | Verify the sidecar label against the platform's kube-prometheus-stack chart values at implementation time; add `log.level` to architecture §9 if runtime-configurable logging turns out to be needed | Keep the label as written; keep log level fixed at `info` |
 | CORE-050's own Observability table and simulation ACs (e.g. AC1, AC3, AC22) still emit `vkllm_gpu_state` with the nine internal `State.String()` values (`Idle`, `Searching`, `Creating`, `Booting`, `Loading`, `Ready`, `Serving`, `Draining`, `Destroying`), not the eight public states this catalog defines (R12, ADR 0011 §6) | Two specs disagree on the only label of a one-hot gauge; whichever ships first makes the other's dashboard panel and `VkllmDestroyStuck` alert wrong | CORE-050, before either spec leaves DRAFT | **closed** (CORE-050 DONE, Design Decision 6): the shipped setter uses `PublicState()` and the eight public-state names, matching this catalog; CORE-050's own spec text and fixtures were corrected to match in that write-back |
-| `vkllm_gateway_cancelled_streams_total` is added here to satisfy NFR-10.1 ("cancelled streams"), but CORE-060's own text and AC13 describe only `requests_total{code="499"}` on disconnect, not this counter | A metric this spec lists but no implementing spec increments fails AC6/AC1 trivially (always zero, never exercised) | CORE-060, before either spec leaves DRAFT | CORE-060 increments it at the same point it records `code="499"` (one `RequestEnd` call, same disconnect) |
+| R9's "every label combination initialized to zero at process start" is only tested by AC1 for 2 of the catalog's labeled metrics (`vkllm_coldstart_stage_seconds`, `vkllm_gpu_state`) | Pre-initializing every other labeled metric's full combination set (e.g. `vkllm_gateway_requests_total`'s `route`×`code`) is real, untested-by-this-spec work | Implementation time, CORE-090 | Scoped to AC1's 2 metrics for this spec; a future spec or CI assertion can widen it |
+| Only `first_token` is observed with a real duration in `vkllm_coldstart_stage_seconds` today, the other 7 stages' instrumentation is out of this spec's scope | Metric pre-initializes all 8 stage labels but only 1 gets recorded observations; the rest are unexercised | Implementation time, CORE-090 | Scoped to `first_token` for this spec; a future spec can add instrumentation for the other 7 stages |
+| `vkllm_gateway_cancelled_streams_total` is added here to satisfy NFR-10.1 ("cancelled streams"), but CORE-060's own text and AC13 describe only `requests_total{code="499"}` on disconnect, not this counter | A metric this spec lists but no implementing spec increments fails AC6/AC1 trivially (always zero, never exercised) | CORE-060, before either spec leaves DRAFT | **closed** (CORE-090): CORE-060 shipped `DONE` without it, so this spec adds the counter itself, in `internal/gateway`, incrementing at the same point `vkllm_gateway_requests_total`'s `code` label is computed as `"499"` — a one-line addition to the single place that already decides the metric's code label, not a new call site per disconnect path. |
 
 ## Evidence
 
