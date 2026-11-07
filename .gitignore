@@ -26,3 +26,6 @@ dist/
 *.local.yaml
 .env
 vk-llm.yaml
+
+# Implementation plans stay local; never ship in the repo.
+docs/superpowers/plans/
