@@ -15,6 +15,7 @@ type gatewayMetrics struct {
 	pendingRequests        prometheus.Gauge
 	waitSeconds            prometheus.Histogram
 	coldStartOutcomesTotal *prometheus.CounterVec
+	cancelledStreamsTotal  prometheus.Counter
 }
 
 func newGatewayMetrics(reg prometheus.Registerer) *gatewayMetrics {
@@ -57,10 +58,14 @@ func newGatewayMetrics(reg prometheus.Registerer) *gatewayMetrics {
 			Name: "vkllm_gateway_cold_start_outcomes_total",
 			Help: "On-demand mode only: cold-start outcomes.",
 		}, []string{"outcome"}),
+		cancelledStreamsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "vkllm_gateway_cancelled_streams_total",
+			Help: "Streamed requests ended by a client disconnect before the upstream finished.",
+		}),
 	}
 	if reg != nil {
 		reg.MustRegister(m.requestsTotal, m.activeRequests, m.requestSeconds, m.authFailuresTotal,
-			m.ttftSeconds, m.outputTokensPerSecond, m.pendingRequests, m.waitSeconds, m.coldStartOutcomesTotal)
+			m.ttftSeconds, m.outputTokensPerSecond, m.pendingRequests, m.waitSeconds, m.coldStartOutcomesTotal, m.cancelledStreamsTotal)
 	}
 	return m
 }

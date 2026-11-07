@@ -69,6 +69,9 @@ func (g *Gateway) accessLogAndMetrics(next http.Handler) http.Handler {
 			metricCode = statusLabel(rec.status)
 		}
 		g.metrics.requestsTotal.WithLabelValues(route, metricCode).Inc()
+		if metricCode == "499" {
+			g.metrics.cancelledStreamsTotal.Inc()
+		}
 		g.metrics.requestSeconds.WithLabelValues(route).Observe(duration.Seconds())
 
 		// The log keeps the real status (e.g. "422"); only the metric
