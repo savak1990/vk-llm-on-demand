@@ -1,6 +1,6 @@
 ---
 id: "CORE-120"
-status: "DRAFT"
+status: "READY"
 updated: "2026-11-01"
 depends_on: ["CORE-010", "CORE-080"]
 adrs: ["0008", "0013"]
@@ -129,6 +129,9 @@ on:
     branches: [main]
     paths-ignore: ["docs/**", "specs/**", "gitops/**"]
 permissions: {}
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   version:   # computes version.sh main <sha>; dorny/paths-filter on 'go'
   publish:   # needs: version; uses ./.github/workflows/publish.yml
@@ -162,13 +165,18 @@ on:
     inputs:
       bump: { required: true, type: choice, options: [patch, minor, major] }
 permissions: {}
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   version:   # computes version.sh release <bump>
-  publish:   # needs: version; uses ./.github/workflows/publish.yml, no go/flutter flags → full copy
+  publish:   # needs: version; uses ./.github/workflows/publish.yml, no go flag → full copy (requires a prior commit to have already published an image under its own SHA tag — see docs/delivery.md's sequencing note)
   tag:       # needs: [version, publish]; permissions: contents: write
              # git tag vX.Y.Z && git push origin vX.Y.Z
              # goreleaser/goreleaser-action@<sha> # vN, after the tag push
 ```
+
+The very first release ever dispatched on a repository with no published image yet has nothing to copy; `docs/delivery.md` states the required order (a `main` merge that rebuilds, before the first release). Shared between the two files deliberately — a release and a merge both publish under one version scheme, so they queue rather than race to compute the same next version.
 
 The `tag` job runs only if `publish` succeeds — GitHub Actions' default
 `needs` behavior skips a job when a dependency fails or is cancelled — so
@@ -235,7 +243,7 @@ CORE-010 defines `version`, `release BUMP=patch|minor|major`,
 `make release BUMP=` invoke them as CORE-010 defines them; this spec adds
 no Makefile target of its own and does not fix their parameters (`SVC=`,
 `CHART=`, or neither — CORE-010's call to make, since this repository has
-exactly one image and one chart).
+exactly one image and one chart). Confirmed landed: `make version` prints a three-part semver with no error (verified at plan time).
 
 ### GHCR package visibility and cleanup
 
@@ -392,7 +400,8 @@ fixed by any file in `vk-ahorro` either — see Open questions.
 | Exact commit SHAs for pinned actions. | R4 requires a full SHA, and `docs/research.md` §6 explicitly forbids copying SHAs from itself. | Implementation steps 2–4, read directly from `vk-ahorro`'s current workflow files | Copy verbatim from `vk-ahorro/.github/workflows/{publish,deploy,release}.yml` at implementation time. |
 | Does a brand-new GHCR package default to private, requiring the manual toggle in step 7 before AC5 can pass on the first release? | AC5 is an anonymous-pull test; if visibility isn't public yet it fails for a reason unrelated to the pipeline. | Implementation step 7, first real run | Assume private-by-default; toggle public manually once, immediately after the first successful `publish.yml` run. |
 | Does the required status check (`ci-ok`) and branch protection setup belong to this spec or to CORE-010? | ADR 0008 Consequences mentions `make repo-settings` for the required check; CORE-010 owns `ci.yml` itself. | CORE-010's spec | CORE-010 owns `repo-settings` and the `ci-ok` check; this spec only adds the GHCR visibility and cleanup steps. |
-| Q36: GoReleaser action and binary versions, and whether GitHub Releases on a personal repository need extra permissions beyond `contents: write`. | R12/AC8 need a real pinned SHA and version; `docs/research.md` §6 recommends GoReleaser but gives no version or SHA. | Implementation step 5, read directly from GoReleaser's current release at that time (`docs/open-questions.md` Q36) | `contents: write` on the `tag` job only; no extra permission. |
+| Q36: GoReleaser action and binary versions, and whether GitHub Releases on a personal repository need extra permissions beyond `contents: write`. | R12/AC8 need a real pinned SHA and version; `docs/research.md` §6 recommends GoReleaser but gives no version or SHA. | Implementation step 5, read directly from GoReleaser's current release at that time (`docs/open-questions.md` Q36) | `with: version: v2.19.0`, matching `ci.yml`'s already-pinned `goreleaser/goreleaser/v2@v2.19.0` module version; the action's own SHA is fetched for real from `goreleaser/goreleaser-action`'s GitHub releases at implementation time (Task 5), never guessed. |
+| `gitops/` does not exist in this repository yet (confirmed at plan time) — `docs/delivery.md`'s promotion-path section must describe it as a CORE-130 deliverable, not as existing. | R10 calls out the promotion path; R10 requires stating what `gitops/values.yaml` holds, yet it does not exist and should not be created in this spec. | Implementation step 6, where `docs/delivery.md`'s scope section addresses whether the current repository holds that file | State the future path explicitly, don't pretend it exists. |
 
 ## Evidence
 
