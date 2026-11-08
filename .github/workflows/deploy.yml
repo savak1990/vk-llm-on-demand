@@ -1,10 +1,6 @@
-# Publishes a prerelease on every merge to main. No cluster write, no mobile build.
-#
-#   push to main        0.2.1-main.<short-sha>
-#
-# Cutting a release is release.yml, a separate button.
-#
-# Every action is pinned to a full commit SHA; see ci.yml for why.
+# Publishes a prerelease on every merge to main: no cluster write, no mobile build.
+# Cutting a release is release.yml, a separate button; every action here is pinned
+# to a full commit SHA — see ci.yml for why.
 name: deploy
 
 on:
