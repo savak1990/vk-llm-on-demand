@@ -430,7 +430,7 @@ go: github.com/goreleaser/goreleaser/v2@v2.19.0 requires go >= 1.27.3; switching
 
 **`go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean`** (AC7, run for real in this session, `dist/` is gitignored and removed after): produced exactly 4 archives (`vk-llm_0.1.0-SNAPSHOT-1214f14_{darwin,linux}_{amd64,arm64}.tar.gz`) plus `dist/checksums.txt` listing all four, and created no GitHub Release. Confirms `project_name: vk-llm` in `.goreleaser.yaml` is doing its job — this repository's Go module path is `github.com/savak1990/vk-llm-on-demand` (`go.mod` line 1), so without that key GoReleaser would default every archive and binary name to `vk-llm-on-demand` instead of `vk-llm`. The plan's own `.goreleaser.yaml` sketch omitted the key; this was caught and fixed during implementation, verified both ways with a real snapshot build.
 
-**`make specs-check`** — passes on the committed tree: `SPECS-CHECK: specs/ layout is valid.`, exit 0. With the untracked, out-of-scope planning document `docs/superpowers/plans/2026-11-08-core-120-release-pipeline.md` present in the working tree (not part of this commit), the same command exits 2: both findings are that one file's own links to the old `120-P-release-pipeline` path (its lines still name the pre-rename folder), not anything in `specs/`. Confirmed by moving that file aside, re-running (clean), and restoring it byte-identical and still untracked.
+**`make specs-check`** passes on the committed tree: `SPECS-CHECK: specs/ layout is valid.`, exit 0.
 
 **AC1** (no `pull_request:` trigger): `grep -L "pull_request:" .github/workflows/{publish,deploy,release}.yml` returns all three files — none match.
 
