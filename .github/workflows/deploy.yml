@@ -1,0 +1,71 @@
+# Publishes a prerelease on every merge to main. No cluster write, no mobile build.
+#
+#   push to main        0.2.1-main.<short-sha>
+#
+# Cutting a release is release.yml, a separate button.
+#
+# Every action is pinned to a full commit SHA; see ci.yml for why.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "specs/**"
+      - "gitops/**"
+
+permissions: {}
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # One version for the whole run, and the decision of what to rebuild.
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      go: ${{ steps.filter.outputs.go }}
+    steps:
+      # The version is derived from the tag history, so fetch all of it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: v
+        run: |
+          set -euo pipefail
+          version="$(./scripts/version.sh main "${{ github.sha }}")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "### Version \`$version\`" >> "$GITHUB_STEP_SUMMARY"
+
+      # These decide one thing only: whether an image is rebuilt or copied
+      # to the new tag. No job is skipped on them, so a path missing here
+      # costs a redundant copy, never a missing artifact.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            go:
+              - 'cmd/**'
+              - 'internal/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'deploy/docker/gpu-on-demand.Dockerfile'
+
+  publish:
+    needs: version
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.version.outputs.version }}
+      go: ${{ needs.version.outputs.go }}
