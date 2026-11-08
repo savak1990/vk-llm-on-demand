@@ -117,13 +117,17 @@ Two jobs:
   otherwise copies the image the last commit that touched those paths
   already published, via `docker buildx imagetools create -t <repo>:<version>
   <repo>:<src-sha>`, where `<src-sha>` comes from `git log -1 --format=%H --
-  cmd internal go.mod go.sum deploy/docker/gpu-on-demand.Dockerfile`.
+  cmd internal go.mod go.sum deploy/docker/gpu-on-demand.Dockerfile`. A
+  resolve step checks that `<repo>:<src-sha>` exists with `docker buildx
+  imagetools inspect` first; if it does not (no such commit, or that commit's
+  build never published), the job builds instead of failing.
   `provenance: false`; `platforms: linux/amd64,linux/arm64` (ADR 0008 §3).
 - `charts`: `needs: images`; no change detection — `helm package` and
   `helm push` run every time, because packaging is cheap
   (`vk-ahorro/docs/delivery.md` §2.1; research §6). Pushes
   `oci://ghcr.io/${{ github.repository }}/charts/gpu-on-demand:<version>`
-  with `appVersion` set to `${{ github.sha }}` via `helm package --app-version`.
+  with `appVersion` set to the published `VERSION` string via
+  `helm package --app-version`, matching `make helm-package`.
 
 `deploy.yml`, adapted from `vk-ahorro/.github/workflows/deploy.yml`:
 
@@ -174,7 +178,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   version:   # computes version.sh release <bump>
-  publish:   # needs: version; uses ./.github/workflows/publish.yml, no go flag → full copy (requires a prior commit to have already published an image under its own SHA tag — see docs/delivery.md's sequencing note)
+  publish:   # needs: version; uses ./.github/workflows/publish.yml, no go flag → normally a full copy; falls back to a build if the copy source has no published image (see docs/delivery.md's sequencing note)
   tag:       # needs: [version, publish]; permissions: contents: write
              # git tag vX.Y.Z && git push origin vX.Y.Z
              # goreleaser/goreleaser-action@<sha> # vN, after the tag push
@@ -235,9 +239,12 @@ in a trailing comment, copied at implementation time from the current
 spec or from `docs/research.md` §6, which the research page itself warns
 against (research §6: "Copy the SHAs from the source files at
 implementation time, not from this page"). As of 2026-11-01 those files
-pin: `actions/checkout` v7.0.1, `docker/login-action` v4.6.0,
+pin: `actions/checkout` v7.0.1, `docker/login-action` v4.8.0,
 `docker/setup-buildx-action` v4.4.1, `docker/build-push-action` v7.4.0,
 `azure/setup-helm` v5.0.1, `dorny/paths-filter` v4.0.3 (research §6).
+The `docker/login-action` reference value above was stale at spec-writing
+time; the real current version was live-fetched at implementation time
+and used instead.
 
 ### Make targets this spec calls
 

@@ -32,23 +32,27 @@ never pushed anywhere. Nothing reaches GHCR. `ci.yml` holds no
 
 **A merge to `main`** runs `deploy.yml`. It computes `X.Y.Z-main.<sha7>`,
 decides whether the Go sources changed, and calls `publish.yml`, which
-pushes the image (rebuilt if Go changed, otherwise copied from the prior
-commit's manifest) and repackages the chart under that version. No step
-in this channel touches a cluster.
+pushes the image (rebuilt if Go changed, otherwise copied from the image
+published by the last commit that touched the Go paths — or rebuilt if
+that image was never successfully published) and repackages the chart
+under that version. No step in this channel touches a cluster.
 
 **A `release.yml` dispatch**, run by hand from the Actions tab (or `make
 release BUMP=patch`), computes the clean `X.Y.Z`, calls the same
 `publish.yml`, and only after that publish succeeds writes the git tag
 `vX.Y.Z` and pushes it. The last step then runs GoReleaser against the
 tag it just pushed, attaching four `vk-llm` binaries and a
-`checksums.txt` to the GitHub Release for that tag.
+`checksums.txt` to the GitHub Release for that tag. GoReleaser's
+`-X main.version={{.Version}}` ldflag is currently a no-op: `cmd/vk-llm`
+has no `version` variable for it to set, so the released binary does not
+yet report its own version until CORE-150 adds that variable.
 
-**The real sequencing caveat:** `release.yml` never rebuilds anything —
-its call to `publish.yml` always takes the copy-the-prior-commit's-image
-path. A release dispatched before `deploy.yml` has ever successfully
-published an image has nothing to copy from, and fails. The first `main`
-merge that touches a Go path must succeed through `deploy.yml` before the
-first `release.yml` dispatch ever happens.
+**The sequencing case:** `release.yml` passes no `go` flag, so its call to
+`publish.yml` normally takes the copy path. `publish.yml` first checks
+whether an image already exists under the copy source's SHA tag; if none
+does — a release dispatched before any `main` merge has ever successfully
+published an image, or after a failed or cancelled deploy — it falls back
+to a real build instead of failing.
 
 ## 3. Promotion to the platform
 
@@ -80,8 +84,11 @@ a separate cost. A pull request publishes no artifact to retain.
 
 ## 5. Invariants
 
-1. No image is ever tagged or pushed as `latest`. Every image carries
-   both the full commit SHA and the run's version.
+1. No image is ever tagged or pushed as `latest`. A built image carries
+   both the full commit SHA of the commit that built it and the run's
+   version; a copied image only gains the run's version tag — its
+   manifest still carries the SHA tag of the commit that originally
+   built it, not the current run's commit.
 2. The chart version pushed in a run always equals the image tag pushed
    in the same run.
 3. Every workflow file starts `permissions: {}`; each job grants only the
@@ -90,8 +97,9 @@ a separate cost. A pull request publishes no artifact to retain.
    the human version in a trailing comment.
 5. `deploy.yml` performs no `helm upgrade`, `helm install`, or any other
    write to a Kubernetes cluster.
-6. `publish.yml` rebuilds an image only when its inputs changed; otherwise
-   it copies the prior commit's manifest to the new tag.
+6. `publish.yml` rebuilds an image when its inputs changed, or when the
+   copy source has no published image to copy; otherwise it copies that
+   image's manifest to the new tag.
 7. No workflow that reaches GHCR triggers on `pull_request`; a pull
    request run produces no image or chart artifact.
 8. The chart installs with a plain `helm pull --version X.Y.Z` and no

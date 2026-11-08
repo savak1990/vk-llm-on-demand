@@ -61,7 +61,6 @@ jobs:
       contents: read
       packages: write
     uses: ./.github/workflows/publish.yml
-    secrets: inherit
     with:
       version: ${{ needs.version.outputs.version }}
       go: ${{ needs.version.outputs.go }}
