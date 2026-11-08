@@ -14,7 +14,7 @@ adrs: ["0012", "0013", "0011"]
 **Risk:** medium — the CLI holds a management token that can rent a GPU, so token handling and exit codes guard money
 **Estimated effort:** one session (3–5 h), half of it the fake-server tests
 **Recommended model:** standard — a thin HTTP client over the CORE-055 contract
-**Depends on:** [CORE-055](../055-D-management-api/spec.md), [CORE-120](../120-P-release-pipeline/spec.md)
+**Depends on:** [CORE-055](../055-D-management-api/spec.md), [CORE-120](../120-D-release-pipeline/spec.md)
 
 ## Outcome
 

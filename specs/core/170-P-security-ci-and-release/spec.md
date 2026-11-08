@@ -22,7 +22,7 @@ the same pull request that adds it.
 pattern to three new tools, no algorithmic design.
 **Depends on:** [CORE-010](../010-D-repo-skeleton-and-ci/spec.md)
 (`ci.yml` skeleton, `Makefile`, the `go`/`image` jobs this spec's
-`security` job sits beside), [CORE-120](../120-P-release-pipeline/spec.md)
+`security` job sits beside), [CORE-120](../120-D-release-pipeline/spec.md)
 (`release.yml`, gated by convention, not automation, on this spec's
 checklist)
 
