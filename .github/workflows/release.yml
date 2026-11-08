@@ -78,3 +78,10 @@ jobs:
             echo "Once CORE-130 lands \`gitops/values.yaml\`, pin it there"
             echo "then bump \`app.targetRevision\` in vk-lab-platform."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: v2.19.0
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
