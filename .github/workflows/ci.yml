@@ -512,10 +512,13 @@ jobs:
 
       - run: go test ./cmd/vk-llm/... -count=1
 
-      # No-op until a .goreleaser.yaml exists. go run pins a module version
-      # instead of a third-party action, so no new SHA needs tracking here.
+      # No-op until a .goreleaser.yaml exists. go run pins a module version,
+      # so no action SHA needs tracking; GOTOOLCHAIN=auto lets it fetch the
+      # newer Go GoReleaser itself requires, overriding setup-go's "local".
       - name: GoReleaser snapshot
         if: hashFiles('.goreleaser.yaml') != ''
+        env:
+          GOTOOLCHAIN: auto
         run: go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean
 
   # The single required status check. `if: always()` keeps it from being
