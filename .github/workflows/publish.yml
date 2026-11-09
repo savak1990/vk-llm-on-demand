@@ -1,0 +1,150 @@
+# Publishes the image and chart to GHCR under one version, called by both
+# deploy.yml and release.yml. An unchanged image is copied to the new tag
+# instead of rebuilt. Every action is pinned to a full SHA; see ci.yml.
+name: publish
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version every image and chart is published under
+        required: true
+        type: string
+      # A string rather than a boolean, because a matrix value is compared as
+      # a string. It defaults to not-rebuilt: a release copies the component
+      # and passes nothing.
+      go:
+        description: Whether the Go sources changed, so the image is rebuilt
+        required: false
+        default: 'false'
+        type: string
+
+permissions: {}
+
+jobs:
+  images:
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - svc: gpu-on-demand
+            changed: ${{ inputs.go }}
+    steps:
+      # The copy source is found through the log, so the history is needed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The docker-container driver is what makes a multi-platform build
+      # possible; the default builder cannot produce one.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # The commit that last touched this component is the commit whose build
+      # pushed the image the component still runs — unless that build never
+      # happened or never published, in which case there is nothing to copy.
+      - name: Resolve whether to build or copy
+        id: resolve
+        if: matrix.changed != 'true'
+        env:
+          REPO: ghcr.io/${{ github.repository }}/${{ matrix.svc }}
+          SVC: ${{ matrix.svc }}
+        run: |
+          set -euo pipefail
+          case "$SVC" in
+            gpu-on-demand) paths="cmd internal go.mod go.sum deploy/docker/gpu-on-demand.Dockerfile" ;;
+            *) echo "no path set for $SVC" >&2; exit 1 ;;
+          esac
+          # shellcheck disable=SC2086
+          src="$(git log -1 --format=%H -- $paths)"
+          if [ -z "$src" ] || ! docker buildx imagetools inspect "$REPO:$src" >/dev/null 2>&1; then
+            echo "rebuild=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebuild=false" >> "$GITHUB_OUTPUT"
+            echo "src=$src" >> "$GITHUB_OUTPUT"
+          fi
+
+      # provenance: false keeps the pushed manifest a plain multi-platform
+      # index rather than an attestation index, which is what a plain
+      # docker pull expects.
+      - if: matrix.changed == 'true' || steps.resolve.outputs.rebuild == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/docker/${{ matrix.svc }}.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/${{ matrix.svc }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/${{ matrix.svc }}:${{ inputs.version }}
+          cache-from: type=gha,scope=${{ matrix.svc }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.svc }}
+
+      - if: matrix.changed != 'true' && steps.resolve.outputs.rebuild != 'true'
+        name: Copy the unchanged image to the new version
+        env:
+          REPO: ghcr.io/${{ github.repository }}/${{ matrix.svc }}
+          VERSION: ${{ inputs.version }}
+          SRC: ${{ steps.resolve.outputs.src }}
+        run: |
+          set -euo pipefail
+          echo "copying $REPO:$SRC to $REPO:$VERSION"
+          docker buildx imagetools create -t "$REPO:$VERSION" "$REPO:$SRC"
+
+      - name: Report
+        env:
+          REPO: ghcr.io/${{ github.repository }}/${{ matrix.svc }}
+          VERSION: ${{ inputs.version }}
+          BUILT: ${{ (matrix.changed == 'true' || steps.resolve.outputs.rebuild == 'true') && 'built' || 'copied' }}
+        run: |
+          {
+            echo "- \`$REPO:$VERSION\` ($BUILT)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # A separate job, so a chart failure does not hide a successful image push.
+  # Packaging is cheap, so every chart is published on every channel with no
+  # change detection at all.
+  charts:
+    needs: images
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+
+      - name: Package and push every chart
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_ACTOR: ${{ github.actor }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          echo "$GITHUB_TOKEN" | helm registry login ghcr.io \
+            --username "$GH_ACTOR" --password-stdin
+          for dir in deploy/helm/*/; do
+            chart="$(basename "${dir%/}")"
+            make helm-package helm-push CHART="$chart" VERSION="$VERSION"
+            echo "- \`oci://ghcr.io/${{ github.repository }}/charts/$chart:$VERSION\`" \
+              >> "$GITHUB_STEP_SUMMARY"
+          done

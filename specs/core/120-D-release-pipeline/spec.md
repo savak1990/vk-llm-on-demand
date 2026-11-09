@@ -1,14 +1,18 @@
 ---
 id: "CORE-120"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-08"
 depends_on: ["CORE-010", "CORE-080"]
 adrs: ["0008", "0013"]
 ---
 
 # 120 — Release pipeline
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** Implemented 2026-11-08. All three workflow files and
+`.goreleaser.yaml` exist and pass every structural check this plan can run
+before merge. The acceptance criteria that require a real run on `main`
+(AC2–AC5, AC8) are pending the first `deploy.yml` run and first
+`release.yml` dispatch after this merges — see Evidence.
 
 **Complexity:** S — adapts three proven workflow files and one doc from
 `vk-ahorro`, plus one new `.goreleaser.yaml` convention (ADR 0013 §3).
@@ -113,13 +117,17 @@ Two jobs:
   otherwise copies the image the last commit that touched those paths
   already published, via `docker buildx imagetools create -t <repo>:<version>
   <repo>:<src-sha>`, where `<src-sha>` comes from `git log -1 --format=%H --
-  cmd internal go.mod go.sum deploy/docker/gpu-on-demand.Dockerfile`.
+  cmd internal go.mod go.sum deploy/docker/gpu-on-demand.Dockerfile`. A
+  resolve step checks that `<repo>:<src-sha>` exists with `docker buildx
+  imagetools inspect` first; if it does not (no such commit, or that commit's
+  build never published), the job builds instead of failing.
   `provenance: false`; `platforms: linux/amd64,linux/arm64` (ADR 0008 §3).
 - `charts`: `needs: images`; no change detection — `helm package` and
   `helm push` run every time, because packaging is cheap
   (`vk-ahorro/docs/delivery.md` §2.1; research §6). Pushes
   `oci://ghcr.io/${{ github.repository }}/charts/gpu-on-demand:<version>`
-  with `appVersion` set to `${{ github.sha }}` via `helm package --app-version`.
+  with `appVersion` set to the published `VERSION` string via
+  `helm package --app-version`, matching `make helm-package`.
 
 `deploy.yml`, adapted from `vk-ahorro/.github/workflows/deploy.yml`:
 
@@ -129,6 +137,9 @@ on:
     branches: [main]
     paths-ignore: ["docs/**", "specs/**", "gitops/**"]
 permissions: {}
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   version:   # computes version.sh main <sha>; dorny/paths-filter on 'go'
   publish:   # needs: version; uses ./.github/workflows/publish.yml
@@ -162,13 +173,18 @@ on:
     inputs:
       bump: { required: true, type: choice, options: [patch, minor, major] }
 permissions: {}
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
   version:   # computes version.sh release <bump>
-  publish:   # needs: version; uses ./.github/workflows/publish.yml, no go/flutter flags → full copy
+  publish:   # needs: version; uses ./.github/workflows/publish.yml, no go flag → normally a full copy; falls back to a build if the copy source has no published image (see docs/delivery.md's sequencing note)
   tag:       # needs: [version, publish]; permissions: contents: write
              # git tag vX.Y.Z && git push origin vX.Y.Z
              # goreleaser/goreleaser-action@<sha> # vN, after the tag push
 ```
+
+The very first release ever dispatched on a repository with no published image yet has nothing to copy; `docs/delivery.md` states the required order (a `main` merge that rebuilds, before the first release). Shared between the two files deliberately — a release and a merge both publish under one version scheme, so they queue rather than race to compute the same next version.
 
 The `tag` job runs only if `publish` succeeds — GitHub Actions' default
 `needs` behavior skips a job when a dependency fails or is cancelled — so
@@ -223,9 +239,12 @@ in a trailing comment, copied at implementation time from the current
 spec or from `docs/research.md` §6, which the research page itself warns
 against (research §6: "Copy the SHAs from the source files at
 implementation time, not from this page"). As of 2026-11-01 those files
-pin: `actions/checkout` v7.0.1, `docker/login-action` v4.6.0,
+pin: `actions/checkout` v7.0.1, `docker/login-action` v4.8.0,
 `docker/setup-buildx-action` v4.4.1, `docker/build-push-action` v7.4.0,
 `azure/setup-helm` v5.0.1, `dorny/paths-filter` v4.0.3 (research §6).
+The `docker/login-action` reference value above was stale at spec-writing
+time; the real current version was live-fetched at implementation time
+and used instead.
 
 ### Make targets this spec calls
 
@@ -235,7 +254,7 @@ CORE-010 defines `version`, `release BUMP=patch|minor|major`,
 `make release BUMP=` invoke them as CORE-010 defines them; this spec adds
 no Makefile target of its own and does not fix their parameters (`SVC=`,
 `CHART=`, or neither — CORE-010's call to make, since this repository has
-exactly one image and one chart).
+exactly one image and one chart). Confirmed landed: `make version` prints a three-part semver with no error (verified at plan time).
 
 ### GHCR package visibility and cleanup
 
@@ -377,12 +396,18 @@ fixed by any file in `vk-ahorro` either — see Open questions.
       a scratch branch merged to a throwaway `main`, or GitHub's "re-run"
       on the actual repository once seeded) — not `act`, which cannot run
       `docker buildx imagetools create` or OCI `helm push` realistically.
-- [ ] `actionlint` clean on all three workflow files.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE in the same pull request; folder renamed
+      AC1, AC6, AC7 pass structurally today (see Evidence); AC2, AC3, AC4,
+      AC5, AC8 need a real run and stay unchecked until then — closed by
+      the first real `deploy.yml` run on `main`, then the first real
+      `release.yml` dispatch, in that order (`docs/delivery.md` §2's
+      sequencing caveat).
+- [x] `actionlint` clean on all three workflow files.
+- [x] `make specs-check` passes.
+- [x] Status flipped to DONE in the same pull request; folder renamed
       `120-D-release-pipeline`.
 - [ ] Evidence section filled with the actual run links and the first
-      published version number.
+      published version number — closed by the same first real `deploy.yml`
+      run and first real `release.yml` dispatch named above.
 
 ## Open questions
 
@@ -392,8 +417,43 @@ fixed by any file in `vk-ahorro` either — see Open questions.
 | Exact commit SHAs for pinned actions. | R4 requires a full SHA, and `docs/research.md` §6 explicitly forbids copying SHAs from itself. | Implementation steps 2–4, read directly from `vk-ahorro`'s current workflow files | Copy verbatim from `vk-ahorro/.github/workflows/{publish,deploy,release}.yml` at implementation time. |
 | Does a brand-new GHCR package default to private, requiring the manual toggle in step 7 before AC5 can pass on the first release? | AC5 is an anonymous-pull test; if visibility isn't public yet it fails for a reason unrelated to the pipeline. | Implementation step 7, first real run | Assume private-by-default; toggle public manually once, immediately after the first successful `publish.yml` run. |
 | Does the required status check (`ci-ok`) and branch protection setup belong to this spec or to CORE-010? | ADR 0008 Consequences mentions `make repo-settings` for the required check; CORE-010 owns `ci.yml` itself. | CORE-010's spec | CORE-010 owns `repo-settings` and the `ci-ok` check; this spec only adds the GHCR visibility and cleanup steps. |
-| Q36: GoReleaser action and binary versions, and whether GitHub Releases on a personal repository need extra permissions beyond `contents: write`. | R12/AC8 need a real pinned SHA and version; `docs/research.md` §6 recommends GoReleaser but gives no version or SHA. | Implementation step 5, read directly from GoReleaser's current release at that time (`docs/open-questions.md` Q36) | `contents: write` on the `tag` job only; no extra permission. |
+| Q36: GoReleaser action and binary versions, and whether GitHub Releases on a personal repository need extra permissions beyond `contents: write`. | R12/AC8 need a real pinned SHA and version; `docs/research.md` §6 recommends GoReleaser but gives no version or SHA. | Implementation step 5, read directly from GoReleaser's current release at that time (`docs/open-questions.md` Q36) | `with: version: v2.19.0`, matching `ci.yml`'s already-pinned `goreleaser/goreleaser/v2@v2.19.0` module version; the action's own SHA is fetched for real from `goreleaser/goreleaser-action`'s GitHub releases at implementation time (Task 5), never guessed. |
+| `gitops/` does not exist in this repository yet (confirmed at plan time) — `docs/delivery.md`'s promotion-path section must describe it as a CORE-130 deliverable, not as existing. | R10 calls out the promotion path; R10 requires stating what `gitops/values.yaml` holds, yet it does not exist and should not be created in this spec. | Implementation step 6, where `docs/delivery.md`'s scope section addresses whether the current repository holds that file | State the future path explicitly, don't pretend it exists. |
 
 ## Evidence
 
-None yet.
+Run 2026-11-08, in this worktree, before merge.
+
+**`actionlint .github/workflows/publish.yml .github/workflows/deploy.yml .github/workflows/release.yml`** — exit 0, no output (clean on all three files).
+
+**`go run github.com/goreleaser/goreleaser/v2@v2.19.0 check`**:
+
+```
+go: github.com/goreleaser/goreleaser/v2@v2.19.0 requires go >= 1.27.3; switching to go1.27.3
+  • checking                                  path=.goreleaser.yaml
+  • 1 configuration file(s) validated
+  • thanks for using GoReleaser!
+```
+
+**`go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean`** (AC7, run for real in this session, `dist/` is gitignored and removed after): produced exactly 4 archives (`vk-llm_0.1.0-SNAPSHOT-1214f14_{darwin,linux}_{amd64,arm64}.tar.gz`) plus `dist/checksums.txt` listing all four, and created no GitHub Release. Confirms `project_name: vk-llm` in `.goreleaser.yaml` is doing its job — this repository's Go module path is `github.com/savak1990/vk-llm-on-demand` (`go.mod` line 1), so without that key GoReleaser would default every archive and binary name to `vk-llm-on-demand` instead of `vk-llm`. The plan's own `.goreleaser.yaml` sketch omitted the key; this was caught and fixed during implementation, verified both ways with a real snapshot build.
+
+**`make specs-check`** passes on the committed tree: `SPECS-CHECK: specs/ layout is valid.`, exit 0.
+
+**AC1** (no `pull_request:` trigger): `grep -L "pull_request:" .github/workflows/{publish,deploy,release}.yml` returns all three files — none match.
+
+**AC6** (`permissions: {}` exactly once per file): `grep -c "permissions: {}" .github/workflows/{publish,deploy,release}.yml` → `publish.yml:1`, `deploy.yml:1`, `release.yml:1`.
+
+**R5 / step 3 test**: `grep -c "helm upgrade\|helm install" .github/workflows/deploy.yml` → `0`.
+
+**R6 / step 5 test**: `release.yml`'s `tag` job declares `needs: [version, publish]`; `grep -c "contents: write" .github/workflows/release.yml` → `1` (the `tag` job's own grant, nothing added for GoReleaser, satisfying R13).
+
+**Pinned SHAs, fetched for real, not guessed:**
+- `docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0` — the plan's own reference value (copied from `vk-ahorro` at plan time) was two releases stale; the SHA above is the real current one as of implementation time.
+- `goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0`, running GoReleaser `v2.19.0` (matches `ci.yml`'s already-pinned module version, resolving Open questions Q36).
+
+**Avoided a real defect in the `vk-ahorro` source this plan adapts from**: `vk-ahorro`'s `deploy.yml` path filter includes `Makefile` in its `go` list, but its `publish.yml` copy-source `case` block excludes it (the spec's own "Design and contracts" section calls this out as wave-1 review finding #31). This repository's `deploy.yml` filter and `publish.yml`'s copy-source `case` block both use the same five-path list (`cmd/**`, `internal/**`, `go.mod`, `go.sum`, `deploy/docker/gpu-on-demand.Dockerfile`), with `Makefile` in neither — confirmed by reading both files directly.
+
+**What this plan cannot verify before merge, stated plainly rather than rubber-stamped:**
+- AC2 (a real push to `main` producing real GHCR image/chart tags), AC3/AC4 (a real `workflow_dispatch` on `release.yml`, including the forced-failure case), AC5/AC8 (a real anonymous `docker pull`/`helm pull`/binary `curl` from GHCR or a GitHub Release) all require a real run on `main` after this branch merges — there is nothing published to GHCR from this branch yet.
+- The operational ordering risk is real, not hypothetical: `release.yml`'s `publish` call never rebuilds, only copies the prior commit's manifest, so the first `release.yml` dispatch ever run on this repository must happen after at least one successful `deploy.yml` run has published an image under its own commit SHA — otherwise the copy step has nothing to copy from and fails. `docs/delivery.md` §2 ("The real sequencing caveat") and §4 already state this; cited here rather than re-derived.
+- GHCR package visibility (public) and the untagged-manifest cleanup policy (`docs/delivery.md` §4, implementation step 7) are manual, one-time operator steps against real GHCR packages. They cannot be done or verified now because nothing has published to GHCR from this branch yet.

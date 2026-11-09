@@ -71,7 +71,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [090](core/090-D-observability/spec.md) | Metrics catalog, logs, dashboard, alerts | 050, 060 |
 | [100](core/100-D-cost-controls/spec.md) | Budget, limits, orphan sweep, cost visibility | 050 |
 | [110](core/110-P-security-and-secrets/spec.md) | Keys, rotation, limits, SSRF, threat model | 060, 080 |
-| [120](core/120-P-release-pipeline/spec.md) | Publish, deploy and release workflows, OCI chart, GoReleaser CLI binaries | 010, 080 |
+| [120](core/120-D-release-pipeline/spec.md) | Publish, deploy and release workflows, OCI chart, GoReleaser CLI binaries | 010, 080 |
 | [130](core/130-P-platform-integration/spec.md) | Pointer Application and secrets path in `vk-lab-platform` | 080, 110, 120 |
 | [140](core/140-P-e2e-acceptance/spec.md) | Scripted acceptance run on a real GPU instance | 070, 080, 100, 150, 160 |
 | [150](core/150-P-vk-llm-cli/spec.md) | `vk-llm` CLI: start, status, stop | 055 |
