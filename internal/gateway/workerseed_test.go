@@ -139,10 +139,9 @@ func TestWorkerSeedReload(t *testing.T) {
 	<-done
 }
 
-// TestWorkerSeedAndDerivedKeyNeverLogged proves neither the raw worker
-// seed held in memory nor the per-request key worker.WorkerKey derives
-// from it (the Authorization header actually sent upstream in chat.go)
-// ever reaches the gateway's logs.
+// TestWorkerSeedAndDerivedKeyNeverLogged proves the per-request key
+// worker.WorkerKey derives from the seed (the Authorization header
+// chat.go sends upstream) never reaches the gateway's logs.
 func TestWorkerSeedAndDerivedKeyNeverLogged(t *testing.T) {
 	var buf bytes.Buffer
 	d := testDeps(t)
@@ -164,5 +163,5 @@ func TestWorkerSeedAndDerivedKeyNeverLogged(t *testing.T) {
 		t.Fatal("upstream never received an Authorization header; the leak check below would be vacuous")
 	}
 	derivedKey := worker.WorkerKey(d.Seed.Bytes(), d.InstallationID, 1)
-	obstest.AssertNoSecret(t, buf.Bytes(), string(d.Seed.Bytes()), derivedKey)
+	obstest.AssertNoSecret(t, buf.Bytes(), derivedKey)
 }

@@ -175,13 +175,9 @@ func TestSSHCloseIsSafeConcurrentlyAndTwice(t *testing.T) {
 	}
 }
 
-// TestSSHKeyNeverLeaksInDialErrors proves the private key text never
-// ends up in an error Dial returns, across both error paths that
-// touch the key: a host-key mismatch (after the key was read and
-// used) and a parse failure (the key itself is malformed). The PEM
-// is checked line by line, skipping the "-----BEGIN/END" markers,
-// since a %q-quoted leak would escape the real newlines between them
-// and defeat a whole-PEM substring match.
+// TestSSHKeyNeverLeaksInDialErrors proves the real private key never
+// ends up in a host-key-mismatch Dial error; the parse-error path
+// below uses an unrelated fixture key and gives no live coverage.
 func TestSSHKeyNeverLeaksInDialErrors(t *testing.T) {
 	keyFn := testSSHKey(t)
 	keyPEM, err := keyFn()

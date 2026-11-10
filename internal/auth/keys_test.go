@@ -140,11 +140,8 @@ func TestRunReloadsEvery10sAndKeepsOldSetsOnFailure(t *testing.T) {
 	}
 }
 
-// TestKeysNeverLogLiteralValue proves both Check and a failed Run
-// reload never put a key's literal value into the log output. Load
-// and Check alone log nothing, so a bad reload is driven too (as
-// TestRunReloadsEvery10sAndKeepsOldSetsOnFailure does) to make the
-// leak check non-vacuous.
+// TestKeysNeverLogLiteralValue proves a key's literal value never
+// reaches the log output, including during a failed Run reload.
 func TestKeysNeverLogLiteralValue(t *testing.T) {
 	dir := t.TempDir()
 	clientPath := writeKeyFile(t, dir, "client-keys", "sk-vkllm-clientkey1")
