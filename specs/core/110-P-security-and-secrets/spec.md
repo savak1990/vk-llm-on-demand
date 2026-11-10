@@ -277,7 +277,7 @@ CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `
 | AC2 | pass | `internal/obs/obstest.AssertNoSecret` (df102c7); wired into every package holding a secret (76663d2, ea1c4ee) |
 | AC3 | pass | `internal/auth/keys_test.go:TestRunReloadsEvery10sAndKeepsOldSetsOnFailure` |
 | AC4 | pass | `internal/gateway/middleware_test.go:TestAuthMatrixV1`, `internal/mgmt/middleware_test.go:TestAuthMatrix` |
-| AC5 | pass | `internal/worker/key_test.go:TestWorkerKey`, `TestWorkerKeyDiffersByGeneration` |
+| AC5 | pass | `internal/worker/key_test.go:TestWorkerKey`, `TestWorkerKeyDiffersByGeneration` (clauses a, b); the "never in the store document" clause is by inspection of `internal/store/document.go` (no worker-key field) — no dedicated test |
 | AC6 | unchecked | needs a real kind cluster run; no kind target exists in `Makefile`/`scripts/` (user decision 2026-11-10: not built as part of this plan) |
 | AC7 | pass | `internal/controller/sim_test.go:TestAC26_SSRFBoundaryAndHostKey` |
 | AC8 | pass | `scripts/check-rbac.sh` (b09b6e6) |

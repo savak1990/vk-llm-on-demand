@@ -162,7 +162,7 @@ func TestKeyNotLogged(t *testing.T) { // AC12
 		err  error
 	}{
 		{"search", firstErr(cl.SearchOffers(ctx, provider.OfferFilter{}))},
-		{"create", firstErr(cl.CreateInstance(ctx, provider.CreateRequest{Image: "img", Label: "l"}))},
+		{"create", firstErr(cl.CreateInstance(ctx, provider.CreateRequest{Image: "img", Label: "l", Env: map[string]string{"WORKER_API_KEY": "sk-vkllm-testworkerkey123"}}))},
 		{"get", firstErr(cl.GetInstance(ctx, 1))},
 		{"list", firstErr(cl.ListInstances(ctx, ""))},
 		{"destroy", cl.DestroyInstance(ctx, 1)},
@@ -176,10 +176,14 @@ func TestKeyNotLogged(t *testing.T) { // AC12
 		if contains(call.err.Error(), "test-key-ABCDEF") {
 			t.Fatalf("%s: error leaked the key: %v", call.name, call.err)
 		}
+		if contains(call.err.Error(), "sk-vkllm-testworkerkey123") {
+			t.Fatalf("%s: error leaked the worker key: %v", call.name, call.err)
+		}
 	}
 
 	out := buf.String()
 	obstest.AssertNoSecret(t, []byte(out), "test-key-ABCDEF")
+	obstest.AssertNoSecret(t, []byte(out), "sk-vkllm-testworkerkey123")
 	if contains(out, "Bearer") {
 		t.Fatalf("logs leaked the bearer header literal: %s", out)
 	}

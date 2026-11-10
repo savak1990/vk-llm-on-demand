@@ -20,5 +20,5 @@ func TestAssertNoSecretClean(t *testing.T) {
 
 type recordingT struct{ failed bool }
 
-func (r *recordingT) Helper()                            {}
-func (r *recordingT) Errorf(format string, args ...any) { r.failed = true }
+func (r *recordingT) Helper()                   {}
+func (r *recordingT) Errorf(_ string, _ ...any) { r.failed = true }

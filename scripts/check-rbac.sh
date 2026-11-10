@@ -1,34 +1,31 @@
 #!/usr/bin/env bash
-# Asserts the rendered Role never widens past get/update on the state ConfigMap.
+# Asserts the rendered Role matches the exact expected rule shape and that
+# no ClusterRole/ClusterRoleBinding is rendered anywhere in the chart.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 command -v yq >/dev/null || { echo "check-rbac: yq is not installed." >&2; exit 1; }
+command -v jq >/dev/null || { echo "check-rbac: jq is not installed." >&2; exit 1; }
 
-# yq ships preinstalled on the GitHub-hosted ubuntu-latest runner.
-rendered=$(make -s helm-template)
+if [[ -p /dev/stdin ]]; then
+  rendered=$(cat)
+else
+  rendered=$(make -s helm-template)
+fi
 
-role=$(echo "$rendered" | yq e 'select(.kind == "Role")' -)
-rule_count=$(echo "$role" | yq e '.rules | length' -)
-verbs=$(echo "$role" | yq e '.rules[0].verbs | sort | join(",")' -)
-resources=$(echo "$role" | yq e '.rules[0].resources[0]' -)
-resource_names=$(echo "$role" | yq e '.rules[0].resourceNames | length' -)
+expected='[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["release-name-state"],"verbs":["get","update"]}]'
 
-if [[ "$rule_count" != "1" ]]; then
-  echo "check-rbac: Role has $rule_count rules, want 1" >&2
-  exit 1
-fi
-if [[ "$verbs" != "get,update" ]]; then
-  echo "check-rbac: Role verbs = [$verbs], want [get,update]" >&2
-  exit 1
-fi
-if [[ "$resources" != "configmaps" ]]; then
-  echo "check-rbac: Role resource = [$resources], want [configmaps]" >&2
-  exit 1
-fi
-if [[ "$resource_names" != "1" ]]; then
-  echo "check-rbac: Role rule has $resource_names resourceNames, want 1 (the state ConfigMap only)" >&2
+role_rules=$(echo "$rendered" | yq e 'select(.kind == "Role") | .rules' -o=json - | jq -c 'map(.verbs |= sort)')
+
+if [[ "$role_rules" != "$expected" ]]; then
+  echo "check-rbac: Role rules = $role_rules, want $expected" >&2
   exit 1
 fi
 
-echo "check-rbac: OK (verbs=$verbs, resource=$resources, scoped to $resource_names resourceName)"
+widened_kinds=$(echo "$rendered" | yq e 'select(.kind == "ClusterRole" or .kind == "ClusterRoleBinding") | .kind' -)
+if [[ -n "$widened_kinds" ]]; then
+  echo "check-rbac: chart renders cluster-scoped RBAC objects: $widened_kinds" >&2
+  exit 1
+fi
+
+echo "check-rbac: OK (rules=$role_rules, no ClusterRole/ClusterRoleBinding)"
