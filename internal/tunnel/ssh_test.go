@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/savak1990/vk-llm-on-demand/internal/obs/obstest"
 )
 
 func TestSSHRoundTrip(t *testing.T) {
@@ -169,6 +172,47 @@ func TestSSHCloseIsSafeConcurrentlyAndTwice(t *testing.T) {
 
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close() again: %v, want nil", err)
+	}
+}
+
+// TestSSHKeyNeverLeaksInDialErrors proves the private key text never
+// ends up in an error Dial returns, across both error paths that
+// touch the key: a host-key mismatch (after the key was read and
+// used) and a parse failure (the key itself is malformed). The PEM
+// is checked line by line, skipping the "-----BEGIN/END" markers,
+// since a %q-quoted leak would escape the real newlines between them
+// and defeat a whole-PEM substring match.
+func TestSSHKeyNeverLeaksInDialErrors(t *testing.T) {
+	keyFn := testSSHKey(t)
+	keyPEM, err := keyFn()
+	if err != nil {
+		t.Fatalf("key func: %v", err)
+	}
+
+	backend := startEchoHTTPServer(t)
+	addr, _ := startTestSSHServer(t, backend, globalRequestAck)
+	host, port, _ := splitHostPortForTest(t, addr)
+
+	_, mismatchErr := NewSSH(keyFn).Dial(context.Background(), Instance{Host: host, Port: port, HostKey: "sha256:not-the-real-fingerprint"})
+	if !errors.Is(mismatchErr, ErrHostKeyMismatch) {
+		t.Fatalf("Dial: want ErrHostKeyMismatch, got %v", mismatchErr)
+	}
+
+	_, parseErr := NewSSH(func() ([]byte, error) { return []byte("not a valid key"), nil }).
+		Dial(context.Background(), Instance{Host: host, Port: port})
+	if parseErr == nil {
+		t.Fatal("Dial: want error for a malformed key, got nil")
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString(mismatchErr.Error())
+	buf.WriteString(parseErr.Error())
+
+	for _, line := range strings.Split(string(keyPEM), "\n") {
+		if line == "" || strings.HasPrefix(line, "-----") {
+			continue
+		}
+		obstest.AssertNoSecret(t, buf.Bytes(), line)
 	}
 }
 

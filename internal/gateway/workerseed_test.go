@@ -2,13 +2,22 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
+	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs/obstest"
+	"github.com/savak1990/vk-llm-on-demand/internal/worker"
 )
 
 func TestLoadWorkerSeed(t *testing.T) {
@@ -128,4 +137,32 @@ func TestWorkerSeedReload(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// TestWorkerSeedAndDerivedKeyNeverLogged proves neither the raw worker
+// seed held in memory nor the per-request key worker.WorkerKey derives
+// from it (the Authorization header actually sent upstream in chat.go)
+// ever reaches the gateway's logs.
+func TestWorkerSeedAndDerivedKeyNeverLogged(t *testing.T) {
+	var buf bytes.Buffer
+	d := testDeps(t)
+	d.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	var gotAuth string
+	rt := fakeRoundTripper(func(r *http.Request) (*http.Response, error) {
+		gotAuth = r.Header.Get("Authorization")
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"}}]}`))}, nil
+	})
+	d.Controller = &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	g.Handler().ServeHTTP(httptest.NewRecorder(), chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+
+	if gotAuth == "" {
+		t.Fatal("upstream never received an Authorization header; the leak check below would be vacuous")
+	}
+	derivedKey := worker.WorkerKey(d.Seed.Bytes(), d.InstallationID, 1)
+	obstest.AssertNoSecret(t, buf.Bytes(), string(d.Seed.Bytes()), derivedKey)
 }

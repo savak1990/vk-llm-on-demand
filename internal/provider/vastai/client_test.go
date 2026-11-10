@@ -15,6 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs/obstest"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 )
 
@@ -178,8 +179,9 @@ func TestKeyNotLogged(t *testing.T) { // AC12
 	}
 
 	out := buf.String()
-	if contains(out, "test-key-ABCDEF") || contains(out, "Bearer") {
-		t.Fatalf("logs leaked the key or bearer header: %s", out)
+	obstest.AssertNoSecret(t, []byte(out), "test-key-ABCDEF")
+	if contains(out, "Bearer") {
+		t.Fatalf("logs leaked the bearer header literal: %s", out)
 	}
 	if !contains(out, "level=DEBUG") {
 		t.Fatalf("expected at least one debug-level attempt log, got: %s", out)
