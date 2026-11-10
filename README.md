@@ -20,27 +20,67 @@ vk-llm stop       # release the GPU now (otherwise: 30 min after the last infere
 
 ## Status
 
-Design phase. No code yet. The repository holds the architecture, fourteen
-ADRs and twenty implementation specs. Implementation starts with
-[`specs/core/010-D-repo-skeleton-and-ci`](specs/core/010-D-repo-skeleton-and-ci/spec.md)
-once the specifications are reviewed.
+The control plane works now. Its code is merged to `main`. These parts
+are done:
 
-## MVP in one paragraph
+- The GPU lifecycle controller
+- The OpenAI-compatible gateway
+- The management API
+- The worker runtime
+- Budget controls
+- The Helm chart
+- Observability
+- The release pipeline
 
-A Go binary (`gpu-on-demand`) runs as one Deployment in a k3s cluster behind
-an existing Envoy gateway. Its management API (`/api/v1/gpu/*`, management
-token) starts and stops one NVIDIA L40S on Vast.ai running `llama-server`
-with `Qwen3.6-35B-A3B` (Q5_K_M GGUF). Its inference API (`/v1/*`, inference
-key) proxies OpenAI-compatible chat completions, streaming and tool calls,
-to that worker over an SSH tunnel, and answers `backend_unavailable` while
-no GPU runs. State lives in one ConfigMap. A reconcile loop compares the
-provider's instance list with that state every minute, destroys anything it
-does not recognise, and enforces the 30-minute rolling inactivity timeout,
-a monthly budget, a maximum hourly price and a maximum lifetime. The
-`vk-llm` CLI and a GitHub Actions workflow are thin clients of the
-management API. The first deployment target is the Hetzner k3s cluster managed by
-[vk-lab-platform](https://github.com/savak1990/vk-lab-platform); the Helm
-chart does not depend on it.
+These parts are not yet done:
+
+- Security hardening
+- Platform wiring
+- End-to-end acceptance tests
+- The `vk-llm` CLI
+- Remote control from GitHub Actions
+- CI and release hardening
+- Persistent-volume caching
+
+See [`specs/`](specs/) for the full list. Each spec's status is `DONE` or
+`PROPOSED`.
+
+## How it works
+
+A Go binary, `gpu-on-demand`, runs as one Deployment in a k3s cluster.
+Requests reach it through an existing Envoy gateway.
+
+The management API, at `/api/v1/gpu/*`, uses a management token. It
+starts and stops one NVIDIA L40S GPU on Vast.ai. The GPU runs
+`llama-server` with the `Qwen3.6-35B-A3B` model (Q5_K_M GGUF).
+
+The inference API, at `/v1/*`, uses an inference key. It proxies
+OpenAI-compatible chat completions, streaming, and tool calls to the
+worker over an SSH tunnel. It returns `backend_unavailable` while no GPU
+runs.
+
+The system stores state in one ConfigMap. A reconcile loop compares the
+provider's instance list with that state every minute. It destroys any
+instance it does not recognize. It enforces a 30-minute rolling
+inactivity timeout, a monthly budget, a maximum hourly price, and a
+maximum lifetime.
+
+The `vk-llm` CLI and a GitHub Actions workflow are thin clients of the
+management API.
+
+The [vk-lab-platform](https://github.com/savak1990/vk-lab-platform)
+project manages the Hetzner k3s cluster. That cluster is the first
+deployment target. The Helm chart does not depend on it.
+
+## How to use
+
+1. Install the Helm chart (see "Intended install" below).
+2. Create the necessary secrets in the cluster (see "Intended install").
+3. Run `vk-llm start`. Wait for the `READY` state.
+4. Configure any OpenAI-compatible client with the base URL
+   `https://llm.<fqdn>/v1`.
+5. Run `vk-llm stop` when you are done. If you do not, the 30-minute
+   idle timeout stops it.
 
 ## Intended install
 
