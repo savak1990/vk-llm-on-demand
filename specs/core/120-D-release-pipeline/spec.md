@@ -392,22 +392,19 @@ fixed by any file in `vk-ahorro` either — see Open questions.
 
 ## Definition of done
 
-- [ ] AC1–AC8 pass, demonstrated by a real run of each workflow (deploy on
-      a scratch branch merged to a throwaway `main`, or GitHub's "re-run"
-      on the actual repository once seeded) — not `act`, which cannot run
-      `docker buildx imagetools create` or OCI `helm push` realistically.
-      AC1, AC6, AC7 pass structurally today (see Evidence); AC2, AC3, AC4,
-      AC5, AC8 need a real run and stay unchecked until then — closed by
-      the first real `deploy.yml` run on `main`, then the first real
-      `release.yml` dispatch, in that order (`docs/delivery.md` §2's
-      sequencing caveat).
+- [x] AC1, AC6, AC7 pass structurally (see Evidence).
+- [x] AC2 passes — the real first `deploy.yml` run on `main` (see
+      Evidence, run 42658478569) published real GHCR image and chart
+      tags under the merge commit's SHA.
+- [ ] AC3, AC4, AC5, AC8 need a real `release.yml` dispatch — not run
+      yet, stay unchecked until it is.
 - [x] `actionlint` clean on all three workflow files.
 - [x] `make specs-check` passes.
 - [x] Status flipped to DONE in the same pull request; folder renamed
       `120-D-release-pipeline`.
-- [ ] Evidence section filled with the actual run links and the first
-      published version number — closed by the same first real `deploy.yml`
-      run and first real `release.yml` dispatch named above.
+- [x] Evidence section filled with the real `deploy.yml` run link.
+- [ ] The first published version number — closed by the first real
+      `release.yml` dispatch, not run yet.
 
 ## Open questions
 
@@ -453,7 +450,26 @@ go: github.com/goreleaser/goreleaser/v2@v2.19.0 requires go >= 1.27.3; switching
 
 **Avoided a real defect in the `vk-ahorro` source this plan adapts from**: `vk-ahorro`'s `deploy.yml` path filter includes `Makefile` in its `go` list, but its `publish.yml` copy-source `case` block excludes it (the spec's own "Design and contracts" section calls this out as wave-1 review finding #31). This repository's `deploy.yml` filter and `publish.yml`'s copy-source `case` block both use the same five-path list (`cmd/**`, `internal/**`, `go.mod`, `go.sum`, `deploy/docker/gpu-on-demand.Dockerfile`), with `Makefile` in neither — confirmed by reading both files directly.
 
-**What this plan cannot verify before merge, stated plainly rather than rubber-stamped:**
-- AC2 (a real push to `main` producing real GHCR image/chart tags), AC3/AC4 (a real `workflow_dispatch` on `release.yml`, including the forced-failure case), AC5/AC8 (a real anonymous `docker pull`/`helm pull`/binary `curl` from GHCR or a GitHub Release) all require a real run on `main` after this branch merges — there is nothing published to GHCR from this branch yet.
-- The operational ordering risk is real, not hypothetical: `release.yml`'s `publish` call never rebuilds, only copies the prior commit's manifest, so the first `release.yml` dispatch ever run on this repository must happen after at least one successful `deploy.yml` run has published an image under its own commit SHA — otherwise the copy step has nothing to copy from and fails. `docs/delivery.md` §2 ("The real sequencing caveat") and §4 already state this; cited here rather than re-derived.
-- GHCR package visibility (public) and the untagged-manifest cleanup policy (`docs/delivery.md` §4, implementation step 7) are manual, one-time operator steps against real GHCR packages. They cannot be done or verified now because nothing has published to GHCR from this branch yet.
+**AC2, closed by the real first `deploy.yml` run on `main`** (run
+2026-11-09, `headSha b41a0af`, PR #20's merge commit):
+`https://github.com/savak1990/vk-llm-on-demand/actions/runs/42658478569`,
+conclusion `success`. Jobs `version`, `publish / images (gpu-on-demand,
+false)` and `publish / charts` all succeeded. This was the first publish
+ever on this repository, so the `images` job's `resolve` step had no
+prior commit to copy from; its log shows the fallback firing for real
+(`docker buildx imagetools inspect` fails to find a source, so
+`rebuild=true`, then a real `docker buildx build` runs) and the job still
+succeeds — the fix-wave's I1 fix (originally a reasoned-through design
+fix, not yet exercised) is now confirmed working against a real GHCR
+registry, not only against the implementer's and reviewer's own reasoning.
+
+**What this plan still cannot verify, stated plainly rather than
+rubber-stamped:**
+- AC3/AC4 (a real `workflow_dispatch` on `release.yml`, including the
+  forced-failure case), AC5/AC8 (a real anonymous `docker pull`/`helm
+  pull`/binary `curl` from GHCR or a GitHub Release) all require a real
+  `release.yml` dispatch, which has not run yet.
+- GHCR package visibility (public) and the untagged-manifest cleanup
+  policy (`docs/delivery.md` §4, implementation step 7) are manual,
+  one-time operator steps against the real GHCR packages the run above
+  created. Not yet done.
