@@ -1,7 +1,7 @@
 ---
 id: "CORE-110"
 status: "DRAFT"
-updated: "2026-11-01"
+updated: "2026-11-10"
 depends_on: ["CORE-060", "CORE-080"]
 adrs: ["0004", "0006", "0007", "0008", "0009", "0010", "0012", "0013"]
 ---
@@ -14,6 +14,18 @@ the admin key is gone; credentials are three independent Secret keys
 worker API key derives from `worker-seed`, not a management credential
 (ADR 0006 §4, amended in place). Neither derivation nor the RBAC shape
 (ADR 0004 §3) is re-argued here.
+
+update-2 (2026-11-10): the premise above is now false. `internal/auth`, the
+worker-key derivation, SSH host-key pinning, the RBAC Role shape, and the
+per-surface rate limits all shipped and are tested, via
+CORE-055/060/050/070/080. This spec's remaining scope was the shared
+`obstest.AssertNoSecret` helper (AC2, R13), `scripts/check-rbac.sh` (AC8),
+the AC13 rotation test, and this document. The spec's `Loader`/
+`Verify(presented string) (Surface, bool)` names below are historical; the
+shipped names are `auth.Keys` and
+`Check(authorization string, want Surface) (keyID string, err error)` —
+treat every reference to `Loader`/`Verify` in this document as referring to
+`Keys`/`Check`.
 
 **Complexity:** M
 **Risk:** medium — a wrong rotation runbook or a missed log call leaks a
@@ -259,6 +271,22 @@ CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `
 
 ## Tests / acceptance criteria
 
+| AC | Status | Evidence |
+|---|---|---|
+| AC1 | pass | `for i in $(seq 1 20); do make keygen; done \| grep -cE '^sk-vkllm-[A-Za-z0-9_-]{43}$'` → `20`, all 20 outputs matched (verified 2026-11-10) |
+| AC2 | pass | `internal/obs/obstest.AssertNoSecret` (df102c7); wired into every package holding a secret (76663d2, ea1c4ee) |
+| AC3 | pass | `internal/auth/keys_test.go:TestRunReloadsEvery10sAndKeepsOldSetsOnFailure` |
+| AC4 | pass | `internal/gateway/middleware_test.go:TestAuthMatrixV1`, `internal/mgmt/middleware_test.go:TestAuthMatrix` |
+| AC5 | pass | `internal/worker/key_test.go:TestWorkerKey`, `TestWorkerKeyDiffersByGeneration` |
+| AC6 | unchecked | needs a real kind cluster run; no kind target exists in `Makefile`/`scripts/` (user decision 2026-11-10: not built as part of this plan) |
+| AC7 | pass | `internal/controller/sim_test.go:TestAC26_SSRFBoundaryAndHostKey` |
+| AC8 | pass | `scripts/check-rbac.sh` (b09b6e6) |
+| AC9 | pass | `git grep -n "serviceaccount/token" -- '*.go'` shows the only read is `internal/store/configmap/client.go:41`; no other file constructs an `Authorization: Bearer` header from the service-account token |
+| AC10 | pass | `internal/gateway/bodylimit_test.go:TestBodyLimit413`, `TestBodyLimit413OnChatRoute`; `internal/gateway/chat_test.go`'s max_tokens clamp table; `internal/mgmt/middleware_test.go:TestRateLimit`; `internal/gateway/ratelimit_test.go` |
+| AC11 | pass | `git grep -InE 'sk-vkllm-[A-Za-z0-9_-]{43}\|-----BEGIN (OPENSSH\|RSA\|EC) PRIVATE KEY-----' -- . ':!specs/**/spec.md'` returns no match today |
+| AC12 | unchecked | needs a real kind cluster run; no kind target exists in `Makefile`/`scripts/` (same reason as AC6) |
+| AC13 | pass | `test: AC13 — removing one management token leaves the other valid` (f39c299) |
+
 - AC1. `make keygen` output matches `^sk-vkllm-[A-Za-z0-9_-]{43}$` on 20 runs. (R1)
 - AC2. A log buffer containing the literal client key fails `AssertNoSecret`; the same buffer with only the 8-character key id passes. (R2, R13)
 - AC3. Setup: a mounted `client-keys` file is rewritten in place (simulating a Secret volume update). Action: wait 10 s. Expected: the next auth check accepts the new key and rejects the removed one, with no process restart. (R3)
@@ -275,11 +303,16 @@ CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `
 
 ## Definition of done
 
-- [ ] AC1–AC13 pass in CI or on kind as marked; `make specs-check` passes.
+- [x] AC1, AC3, AC4, AC5, AC7, AC9, AC10, AC11 pass (see Evidence).
+- [x] AC2, AC8, AC13 pass — closed this round (see Evidence).
+- [ ] AC6, AC12 need a real kind cluster run — no kind harness exists in
+      this repo; left unchecked until one is built.
 - [ ] Threat model table reviewed with the user; no row without a control.
-- [ ] Runbook A and B executed once on kind; runbook C and E dry-run executed once on kind; outputs recorded in Evidence.
-- [ ] Status flipped to DONE in the same pull request, folder renamed to `110-D-security-and-secrets`.
-- [ ] Evidence section filled.
+- [ ] Runbook A and B executed once on kind; runbook C and E dry-run
+      executed once on kind; outputs recorded in Evidence. — blocked on
+      the same missing kind harness as AC6/AC12.
+- [ ] Status flipped to DONE — NOT done this round: the DoD above gates
+      DONE on a kind run that didn't happen. Folder stays `110-P`.
 
 ## Open questions
 
@@ -292,4 +325,12 @@ CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `
 
 ## Evidence
 
-None yet.
+AC1: manually run 2026-11-10 — `for i in $(seq 1 20); do make keygen; done | grep -cE '^sk-vkllm-[A-Za-z0-9_-]{43}$'` printed `20`; all 20 `make keygen` outputs matched the regex.
+
+AC9: `git grep -n "serviceaccount/token" -- '*.go'` (run 2026-11-10) shows the only read is `internal/store/configmap/client.go:41`; no other file builds an `Authorization: Bearer` header from the service-account token.
+
+AC11: `git grep -InE 'sk-vkllm-[A-Za-z0-9_-]{43}|-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----' -- . ':!specs/**/spec.md'` (run 2026-11-10) returned no match.
+
+This round's remaining ACs closed by commit: `df102c7` (feat: add `internal/obs/obstest.AssertNoSecret`, AC2); `76663d2`..`ea1c4ee` (test: wire `AssertNoSecret` into every package holding a secret in memory, R13; `ea1c4ee` is a same-round fix that dropped a dead assertion and trimmed comments); `b09b6e6` (ci: add `scripts/check-rbac.sh`, AC8); `f39c299` (test: AC13 — removing one management token leaves the other valid).
+
+AC6 and AC12 are not evidenced: no kind cluster harness exists in this repo (`Makefile`/`scripts/` have no kind target), and building one was ruled out of scope for this round (user decision 2026-11-10). Runbook D and runbook E's console steps 3 and 6 are likewise not evidenced: they need a real Vast.ai account, which this codebase does not exercise.
