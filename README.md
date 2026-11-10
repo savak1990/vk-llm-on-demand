@@ -20,8 +20,8 @@ vk-llm stop       # release the GPU now (otherwise: 30 min after the last infere
 
 ## Status
 
-The control plane works now. Its code is merged to `main`. These parts
-are done:
+The code for the control plane is merged to `main`. These parts are
+done:
 
 - The GPU lifecycle controller
 - The OpenAI-compatible gateway
@@ -74,8 +74,8 @@ deployment target. The Helm chart does not depend on it.
 
 ## How to use
 
-1. Install the Helm chart (see "Intended install" below).
-2. Create the necessary secrets in the cluster (see "Intended install").
+1. Create the necessary secrets in the cluster (see "Intended install").
+2. Install the Helm chart (see "Intended install" below).
 3. Run `vk-llm start`. Wait for the `READY` state.
 4. Configure any OpenAI-compatible client with the base URL
    `https://llm.<fqdn>/v1`.
