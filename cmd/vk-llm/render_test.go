@@ -6,7 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// Pinned to a non-UTC offset so the goldens only pass if renderStatus
+// actually converts to local time, not because local happens to equal UTC.
+func TestMain(m *testing.M) {
+	time.Local = time.FixedZone("TEST", 3600)
+	os.Exit(m.Run())
+}
 
 func parseStatusDoc(t *testing.T, jsonStr string) statusDoc {
 	var doc statusDoc
@@ -27,7 +35,7 @@ func TestStatusGolden(t *testing.T) {
 				"provider": "vast.ai",
 				"state": "STOPPED",
 				"instance": null,
-				"model": {"alias": "", "contextSize": 0},
+				"model": {"alias": "qwen-35b", "contextSize": 32768},
 				"ready": false,
 				"uptimeSeconds": 0,
 				"lastInferenceFinishedAt": null,
@@ -105,13 +113,57 @@ func TestStatusGolden(t *testing.T) {
 				"provider": "vast.ai",
 				"state": "STOPPED",
 				"instance": null,
-				"model": {"alias": "", "contextSize": 0},
+				"model": {"alias": "qwen-35b", "contextSize": 32768},
 				"ready": false,
 				"uptimeSeconds": 0,
 				"lastInferenceFinishedAt": null,
 				"secondsUntilIdleShutdown": null,
 				"cost": {"estimatedInstanceUSD": 0, "estimatedMonthUSD": 0, "budgetMonthUSD": 30},
 				"unavailable": "no_offer"
+			}`),
+		},
+		{
+			"desired_match",
+			parseStatusDoc(t, `{
+				"provider": "vast.ai",
+				"state": "READY",
+				"desired": "RUNNING",
+				"instance": {
+					"gpu": "RTX 4090",
+					"machineId": 12345,
+					"priceUSDPerHour": 0.71,
+					"createdAt": "2026-11-11T10:30:00Z",
+					"readyAt": "2026-11-11T10:30:00Z"
+				},
+				"model": {"alias": "qwen-35b", "contextSize": 32768},
+				"ready": true,
+				"uptimeSeconds": 1830,
+				"lastInferenceFinishedAt": "2026-11-11T10:25:00Z",
+				"secondsUntilIdleShutdown": 1800,
+				"cost": {"estimatedInstanceUSD": 0.5, "estimatedMonthUSD": 10, "budgetMonthUSD": 30},
+				"unavailable": ""
+			}`),
+		},
+		{
+			"desired_mismatch",
+			parseStatusDoc(t, `{
+				"provider": "vast.ai",
+				"state": "ALLOCATING",
+				"desired": "STOPPED",
+				"instance": {
+					"gpu": "RTX 4090",
+					"machineId": 12345,
+					"priceUSDPerHour": 0.71,
+					"createdAt": "2026-11-11T10:30:00Z",
+					"readyAt": null
+				},
+				"model": {"alias": "qwen-35b", "contextSize": 32768},
+				"ready": false,
+				"uptimeSeconds": 0,
+				"lastInferenceFinishedAt": null,
+				"secondsUntilIdleShutdown": null,
+				"cost": {"estimatedInstanceUSD": 0, "estimatedMonthUSD": 0, "budgetMonthUSD": 30},
+				"unavailable": ""
 			}`),
 		},
 	}
