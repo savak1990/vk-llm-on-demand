@@ -41,6 +41,7 @@ jobs:
             helm:
               - 'deploy/helm/**'
               - 'test/kind/**'
+              - 'scripts/check-rbac.sh'
             workflows:
               - '.github/**'
             cli:
@@ -141,6 +142,8 @@ jobs:
           sudo mv kubeconform /usr/local/bin/kubeconform
 
       - run: make helm-lint
+
+      - run: make helm-rbac-check
 
       - name: Render and validate the chart
         run: |

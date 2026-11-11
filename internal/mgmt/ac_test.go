@@ -15,6 +15,7 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/auth"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs/obstest"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 )
 
@@ -215,13 +216,11 @@ func TestAC12_RedactionAcrossAllRoutes(t *testing.T) {
 		t.Fatal("no response body rendered the instance block; the leak checks below would be vacuous")
 	}
 
+	obstest.AssertNoSecret(t, logs.Bytes(), "sk-vkllm-mgmttoken1", "sk-vkllm-clientkey1", "sk-vkllm-REPLACE_ME")
 	text := logs.String()
-	for _, secret := range []string{
-		"sk-vkllm-mgmttoken1", "sk-vkllm-clientkey1", "sk-vkllm-REPLACE_ME", "Bearer ",
-		"Estimates only", `{"force"`,
-	} {
-		if strings.Contains(text, secret) {
-			t.Fatalf("log output contains a secret or body value %q", secret)
+	for _, leak := range []string{"Bearer ", "Estimates only", `{"force"`} {
+		if strings.Contains(text, leak) {
+			t.Fatalf("log output contains a body/header value %q", leak)
 		}
 	}
 	for _, body := range bodies {

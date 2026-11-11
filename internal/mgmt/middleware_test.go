@@ -2,6 +2,7 @@ package mgmt
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -246,6 +247,50 @@ func TestRejectedRequestsAreObserved(t *testing.T) {
 				t.Fatalf("log line key_id = %q, want empty=%v", entry.KeyID, tc.wantKeyIDEmpty)
 			}
 		})
+	}
+}
+
+// TestAC13_RotatingOneManagementTokenKeepsTheOther proves removing one
+// management token from the file, after a reload, leaves the other valid.
+func TestAC13_RotatingOneManagementTokenKeepsTheOther(t *testing.T) {
+	dir := t.TempDir()
+	clientPath := writeKeyFile(t, dir, "client-keys", "sk-vkllm-clientkey1")
+	mgmtPath := writeKeyFile(t, dir, "management-tokens",
+		"sk-vkllm-mgmttoken1", "sk-vkllm-mgmttoken2")
+	clk := fakeclock.New(time.Unix(0, 0))
+	keys, err := auth.Load(clientPath, mgmtPath, clk, noopLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc := newFakeController()
+	fc.statusSnap = controller.Snapshot{Public: "READY"}
+	h, _ := newFullServer(t, fc, keys, clk, 60)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go keys.Run(ctx)
+	clk.BlockUntil(1)
+
+	// Remove mgmttoken2's line, keeping mgmttoken1 — a Secret-volume
+	// file rewrite, the same shape as the rotation runbook's last step.
+	writeKeyFile(t, dir, "management-tokens", "sk-vkllm-mgmttoken1")
+	clk.Advance(10 * time.Second)
+	clk.BlockUntil(1)
+
+	req := httptest.NewRequest("GET", "/api/v1/gpu/status", nil)
+	req.Header.Set("Authorization", "Bearer sk-vkllm-mgmttoken1")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("remaining token: code = %d, want 200", rec.Code)
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/v1/gpu/status", nil)
+	req2.Header.Set("Authorization", "Bearer sk-vkllm-mgmttoken2")
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != 401 {
+		t.Fatalf("removed token: code = %d, want 401", rec2.Code)
 	}
 }
 

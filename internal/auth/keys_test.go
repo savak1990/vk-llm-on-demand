@@ -13,6 +13,7 @@ import (
 	"time"
 
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
+	"github.com/savak1990/vk-llm-on-demand/internal/obs/obstest"
 )
 
 func noopLogger() *slog.Logger {
@@ -137,6 +138,39 @@ func TestRunReloadsEvery10sAndKeepsOldSetsOnFailure(t *testing.T) {
 	if !containsMsg(buf, "keys_reload_failed") {
 		t.Fatal("want a keys_reload_failed log line after the bad reload")
 	}
+}
+
+// TestKeysNeverLogLiteralValue proves a key's literal value never
+// reaches the log output, including during a failed Run reload.
+func TestKeysNeverLogLiteralValue(t *testing.T) {
+	dir := t.TempDir()
+	clientPath := writeKeyFile(t, dir, "client-keys", "sk-vkllm-clientkey1")
+	mgmtPath := writeKeyFile(t, dir, "management-tokens", "sk-vkllm-mgmttoken1")
+	clk := fakeclock.New(time.Unix(0, 0))
+	buf, log := captureLogs()
+	k, err := Load(clientPath, mgmtPath, clk, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Check("Bearer sk-vkllm-clientkey1", Inference); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.Check("Bearer sk-vkllm-unknownkey", Management); !errors.Is(err, ErrUnknown) {
+		t.Fatalf("got %v, want ErrUnknown", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go k.Run(ctx)
+	clk.BlockUntil(1)
+	writeKeyFile(t, dir, "management-tokens", "sk-vkllm-mgmttoken1", "sk-vkllm-clientkey1")
+	clk.Advance(10 * time.Second)
+	clk.BlockUntil(1)
+
+	if !containsMsg(buf, "keys_reload_failed") {
+		t.Fatal("want a keys_reload_failed log line; the leak check below would be vacuous")
+	}
+	obstest.AssertNoSecret(t, buf.Bytes(), "sk-vkllm-clientkey1", "sk-vkllm-mgmttoken1", "sk-vkllm-unknownkey")
 }
 
 func TestKeyIDExactlyEightChars(t *testing.T) {
