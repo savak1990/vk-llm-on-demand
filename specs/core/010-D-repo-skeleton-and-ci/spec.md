@@ -76,7 +76,7 @@ No `require` lines yet: nothing imports beyond the standard library and `interna
 | `golang.org/x/crypto` (package `ssh`) | pre-approved, not yet imported | `internal/tunnel` (ADR 0006, spec 050) |
 | `github.com/prometheus/client_golang` | pre-approved, not yet imported | `internal/obs` (spec 090) |
 | `github.com/prometheus/common` (package `expfmt`) | pre-approved, not yet imported | `internal/worker` (spec 070) |
-| `gopkg.in/yaml.v3` | pre-approved, not yet imported; reason: CLI config file | `cmd/vk-llm` (ADR 0012 §4, spec 150) |
+| `gopkg.in/yaml.v3` | imported | `cmd/vk-llm` (ADR 0012 §4, spec 150) |
 | `k8s.io/client-go` | forbidden | never (ADR 0004 §3) |
 | any Postgres driver (e.g. `pgx`) | forbidden | never (ADR 0004 superseded Postgres) |
 | any migration tool (e.g. `goose`) | forbidden | never (ADR 0004 §5) |
