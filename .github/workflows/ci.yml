@@ -143,8 +143,7 @@ jobs:
 
       - run: make helm-lint
 
-      - name: Check RBAC Role shape
-        run: ./scripts/check-rbac.sh
+      - run: make helm-rbac-check
 
       - name: Render and validate the chart
         run: |

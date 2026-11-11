@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
-# Asserts the rendered Role matches the exact expected rule shape and that
-# no ClusterRole/ClusterRoleBinding is rendered anywhere in the chart.
+# Reads rendered chart YAML on stdin; asserts the Role matches the exact
+# expected rule shape and that no ClusterRole/ClusterRoleBinding is present.
 set -euo pipefail
-cd "$(dirname "$0")/.."
 
 command -v yq >/dev/null || { echo "check-rbac: yq is not installed." >&2; exit 1; }
 command -v jq >/dev/null || { echo "check-rbac: jq is not installed." >&2; exit 1; }
 
-if [[ -p /dev/stdin ]]; then
-  rendered=$(cat)
-else
-  rendered=$(make -s helm-template)
-fi
+rendered=$(cat)
 
 expected='[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["release-name-state"],"verbs":["get","update"]}]'
 

@@ -14,7 +14,7 @@ VERSION ?= $(shell ./scripts/version.sh base)
 IMAGE_TAG ?= $(shell git rev-parse HEAD)
 IMAGE ?= ghcr.io/savak1990/vk-llm-on-demand/$(SVC):$(IMAGE_TAG)
 
-.PHONY: go-build go-test go-lint lint-worker-script test-worker-script test-worker-image require-svc image-build image-push helm-lint helm-template helm-package helm-push version release buildx-init keygen repo-settings
+.PHONY: go-build go-test go-lint lint-worker-script test-worker-script test-worker-image require-svc image-build image-push helm-lint helm-template helm-rbac-check helm-package helm-push version release buildx-init keygen repo-settings
 
 go-build: ## Build every cmd/ binary into bin/
 	go build -o bin/ ./cmd/...
@@ -56,6 +56,22 @@ helm-lint: ## Lint the deploy/helm/<CHART> chart
 
 helm-template: ## Render the deploy/helm/<CHART> chart
 	helm template deploy/helm/$(CHART) $(HELM_TEST_SET)
+
+helm-rbac-check: ## Assert the RBAC Role never widens past get/update, on the real chart and a rejected fixture (AC8)
+	$(MAKE) -s helm-template | ./scripts/check-rbac.sh
+	@if printf '%s\n' \
+	    'apiVersion: rbac.authorization.k8s.io/v1' \
+	    'kind: Role' \
+	    'metadata: {name: widened}' \
+	    'rules:' \
+	    '- apiGroups: [""]' \
+	    '  resources: ["configmaps"]' \
+	    '  resourceNames: ["x"]' \
+	    '  verbs: ["get","patch","update"]' \
+	  | ./scripts/check-rbac.sh >/dev/null 2>&1; then \
+	    echo "helm-rbac-check: a fixture Role with patch should have been rejected" >&2; \
+	    exit 1; \
+	  fi
 
 helm-package: ## Package the chart at VERSION into dist/
 	helm package deploy/helm/$(CHART) --version $(VERSION) --app-version $(VERSION) -d dist/
