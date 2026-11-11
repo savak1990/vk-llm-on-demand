@@ -280,7 +280,7 @@ CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `
 | AC5 | pass | `internal/worker/key_test.go:TestWorkerKey`, `TestWorkerKeyDiffersByGeneration` (clauses a, b); the "never in the store document" clause is by inspection of `internal/store/document.go` (no worker-key field) — no dedicated test |
 | AC6 | unchecked | needs a real kind cluster run; no kind target exists in `Makefile`/`scripts/` (user decision 2026-11-10: not built as part of this plan) |
 | AC7 | pass | `internal/controller/sim_test.go:TestAC26_SSRFBoundaryAndHostKey` |
-| AC8 | pass | `scripts/check-rbac.sh` (b09b6e6) |
+| AC8 | pass | `scripts/check-rbac.sh` + `make helm-rbac-check` (b09b6e6, 482e4cb); real `ci.yml` `helm` job run [43051585670](https://github.com/savak1990/vk-llm-on-demand/actions/runs/43051585670/job/130669828765), conclusion success |
 | AC9 | pass | `git grep -n "serviceaccount/token" -- '*.go'` shows the only read is `internal/store/configmap/client.go:41`; no other file constructs an `Authorization: Bearer` header from the service-account token |
 | AC10 | pass | `internal/gateway/bodylimit_test.go:TestBodyLimit413`, `TestBodyLimit413OnChatRoute`; `internal/gateway/chat_test.go`'s max_tokens clamp table; `internal/mgmt/middleware_test.go:TestRateLimit`; `internal/gateway/ratelimit_test.go` |
 | AC11 | pass | `git grep -InE 'sk-vkllm-[A-Za-z0-9_-]{43}\|-----BEGIN (OPENSSH\|RSA\|EC) PRIVATE KEY-----' -- . ':!specs/**/spec.md'` returns no match today |
@@ -332,5 +332,7 @@ AC9: `git grep -n "serviceaccount/token" -- '*.go'` (run 2026-11-10) shows the o
 AC11: `git grep -InE 'sk-vkllm-[A-Za-z0-9_-]{43}|-----BEGIN (OPENSSH|RSA|EC) PRIVATE KEY-----' -- . ':!specs/**/spec.md'` (run 2026-11-10) returned no match.
 
 This round's remaining ACs closed by commit: `df102c7` (feat: add `internal/obs/obstest.AssertNoSecret`, AC2); `76663d2`..`ea1c4ee` (test: wire `AssertNoSecret` into every package holding a secret in memory, R13; `ea1c4ee` is a same-round fix that dropped a dead assertion and trimmed comments); `b09b6e6` (ci: add `scripts/check-rbac.sh`, AC8); `f39c299` (test: AC13 — removing one management token leaves the other valid).
+
+PR #24's first `ci.yml` run failed `helm`: `scripts/check-rbac.sh`'s stdin-detection heuristic (`[[ -p /dev/stdin ]]`) misread GitHub Actions' `run:` step stdin as piped data, so it compared against an empty render. Fixed in `482e4cb` by always reading stdin (matching AC8's own wording) and adding a `make helm-rbac-check` target that pipes the real chart in and asserts a widened fixture is rejected, closing AC8's negative case for real. The same run's `worker-script` job failed 4 times in a row on a Docker build step unable to resolve `archive.ubuntu.com` — confirmed unrelated to this branch (the identical job passed on this same branch the day before) and cleared on the 5th rerun; no code change associated with it.
 
 AC6 and AC12 are not evidenced: no kind cluster harness exists in this repo (`Makefile`/`scripts/` have no kind target), and building one was ruled out of scope for this round (user decision 2026-11-10). Runbook D and runbook E's console steps 3 and 6 are likewise not evidenced: they need a real Vast.ai account, which this codebase does not exercise.
