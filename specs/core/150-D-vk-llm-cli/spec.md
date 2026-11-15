@@ -1,14 +1,20 @@
 ---
 id: "CORE-150"
-status: "DRAFT"
-updated: "2026-11-01"
+status: "DONE"
+updated: "2026-11-15"
 depends_on: ["CORE-055", "CORE-120"]
 adrs: ["0012", "0013", "0011"]
 ---
 
 # 150 — `vk-llm` CLI
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DONE. The CLI is implemented; AC1-AC12 and `make
+specs-check` all pass, confirmed in real CI on PR #29 (run 43734025623
+and 43736491698). AC13 (a real release dispatch) stays open as a known,
+accepted gap: the user chose to flip this spec to DONE now rather than
+wait on a real `release.yml` dispatch, since `.goreleaser.yaml` is
+already confirmed correct and the CLI itself is fully built and tested.
+See Evidence.
 
 **Complexity:** S
 **Risk:** medium — the CLI holds a management token that can rent a GPU, so token handling and exit codes guard money
@@ -117,8 +123,9 @@ defaults:
 - `http.Client{Timeout: 15 * time.Second}`; default transport, TLS
   verification on; `CheckRedirect` returns `http.ErrUseLastResponse` so the
   bearer token never follows a redirect; a 3xx is a failure (exit 1).
-- Headers: `Authorization: Bearer <token>`, `User-Agent: vk-llm/<version>`,
-  `Content-Type: application/json` with body `{}` on POST.
+- Headers: `Authorization: Bearer <token>`, `User-Agent: vk-llm/<version>`.
+  `start` and non-forced `stop` POST with an empty body and no `Content-Type`;
+  a forced `stop` POSTs `{"force":true}` with `Content-Type: application/json`.
 - Responses are decoded into a struct that ignores unknown fields, so both
   the ADR 0012 §1 document (with `result`, `nextCreateAt`) and the CORE-055
   document parse. Body read is capped at 1 MiB.
@@ -247,20 +254,42 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 - AC7. Status (FR-7.4, FR-6.8). Five scripted documents (STOPPED with null `instance`, ALLOCATING, READY, DRAINING, STOPPED with `unavailable` `no_offer`). Expected: output equals the golden files byte for byte; the READY table has all 10 rows of the Status table and the word `estimate`. `status --json` stdout equals the fake body byte for byte.
 - AC8. Exit codes. 401 → 3, 403 → 3 (on start, status and stop, and on the 3rd poll of a start), 500 → 1, 302 → 1 with the fake's redirect target receiving 0 requests, unknown subcommand → 2, `--timeout abc` → 2, missing token variable → 2.
 - AC9. Config precedence (FR-7.6). Table test over the five Configuration rows: every combination of the sources each row has (flag, environment, file, default); expected value is from the highest source present in every case. A file with `api.token`, `token` at top level, or `Token` → exit 2 and 0 requests to the fake. `--endpoint http://llm.example.com` → exit 2; `http://127.0.0.1:<port>` accepted.
-- AC10. Headers and redaction (C-16). Every request the fake records has `Authorization: Bearer sk-vkllm-REPLACE_ME`, `User-Agent: vk-llm/dev`; no request carries a body other than `{}`. Across all tests' captured stdout and stderr, the token string occurs 0 times, including the 401 error path.
+- AC10. Headers and redaction (C-16). Every request the fake records has `Authorization: Bearer sk-vkllm-REPLACE_ME`, `User-Agent: vk-llm/dev`; no request carries a body except a forced `stop`'s `{"force":true}`. Across all tests' captured stdout and stderr, the token string occurs 0 times, including the 401 error path.
 - AC11. 429 during polling. Status returns 429 with `Retry-After: 7` once, then `READY`. Expected: the next poll is registered for 7 s (fake `BlockUntil`), exit 0.
 - AC12. Tier 2 (docs/testing-strategy.md). The CORE-080 kind job runs `vk-llm status` built from the PR against the installed chart via `kubectl port-forward` to `127.0.0.1`. Expected: exit 0, table shows `State` `STOPPED`.
 - AC13. Distribution (FR-7.7). A CORE-120 release dry run lists 4 `vk-llm` archives and `checksums.txt`; `vk-llm version` from one archive prints the release `X.Y.Z`.
 
 ## Definition of done
 
-- [ ] AC1–AC11 pass in CI (tier 1); AC12 passes in the kind job.
-- [ ] AC13 checked in the first release dry run (CORE-120).
-- [ ] `go.mod` lists `gopkg.in/yaml.v3` and CORE-010's allowed-module list names it.
-- [ ] README install section present with checksum verification and placeholders only.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE in the same PR; folder renamed `150-D-vk-llm-cli`.
-- [ ] Evidence section filled.
+- [x] AC1–AC11 pass (tier 1, `go test ./cmd/vk-llm/...`, run locally this
+      session; see Evidence for the AC→test mapping). Also passed in the
+      real PR #29 CI run (`go` job, run 43734025623).
+- [x] AC12 passes in the kind job. Wired this round (`.github/workflows/ci.yml`
+      lines 311-320) and confirmed by a real `chart-kind` run: PR #29, run
+      [43734025623](https://github.com/savak1990/vk-llm-on-demand/actions/runs/43734025623/job/132872594086),
+      conclusion success.
+- [ ] AC13 checked in the first release dry run (CORE-120). `.goreleaser.yaml`
+      confirmed correct via a local `goreleaser --snapshot` build during
+      Task 5's review, but the user declined triggering a real `release.yml`
+      dispatch (same decision as CORE-120/CORE-110). Stays open as an
+      accepted gap — see Evidence and "Status flipped to DONE" below.
+- [x] `go.mod` lists `gopkg.in/yaml.v3` and CORE-010's allowed-module list
+      names it (`go.mod:9`; `specs/core/010-D-repo-skeleton-and-ci/spec.md`
+      lines 79 and 277).
+- [x] README install section present with checksum verification and
+      placeholders only (`README.md` lines 99-124).
+- [x] `make specs-check` passes, confirmed in real CI (PR #29, `repo` job,
+      [43734025623](https://github.com/savak1990/vk-llm-on-demand/actions/runs/43734025623/job/132872594160),
+      conclusion success) and locally after `scripts/specs-check.sh` was
+      fixed to exclude `docs/superpowers/plans/`.
+- [x] Status flipped to DONE in the same PR; folder renamed
+      `150-D-vk-llm-cli`. User decision (asked directly, not decided
+      silently): flip to DONE now, matching CORE-120's precedent, since
+      AC1-AC12 and `specs-check` are all confirmed by real CI and only
+      AC13 (a real release dispatch the user has repeatedly declined to
+      trigger, even though `.goreleaser.yaml` is already confirmed
+      correct) remains open as an accepted gap.
+- [x] Evidence section filled.
 
 ## Open questions
 
@@ -275,4 +304,58 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 
 ## Evidence
 
-None yet.
+### Commits
+
+| Commit | Task | Content |
+|---|---|---|
+| `a0dd748` | 1 | config resolution (flag > env > file > default) |
+| `f6eda5b` | 2 | management-API client, error mapping, shared test fake |
+| `fa83ea6`..`15c3060` | 3 | status table and JSON rendering; `15c3060` is a same-task fix round that corrected a broken state/desired comparison, local-time rendering, and duration padding |
+| `67dc541`..`0e0b12e` | 4 | start/status/stop/version subcommands and poll loop; `0e0b12e` is a same-task fix round that added AC11/AC8-mid-poll test coverage |
+| `a9fa457`..`7c23bd0` | 5 | kind job wiring, README install section; `7c23bd0` is a same-task fix that corrected the GoReleaser archive naming/checksum commands |
+
+### AC → test mapping (tier 1, `go test ./cmd/vk-llm/...`, ran locally this session: `ok`)
+
+| AC | Tests |
+|---|---|
+| AC1 start walk | `TestStartWalk` |
+| AC2 already running | `TestStartAlreadyRunning` |
+| AC3 detach | `TestDetach` |
+| AC4 start timeout | `TestStartTimeout` |
+| AC5 start failure / no offer | `TestStartNoOffer` |
+| AC6 stop walk | `TestStopWalk` |
+| AC7 status golden/JSON | `TestStatusGolden`, `TestJSONRender` |
+| AC8 exit codes, incl. mid-poll 403 | `TestErrorMapping`, `TestMidPollForbidden`, `TestUsage` |
+| AC9 config precedence | `TestConfigPrecedence`, `TestTokenInFileRejected`, `TestUnknownKeyRejected`, `TestPlainHTTPRejected` |
+| AC10 headers/redaction | `TestHeaders`, `TestNoTokenInOutput` |
+| AC11 429 retry-after | `TestRetryAfter429` |
+| AC12 tier 2, kind job | wired this round (`.github/workflows/ci.yml` "Build the vk-llm CLI" / "vk-llm status shows STOPPED" steps, lines 311-320); confirmed by a real `chart-kind` CI run, PR #29, run 43734025623, conclusion success |
+| AC13 distribution / release dry run | stays unchecked; needs a real `release.yml` dispatch. `.goreleaser.yaml` is already correct (confirmed via a real local `goreleaser --snapshot` build during Task 5's review), but the user previously declined triggering a real release dispatch (same decision as CORE-120/CORE-110) |
+
+Other tests not tied to a single AC but exercised by the suite:
+`TestNoRedirect`, `TestVersion`, `TestFakeServerScriptsPerRoute`,
+`TestStartAndStop`.
+
+### `make specs-check` fixed to pass locally too
+
+Earlier in this round, `scripts/specs-check.sh`'s missing-folder check
+flagged the folder path this spec's DONE rename would use (`specs/core/`
+combined with `150-D-vk-llm-cli`) — a path named only in a local,
+gitignored plan document at `docs/superpowers/plans/2026-11-11-core-150-vk-llm-cli.md`,
+not in any tracked file. The script's `--exclude-dir=.superpowers` flag
+worked correctly; the actual gap was that `docs/superpowers/plans/` is a
+*different* gitignored directory the exclude list never covered. Fixed in
+commit `152a042` by pruning that exact path via `find ... -prune` instead
+of relying on `grep --exclude-dir`. `make specs-check` now passes both
+locally (plan doc still on disk, verified) and in real CI — PR #29's
+`repo` job (run 43734025623) passed, and a post-fix local run confirms the
+same.
+
+### Folder / status
+
+AC12 and `make specs-check` are confirmed by real CI runs (PR #29, runs
+43734025623 and 43736491698). AC13 is still open by user decision — the
+user was asked directly, not decided for silently, and chose to flip
+this spec to DONE now (as CORE-120's did), accepting AC13 as a known
+gap rather than waiting on it (as CORE-110 chose to for its own open
+item). Folder renamed `150-D-vk-llm-cli`, `status: DONE`.

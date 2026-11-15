@@ -31,13 +31,13 @@ done:
 - The Helm chart
 - Observability
 - The release pipeline
+- The `vk-llm` CLI
 
 These parts are not yet done:
 
 - Security hardening
 - Platform wiring
 - End-to-end acceptance tests
-- The `vk-llm` CLI
 - Remote control from GitHub Actions
 - CI and release hardening
 - Persistent-volume caching
@@ -95,6 +95,41 @@ Secrets (Vast.ai API key, inference keys, management tokens, worker seed,
 the SSH key for the worker tunnel) are referenced by name from existing
 Kubernetes Secrets and never appear in `values.yaml`. This repository is
 public; see [`SECURITY.md`](SECURITY.md).
+
+## Install the CLI
+
+Find the version on the [releases
+page](https://github.com/savak1990/vk-llm-on-demand/releases), download the
+archive for your platform, verify it against `checksums.txt`, and put the
+`vk-llm` binary on your `PATH`.
+
+```bash
+# Linux, amd64 (use linux_arm64 on arm64) — VERSION is the release number, no "v"
+VERSION=0.3.0
+curl -LO https://github.com/savak1990/vk-llm-on-demand/releases/download/v${VERSION}/vk-llm_${VERSION}_linux_amd64.tar.gz
+curl -LO https://github.com/savak1990/vk-llm-on-demand/releases/download/v${VERSION}/checksums.txt
+grep " vk-llm_${VERSION}_linux_amd64.tar.gz\$" checksums.txt | sha256sum -c -
+tar -xzf vk-llm_${VERSION}_linux_amd64.tar.gz vk-llm
+sudo install -m 0755 vk-llm /usr/local/bin/vk-llm
+```
+
+```bash
+# macOS, arm64 (use darwin_amd64 on an Intel Mac)
+VERSION=0.3.0
+curl -LO https://github.com/savak1990/vk-llm-on-demand/releases/download/v${VERSION}/vk-llm_${VERSION}_darwin_arm64.tar.gz
+curl -LO https://github.com/savak1990/vk-llm-on-demand/releases/download/v${VERSION}/checksums.txt
+grep " vk-llm_${VERSION}_darwin_arm64.tar.gz\$" checksums.txt | shasum -a 256 -c -
+tar -xzf vk-llm_${VERSION}_darwin_arm64.tar.gz vk-llm
+sudo install -m 0755 vk-llm /usr/local/bin/vk-llm
+```
+
+Point it at your cluster's management API and a management token:
+
+```bash
+export VK_LLM_API_ENDPOINT=https://api.lab.example.com
+export VK_LLM_TOKEN=<your management token>
+vk-llm status
+```
 
 ## OpenCode
 

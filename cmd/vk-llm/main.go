@@ -2,10 +2,11 @@
 package main
 
 import (
-	"fmt"
 	"os"
+
+	"github.com/savak1990/vk-llm-on-demand/internal/clock"
 )
 
 func main() {
-	_, _ = fmt.Fprintln(os.Stdout, "vk-llm: no subcommands yet")
+	os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr, clock.Real{}))
 }

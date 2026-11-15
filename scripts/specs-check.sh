@@ -65,10 +65,12 @@ while IFS= read -r f; do
 done < <(find specs docs README.md CLAUDE.md -name '*.md')
 
 # A status change renames the folder, so every lettered path must still exist.
+# grep's --exclude-dir matches a directory name, not a multi-component path,
+# so the gitignored docs/superpowers/plans/ tree is pruned via find instead.
 while IFS= read -r p; do
   [[ -e "$p" ]] || err "path to a missing spec folder: $p"
-done < <(grep -rIohE 'specs/[a-z]+/[0-9]{3}(-[0-9]+)?-[DAPZ]-[a-z0-9-]+' . \
-  --exclude-dir=.git --exclude-dir=.claude --exclude-dir=.superpowers | sort -u)
+done < <(find . \( -path './.git' -o -path './.claude' -o -path './.superpowers' -o -path './docs/superpowers/plans' \) -prune -o -type f -print0 \
+  | xargs -0 grep -IohE 'specs/[a-z]+/[0-9]{3}(-[0-9]+)?-[DAPZ]-[a-z0-9-]+' 2>/dev/null | sort -u)
 
 if [[ $fail -eq 0 ]]; then echo "SPECS-CHECK: specs/ layout is valid."; fi
 exit $fail

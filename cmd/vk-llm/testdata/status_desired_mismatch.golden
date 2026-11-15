@@ -1,0 +1,10 @@
+Provider          vast.ai
+State             ALLOCATING (desired STOPPED)
+GPU               RTX 4090
+Model             qwen-35b (32768 tokens)
+Ready             no
+Price             $0.71/h
+Uptime            0s
+Est. cost         $0.00 this instance, $0.00 / $30.00 this month (estimate)
+Last inference    never
+Idle shutdown in  —

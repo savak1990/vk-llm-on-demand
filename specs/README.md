@@ -74,7 +74,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [120](core/120-D-release-pipeline/spec.md) | Publish, deploy and release workflows, OCI chart, GoReleaser CLI binaries | 010, 080 |
 | [130](core/130-P-platform-integration/spec.md) | Pointer Application and secrets path in `vk-lab-platform` | 080, 110, 120 |
 | [140](core/140-P-e2e-acceptance/spec.md) | Scripted acceptance run on a real GPU instance | 070, 080, 100, 150, 160 |
-| [150](core/150-P-vk-llm-cli/spec.md) | `vk-llm` CLI: start, status, stop | 055 |
+| [150](core/150-D-vk-llm-cli/spec.md) | `vk-llm` CLI: start, status, stop | 055 |
 | [160](core/160-P-github-actions-remote-control/spec.md) | `gpu-control.yml` manual workflow | 055 |
 | [170](core/170-P-security-ci-and-release/spec.md) | gitleaks, govulncheck, trivy, SECURITY.md, release checklist | 010, 120 |
 | [180](core/180-P-persistent-volume-cache/spec.md) | P2: persistent-volume cache and preferred host (not in the initial release) | 020, 050 |
