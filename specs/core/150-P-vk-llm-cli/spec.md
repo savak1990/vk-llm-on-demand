@@ -271,8 +271,10 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
       lines 79 and 277).
 - [x] README install section present with checksum verification and
       placeholders only (`README.md` lines 99-124).
-- [ ] `make specs-check` passes. It fails for a pre-existing, repo-wide
-      reason unrelated to this branch's work; see Evidence.
+- [ ] `make specs-check` passes. It fails locally on this machine only
+      because of an untracked local planning file; `git grep` over tracked
+      files shows no trigger, so CI is expected to pass. Left unchecked
+      until a real CI run confirms it; see Evidence.
 - [ ] Status flipped to DONE in the same PR; folder renamed
       `150-D-vk-llm-cli`. Deferred: AC12 is not yet verified by a real CI
       run and AC13 is still open, so this spec stays `150-P` and DRAFT.
@@ -327,20 +329,24 @@ Other tests not tied to a single AC but exercised by the suite:
 `TestNoRedirect`, `TestVersion`, `TestFakeServerScriptsPerRoute`,
 `TestStartAndStop`.
 
-### Known pre-existing issue: `make specs-check`
+### `make specs-check` locally red, expected green in CI
 
-`make specs-check` fails repo-wide, reporting a missing path for the
-folder this spec's own Definition of Done names as its eventual rename
-target. The script's link-checker (`scripts/specs-check.sh`) treats any
-spec-folder-shaped path it finds anywhere in the repo as a reference to
-validate on disk; this spec's Definition of Done names the folder it
-would be renamed to, and the checker flags that name as missing because
-the rename has not happened. This is not specific to this branch: the
-identical pattern exists unchanged in spec 130 (platform integration),
-spec 160 (GitHub Actions remote control), and spec 180 (persistent-volume
-cache) — none touched by this branch — and was confirmed present on
-`main` before this branch started. It is a pre-existing, repo-wide quirk,
-not something to fix in this spec's closeout.
+`make specs-check` fails on this machine, reporting the folder path this
+spec's Definition of Done names as its eventual rename target (the
+160-D/180-D form) as a missing spec folder. The script's link-checker
+(`scripts/specs-check.sh`) scans every file under the repo root for a
+spec-folder-shaped path and checks it exists on disk. The only place that
+literal path appears is this session's local, untracked planning file
+under `.superpowers/` (gitignored, confirmed via `git check-ignore -v
+.superpowers` and `git ls-files .superpowers` returning nothing) — the
+script's own `--exclude-dir=.superpowers` does not reliably filter it out
+on this machine. `git grep` over tracked files for the same pattern turns
+up no match tied to this spec's number, and no match for spec 130, 160 or
+180's Definition-of-Done text either (their checklist prose lacks the
+`specs/core/` prefix the checker's regex requires, so it was never
+actually a trigger for them despite the superficially similar wording).
+Since CI checks out tracked files only, `make specs-check` is expected to
+pass there; this line stays unchecked until a real CI run confirms it.
 
 ### Folder / status
 
