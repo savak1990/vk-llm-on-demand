@@ -1,6 +1,6 @@
 ---
 id: "CORE-160"
-status: "DRAFT"
+status: "DONE"
 updated: "2026-11-15"
 depends_on: ["CORE-055"]
 adrs: ["0012", "0011", "0013"]
@@ -8,9 +8,12 @@ adrs: ["0012", "0011", "0013"]
 
 # 160 — GitHub Actions remote control
 
-**Status note:** DRAFT. Written 2026-11-01; implemented afterwards on this
-branch. The Design section below matches the implemented script; status
-moves to DONE only after a green CI run.
+**Status note:** DONE. Written 2026-11-01, implemented and reviewed on a
+feature branch, confirmed green on a real GitHub Actions run (see
+Evidence). AC10's dynamic half (two real dispatches, one queuing behind
+the other) and the one real `start` dispatch against the platform stay
+open — both cost real money and need the user's explicit go-ahead, the
+same gap CORE-150 accepted for its own AC13.
 
 **Complexity:** S — one manually triggered workflow, `curl` and `jq`
 against an API CORE-055 already contracts; no new server-side behaviour.
@@ -270,12 +273,12 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 
 ## Definition of done
 
-- [ ] AC1–AC9 and AC11 pass in CI (tier 1/2). Each passes in
+- [x] AC1–AC9 and AC11 pass in CI (tier 1/2). Each passes in
       `go test ./test/gpucontrol/...`, confirmed in Tasks 1–3's reviews
-      (see Evidence for the AC→test mapping); the real GitHub Actions CI
-      run on a pushed branch is the next task's job, so this stays
-      unchecked until that run is green.
-- [ ] AC10's static half passes in CI; its manual half, and one real `ACTION=start` dispatch against the platform installation (FR-7.8's "acceptance run for start"), are recorded once in CORE-140's evidence. Static half confirmed in Task 3's review (`TestWorkflowShape`'s concurrency-block assertion — see Evidence); not yet confirmed by a real CI run. The manual half and the real dispatch are not done: a real dispatch costs money and needs the user's explicit go-ahead first, same gap CORE-150 left open for its own AC13.
+      (see Evidence for the AC→test mapping); confirmed green on a real
+      GitHub Actions run, PR #30, run 43751106948 (`go` and `workflows`
+      jobs both passed).
+- [ ] AC10's static half passes in CI; its manual half, and one real `ACTION=start` dispatch against the platform installation (FR-7.8's "acceptance run for start"), are recorded once in CORE-140's evidence. Static half confirmed green on the same real CI run (43751106948, `go` job, `TestWorkflowShape`'s concurrency-block assertion — see Evidence). The manual half and the real dispatch are not done: a real dispatch costs money and needs the user's explicit go-ahead first, same gap CORE-150 left open for its own AC13.
 - [x] `make specs-check` passes. Passed locally this session.
 - [x] `scripts/gpu-control.sh` is in CORE-010's shellcheck lint step;
       `.github/workflows/gpu-control.yml` is covered by the repo-wide
@@ -284,10 +287,10 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 - [x] Repository setup doc (secret, variable, access options) is
       published alongside the workflow (`README.md`, "Remote control from
       GitHub Actions").
-- [ ] Status flipped to DONE in the same PR; folder renamed
-      `160-D-github-actions-remote-control`. Not done here: this is the
-      user's call, made after the next task's real CI run is green, same
-      as CORE-150's precedent.
+- [x] Status flipped to DONE in the same PR; folder renamed
+      `160-D-github-actions-remote-control`. Done after the real CI run
+      above went green and the user confirmed, same as CORE-150's
+      precedent.
 - [x] Evidence section filled.
 
 ## Open questions
@@ -312,7 +315,7 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 | `0b209c9` | 2 | fix Task 2 review findings — comment length, mask assertion, shared error message |
 | `48d47bb` | 3 | `gpu-control.yml`, AC2 shape test, CI wiring |
 | `ee795f2` | 4 | README setup doc, spec Evidence and DoD |
-| final review fixes | review | https-only `ENDPOINT`, explicit 2xx check in `req`, TLS fake, `go` filter covers `gpu-control.yml`, summary line on failure |
+| `483a9e6` | review | https-only `ENDPOINT`, explicit 2xx check in `req`, TLS fake, `go` filter covers `gpu-control.yml`, summary line on failure |
 
 ### AC → test mapping (tier 1/2, `test/gpucontrol/`)
 
