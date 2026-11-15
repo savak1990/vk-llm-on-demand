@@ -81,7 +81,7 @@ poll_until() {
       local unavailable
       unavailable=$(jq -r '.unavailable // ""' <<<"$LAST_BODY")
       if [[ -n "$unavailable" ]]; then
-        echo "gpu-control: start failed: $unavailable" >&2
+        echo "gpu-control: stopped unexpectedly: $unavailable" >&2
         return 1
       fi
     fi

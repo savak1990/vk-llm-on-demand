@@ -50,11 +50,9 @@ func TestDeadlineUnchangedAcrossPolling(t *testing.T) {
 		}
 	}
 
-	// Both loops above only succeed if every call matched the fixed
-	// status/stop fixtures exactly 20 times total; a call to any
-	// unscripted route (a write) would already have failed via
-	// fake.handle's "unscripted call" check, so the passing runs above
-	// are themselves the proof that idleDeadline was never touched.
+	// Both loops only succeed if every call matched the fixed status/stop
+	// fixtures 20 times total; any call to an unscripted route would have
+	// already failed via fake.handle, so passing proves idleDeadline held.
 }
 
 func equalSlices(a, b []string) bool {

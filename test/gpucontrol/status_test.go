@@ -45,12 +45,14 @@ func TestEndpointMasked(t *testing.T) {
 	if r.exitCode != 1 {
 		t.Fatalf("exit %d, want 1; stderr: %s", r.exitCode, r.stderr)
 	}
-	combined := r.stdout + r.stderr
-	if !strings.HasPrefix(combined, "::add-mask::llm.lab.example.com") {
-		t.Errorf("expected ::add-mask:: as first output line, got: %s", combined)
+	if !strings.HasPrefix(r.stderr, "::add-mask::llm.lab.example.com") {
+		t.Errorf("expected ::add-mask:: as first line of stderr, got: %s", r.stderr)
 	}
-	rest := strings.TrimPrefix(combined, "::add-mask::llm.lab.example.com")
+	rest := strings.TrimPrefix(r.stderr, "::add-mask::llm.lab.example.com")
 	if strings.Contains(rest, "llm.lab.example.com") {
 		t.Errorf("hostname leaked unmasked after the mask line: %s", rest)
+	}
+	if strings.Contains(r.stdout, "llm.lab.example.com") {
+		t.Errorf("hostname leaked unmasked on stdout: %s", r.stdout)
 	}
 }
