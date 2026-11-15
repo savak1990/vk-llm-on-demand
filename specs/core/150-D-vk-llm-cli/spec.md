@@ -1,6 +1,6 @@
 ---
 id: "CORE-150"
-status: "DRAFT"
+status: "DONE"
 updated: "2026-11-15"
 depends_on: ["CORE-055", "CORE-120"]
 adrs: ["0012", "0013", "0011"]
@@ -8,11 +8,13 @@ adrs: ["0012", "0013", "0011"]
 
 # 150 — `vk-llm` CLI
 
-**Status note:** DRAFT. The CLI is implemented; AC1-AC12 and `make
-specs-check` all pass, confirmed in real CI on PR #29 (run 43734025623).
-AC13 (a real release dispatch) is still open by user decision. Stays
-DRAFT in `150-P-vk-llm-cli` pending the user's call on whether AC13's
-open state still permits closing. See Evidence.
+**Status note:** DONE. The CLI is implemented; AC1-AC12 and `make
+specs-check` all pass, confirmed in real CI on PR #29 (run 43734025623
+and 43736491698). AC13 (a real release dispatch) stays open as a known,
+accepted gap: the user chose to flip this spec to DONE now rather than
+wait on a real `release.yml` dispatch, since `.goreleaser.yaml` is
+already confirmed correct and the CLI itself is fully built and tested.
+See Evidence.
 
 **Complexity:** S
 **Risk:** medium — the CLI holds a management token that can rent a GPU, so token handling and exit codes guard money
@@ -269,25 +271,24 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 - [ ] AC13 checked in the first release dry run (CORE-120). `.goreleaser.yaml`
       confirmed correct via a local `goreleaser --snapshot` build during
       Task 5's review, but the user declined triggering a real `release.yml`
-      dispatch (same decision as CORE-120/CORE-110). Stays open.
+      dispatch (same decision as CORE-120/CORE-110). Stays open as an
+      accepted gap — see Evidence and "Status flipped to DONE" below.
 - [x] `go.mod` lists `gopkg.in/yaml.v3` and CORE-010's allowed-module list
       names it (`go.mod:9`; `specs/core/010-D-repo-skeleton-and-ci/spec.md`
       lines 79 and 277).
 - [x] README install section present with checksum verification and
       placeholders only (`README.md` lines 99-124).
-- [x] `make specs-check` passes in real CI (PR #29, `repo` job,
+- [x] `make specs-check` passes, confirmed in real CI (PR #29, `repo` job,
       [43734025623](https://github.com/savak1990/vk-llm-on-demand/actions/runs/43734025623/job/132872594160),
-      conclusion success). It still fails locally on this machine only
-      because of an untracked local planning file (confirmed by temporarily
-      moving it aside and re-running `make specs-check` clean); `git grep`
-      over tracked files shows no trigger.
-- [ ] Status flipped to DONE in the same PR; folder renamed
-      `150-D-vk-llm-cli`. AC12 and `specs-check` are now both confirmed by
-      real CI; AC13 is still open (user-declined release dispatch). This
-      spec stays `150-P` and DRAFT pending the user's call on whether
-      AC13's open state still permits closing (as with CORE-120) or should
-      keep this DRAFT (as with CORE-110) — asked directly, not decided
-      silently.
+      conclusion success) and locally after `scripts/specs-check.sh` was
+      fixed to exclude `docs/superpowers/plans/`.
+- [x] Status flipped to DONE in the same PR; folder renamed
+      `150-D-vk-llm-cli`. User decision (asked directly, not decided
+      silently): flip to DONE now, matching CORE-120's precedent, since
+      AC1-AC12 and `specs-check` are all confirmed by real CI and only
+      AC13 (a real release dispatch the user has repeatedly declined to
+      trigger, even though `.goreleaser.yaml` is already confirmed
+      correct) remains open as an accepted gap.
 - [x] Evidence section filled.
 
 ## Open questions
@@ -352,9 +353,9 @@ same.
 
 ### Folder / status
 
-AC12 and `make specs-check` are now confirmed by a real CI run (PR #29,
-run 43734025623). AC13 is still open by user decision. This spec stays
-in `150-P-vk-llm-cli` with `status: DRAFT` pending the user's call on
-whether AC13's open state still permits a DONE close (as CORE-120's did)
-or should keep this DRAFT (as CORE-110's did) — the controller is asking
-rather than deciding silently.
+AC12 and `make specs-check` are confirmed by real CI runs (PR #29, runs
+43734025623 and 43736491698). AC13 is still open by user decision — the
+user was asked directly, not decided for silently, and chose to flip
+this spec to DONE now (as CORE-120's did), accepting AC13 as a known
+gap rather than waiting on it (as CORE-110 chose to for its own open
+item). Folder renamed `150-D-vk-llm-cli`, `status: DONE`.

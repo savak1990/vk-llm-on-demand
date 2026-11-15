@@ -31,13 +31,13 @@ done:
 - The Helm chart
 - Observability
 - The release pipeline
+- The `vk-llm` CLI
 
 These parts are not yet done:
 
 - Security hardening
 - Platform wiring
 - End-to-end acceptance tests
-- The `vk-llm` CLI
 - Remote control from GitHub Actions
 - CI and release hardening
 - Persistent-volume caching
