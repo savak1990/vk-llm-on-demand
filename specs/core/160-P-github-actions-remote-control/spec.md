@@ -1,7 +1,7 @@
 ---
 id: "CORE-160"
 status: "DRAFT"
-updated: "2026-11-01"
+updated: "2026-11-15"
 depends_on: ["CORE-055"]
 adrs: ["0012", "0011", "0013"]
 ---
@@ -244,13 +244,25 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 
 ## Definition of done
 
-- [ ] AC1–AC9 and AC11 pass in CI (tier 1/2).
-- [ ] AC10's static half passes in CI; its manual half, and one real `ACTION=start` dispatch against the platform installation (FR-7.8's "acceptance run for start"), are recorded once in CORE-140's evidence.
-- [ ] `make specs-check` passes.
-- [ ] `scripts/gpu-control.sh` is in CORE-010's shellcheck lint step; `.github/workflows/gpu-control.yml` is covered by the repo-wide `actionlint` job.
-- [ ] Repository setup doc (secret, variable, access options) is published alongside the workflow.
-- [ ] Status flipped to DONE in the same PR; folder renamed `160-D-github-actions-remote-control`.
-- [ ] Evidence section filled.
+- [ ] AC1–AC9 and AC11 pass in CI (tier 1/2). Each passes in
+      `go test ./test/gpucontrol/...`, confirmed in Tasks 1–3's reviews
+      (see Evidence for the AC→test mapping); the real GitHub Actions CI
+      run on a pushed branch is the next task's job, so this stays
+      unchecked until that run is green.
+- [ ] AC10's static half passes in CI; its manual half, and one real `ACTION=start` dispatch against the platform installation (FR-7.8's "acceptance run for start"), are recorded once in CORE-140's evidence. Static half confirmed in Task 3's review (`TestWorkflowShape`'s concurrency-block assertion — see Evidence); not yet confirmed by a real CI run. The manual half and the real dispatch are not done: a real dispatch costs money and needs the user's explicit go-ahead first, same gap CORE-150 left open for its own AC13.
+- [x] `make specs-check` passes. Passed locally this session.
+- [x] `scripts/gpu-control.sh` is in CORE-010's shellcheck lint step;
+      `.github/workflows/gpu-control.yml` is covered by the repo-wide
+      `actionlint` job (`48d47bb`; both wired into `.github/workflows/ci.yml`'s
+      `workflows` job).
+- [x] Repository setup doc (secret, variable, access options) is
+      published alongside the workflow (`README.md`, "Remote control from
+      GitHub Actions").
+- [ ] Status flipped to DONE in the same PR; folder renamed
+      `160-D-github-actions-remote-control`. Not done here: this is the
+      user's call, made after the next task's real CI run is green, same
+      as CORE-150's precedent.
+- [x] Evidence section filled.
 
 ## Open questions
 
@@ -264,4 +276,35 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 
 ## Evidence
 
-None yet.
+### Commits
+
+| Commit | Task | Content |
+|---|---|---|
+| `ca8fe4e` | 1 | `req()`/status action, scripted fake, AC3/AC8(partial)/AC11 |
+| `4683d39` | 1 | fix lint findings and file modes from Task 1 review |
+| `9404a52` | 2 | start/stop poll loops, AC4-AC7/AC9 |
+| `0b209c9` | 2 | fix Task 2 review findings — comment length, mask assertion, shared error message |
+| `48d47bb` | 3 | `gpu-control.yml`, AC2 shape test, CI wiring |
+
+### AC → test mapping (tier 1/2, `test/gpucontrol/`)
+
+| AC | Test / check | Commit |
+|---|---|---|
+| AC1 lint | `shellcheck -s bash scripts/gpu-control.sh` (`make lint-gpu-control-script`, wired into `.github/workflows/ci.yml`'s `workflows` job) + `actionlint` (repo-wide, same job) | `48d47bb` |
+| AC2 static shape | `TestWorkflowShape` (`workflow_shape_test.go`) | `48d47bb` |
+| AC3 status | `TestStatus` (`status_test.go`) | `ca8fe4e` |
+| AC4 start walk | `TestStartWalk` (`start_test.go`) | `9404a52` |
+| AC5 stop walk | `TestStopWalk` (`stop_test.go`) | `9404a52` |
+| AC6 timeout | `TestStartTimeout` (`start_test.go`) | `9404a52` |
+| AC7 start denial | `TestStartDenied` (`start_test.go`) | `9404a52` |
+| AC8 token never on argv | `TestTokenNeverOnArgv` (`curlstub_test.go`) — status half | `ca8fe4e` |
+| AC8 token never on argv (start-denial half) | `TestTokenNeverOnArgv` extended | `9404a52` |
+| AC9 deadline isolation | `TestDeadlineUnchangedAcrossPolling` (`stop_test.go`) | `9404a52` |
+| AC10 concurrency, static half | `TestWorkflowShape`'s concurrency-block assertion | `48d47bb` |
+| AC10 concurrency, dynamic half | not run — two real dispatches, one queuing behind the other, is a manual check against the platform installation; a real dispatch costs money and needs the user's explicit go-ahead first, so it stays a documented manual check, same as CORE-150's AC13 | — |
+| AC11 endpoint masking | `TestEndpointMasked` (`status_test.go`) | `ca8fe4e`, tightened in `0b209c9` |
+
+Other tests exercised by the suite but not tied to a single AC:
+`TestStartFailsMidPoll` (mid-poll denial after `ALLOCATING`, not covered
+by any AC's literal wording but defends R7's "no retry" behaviour),
+`fake_test.go` and `run_test.go` (shared scripted-fake harness).
