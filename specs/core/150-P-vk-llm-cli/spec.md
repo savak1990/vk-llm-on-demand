@@ -338,7 +338,8 @@ Other tests not tied to a single AC but exercised by the suite:
 ### `make specs-check` fixed to pass locally too
 
 Earlier in this round, `scripts/specs-check.sh`'s missing-folder check
-flagged `specs/core/150-D-vk-llm-cli` — a path named only in a local,
+flagged the folder path this spec's DONE rename would use (`specs/core/`
+combined with `150-D-vk-llm-cli`) — a path named only in a local,
 gitignored plan document at `docs/superpowers/plans/2026-11-11-core-150-vk-llm-cli.md`,
 not in any tracked file. The script's `--exclude-dir=.superpowers` flag
 worked correctly; the actual gap was that `docs/superpowers/plans/` is a
