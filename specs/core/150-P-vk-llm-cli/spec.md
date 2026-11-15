@@ -335,29 +335,19 @@ Other tests not tied to a single AC but exercised by the suite:
 `TestNoRedirect`, `TestVersion`, `TestFakeServerScriptsPerRoute`,
 `TestStartAndStop`.
 
-### `make specs-check` locally red, expected green in CI
+### `make specs-check` fixed to pass locally too
 
-`make specs-check` fails on this machine, reporting the folder path this
-spec's Definition of Done names as its eventual rename target (the
-160-D/180-D form) as a missing spec folder. The script's link-checker
-(`scripts/specs-check.sh`) scans every file under the repo root for a
-spec-folder-shaped path and checks it exists on disk. The only place that
-literal path appears is this session's local, untracked planning file at
-`docs/superpowers/plans/2026-11-11-core-150-vk-llm-cli.md` (the plan
-document itself, which contains a reference to this spec's eventual DONE folder path (`specs/core/` combined with `150-D-vk-llm-cli/`) in
-a Task 7 instruction comment), gitignored via `.gitignore`'s
-`docs/superpowers/plans/` entry — a separate path from `.superpowers/`
-that the script's exclude-dir list doesn't cover. The `--exclude-dir=.superpowers`
-flag works correctly and deterministically; the issue is simply that a
-*different* gitignored directory isn't in that exclude list. Both the plan
-file and any `.superpowers/` content are untracked/gitignored either way,
-so CI (which only sees tracked files) is unaffected. `git grep` over
-tracked files for the same pattern turns up no match tied to this spec's
-number, and no match for spec 130, 160 or 180's Definition-of-Done text
-either (their checklist prose lacks the `specs/core/` prefix the checker's
-regex requires, so it was never actually a trigger for them despite the
-superficially similar wording). Confirmed in real CI: PR #29's `repo` job
-(run 43734025623) passed, including `make specs-check`.
+Earlier in this round, `scripts/specs-check.sh`'s missing-folder check
+flagged `specs/core/150-D-vk-llm-cli` — a path named only in a local,
+gitignored plan document at `docs/superpowers/plans/2026-11-11-core-150-vk-llm-cli.md`,
+not in any tracked file. The script's `--exclude-dir=.superpowers` flag
+worked correctly; the actual gap was that `docs/superpowers/plans/` is a
+*different* gitignored directory the exclude list never covered. Fixed in
+commit `152a042` by pruning that exact path via `find ... -prune` instead
+of relying on `grep --exclude-dir`. `make specs-check` now passes both
+locally (plan doc still on disk, verified) and in real CI — PR #29's
+`repo` job (run 43734025623) passed, and a post-fix local run confirms the
+same.
 
 ### Folder / status
 
