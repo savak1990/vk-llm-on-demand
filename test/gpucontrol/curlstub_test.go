@@ -40,11 +40,14 @@ func TestTokenNeverOnArgv(t *testing.T) {
 	f.script("GET /api/v1/gpu/status", fakeResp{code: 200, body: `{"provider":"vastai","state":"READY","ready":true}`})
 	f.script("POST /api/v1/gpu/start", fakeResp{code: 503, body: `{"error":{"code":"gpu_unavailable","reason":"no_offer","message":"no capacity"}}`})
 
-	for _, action := range []string{"status", "start"} {
-		runScript(t, map[string]string{
+	for action, wantExit := range map[string]int{"status": 0, "start": 1} {
+		r := runScript(t, map[string]string{
 			"ACTION": action, "ENDPOINT": f.URL(), "VK_LLM_TOKEN": token,
 			"PATH": stubDir + ":" + os.Getenv("PATH"),
 		})
+		if r.exitCode != wantExit {
+			t.Fatalf("%s: exit %d, want %d; stderr: %s", action, r.exitCode, wantExit, r.stderr)
+		}
 	}
 
 	argvBytes, err := os.ReadFile(argvLog)

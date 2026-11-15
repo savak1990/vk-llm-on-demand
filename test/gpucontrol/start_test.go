@@ -43,6 +43,11 @@ func TestStartWalk(t *testing.T) {
 	if len(calls) != 4 {
 		t.Fatalf("got %d status calls, want 4", len(calls))
 	}
+	for i, c := range calls {
+		if !strings.Contains(c.body, `"idleDeadline":"2026-11-15T12:00:00Z"`) {
+			t.Errorf("status call %d idleDeadline changed: %s", i, c.body)
+		}
+	}
 }
 
 func TestStartTimeout(t *testing.T) {
@@ -62,6 +67,9 @@ func TestStartTimeout(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
 	if last := lines[len(lines)-1]; last != "ALLOCATING" {
 		t.Errorf("last printed state = %q, want ALLOCATING", last)
+	}
+	if !strings.Contains(r.stderr, "timed out") {
+		t.Errorf("stderr missing timeout reason: %s", r.stderr)
 	}
 }
 

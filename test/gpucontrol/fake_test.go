@@ -2,8 +2,11 @@ package gpucontrol
 
 import (
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
@@ -15,6 +18,7 @@ type fakeResp struct {
 
 type fakeCall struct {
 	authHeader string
+	body       string
 }
 
 type fake struct {
@@ -27,8 +31,16 @@ type fake struct {
 
 func newFake(t *testing.T) *fake {
 	f := &fake{t: t, scripts: map[string][]fakeResp{}, calls: map[string][]fakeCall{}}
-	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
+	f.srv = httptest.NewTLSServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
+
+	// The script only accepts https:// endpoints, so curl must trust the fake's cert.
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: f.srv.Certificate().Raw})
+	if err := os.WriteFile(caFile, ca, 0o600); err != nil {
+		t.Fatalf("writing fake CA: %v", err)
+	}
+	t.Setenv("CURL_CA_BUNDLE", caFile)
 	return f
 }
 
@@ -61,7 +73,7 @@ func (f *fake) handle(w http.ResponseWriter, r *http.Request) {
 	if len(queue) > 1 {
 		f.scripts[route] = queue[1:]
 	}
-	f.calls[route] = append(f.calls[route], fakeCall{authHeader: r.Header.Get("Authorization")})
+	f.calls[route] = append(f.calls[route], fakeCall{authHeader: r.Header.Get("Authorization"), body: resp.body})
 	f.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")

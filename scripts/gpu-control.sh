@@ -7,25 +7,40 @@ set -euo pipefail
 : "${STOP_MAX_WAIT:=300}"
 : "${GITHUB_STEP_SUMMARY:=/dev/null}"
 
+if [[ "$ENDPOINT" != https://* ]]; then
+  echo "gpu-control: ENDPOINT must start with https://" >&2
+  exit 2
+fi
+ENDPOINT=${ENDPOINT%/}
+
 echo "::add-mask::${ENDPOINT#https://}" >&2
 
 req() {
+  # Any non-2xx fails, including 3xx (never followed) and 000 (no connection).
   local method=$1 path=$2
-  printf 'Authorization: Bearer %s\n' "$VK_LLM_TOKEN" |
-    curl -s --max-time 30 --fail-with-body -X "$method" -H @- \
-         "$ENDPOINT/api/v1/gpu/$path"
+  local raw status
+  raw=$(printf 'Authorization: Bearer %s\n' "$VK_LLM_TOKEN" |
+    curl -s --max-time 30 -X "$method" -H @- -w '\n%{http_code}' \
+         "$ENDPOINT/api/v1/gpu/$path")
+  status=${raw: -3}
+  local body=${raw%???}
+  body=${body%$'\n'}
+  printf '%s' "$body"
+  [[ "$status" -ge 200 && "$status" -lt 300 ]]
 }
 
 fail_from_body() {
   local body=$1
   if [[ -z "$body" ]]; then
     echo "gpu-control: request failed (no response)" >&2
+    summarize unknown n/a
     exit 1
   fi
   local code reason
   code=$(jq -r '.error.code // "unknown"' <<<"$body" 2>/dev/null || echo unknown)
   reason=$(jq -r '.error.reason // "unknown"' <<<"$body" 2>/dev/null || echo unknown)
   echo "gpu-control: $code: $reason" >&2
+  summarize unknown n/a
   exit 1
 }
 
@@ -86,6 +101,7 @@ poll_until() {
       fi
     fi
     if [[ "$elapsed" -ge "$max_wait" ]]; then
+      echo "gpu-control: timed out after ${max_wait}s waiting for $want_field=$want_value" >&2
       return 1
     fi
     sleep "$POLL_INTERVAL"

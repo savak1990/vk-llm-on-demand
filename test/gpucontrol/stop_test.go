@@ -1,6 +1,7 @@
 package gpucontrol
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -18,7 +19,7 @@ func TestStopWalk(t *testing.T) {
 		t.Fatalf("exit %d, stderr: %s", r.exitCode, r.stderr)
 	}
 	lines := strings.Split(strings.TrimSpace(r.stdout), "\n")
-	if want := []string{"DRAINING", "DELETING", "STOPPED"}; !equalSlices(lines, want) {
+	if want := []string{"DRAINING", "DELETING", "STOPPED"}; !slices.Equal(lines, want) {
 		t.Errorf("stdout lines = %v, want %v", lines, want)
 	}
 	if !strings.Contains(r.summary, "state=STOPPED secondsUntilIdleShutdown=n/a") {
@@ -50,19 +51,6 @@ func TestDeadlineUnchangedAcrossPolling(t *testing.T) {
 		}
 	}
 
-	// Both loops only succeed if every call matched the fixed status/stop
-	// fixtures 20 times total; any call to an unscripted route would have
-	// already failed via fake.handle, so passing proves idleDeadline held.
-}
-
-func equalSlices(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	// Proves the script only calls the scripted status/stop routes: any other
+	// call fails via fake.handle. The deadline itself is the API's invariant.
 }

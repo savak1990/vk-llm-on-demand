@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -61,7 +62,7 @@ func TestWorkflowShape(t *testing.T) {
 	if action.Type != "choice" || action.Default != "status" {
 		t.Errorf("action input = %+v, want type=choice default=status", action)
 	}
-	if want := []string{"start", "status", "stop"}; !equalSlices(action.Options, want) {
+	if want := []string{"start", "status", "stop"}; !slices.Equal(action.Options, want) {
 		t.Errorf("action options = %v, want %v", action.Options, want)
 	}
 

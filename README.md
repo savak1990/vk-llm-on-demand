@@ -154,6 +154,12 @@ that matches your setup:
 | VPN | You keep your installation off the public internet. | The workflow needs a self-hosted runner with access to the VPN. |
 | Self-hosted runner | `VK_LLM_API_ENDPOINT` is not reachable from the internet. | Change `runs-on` in `gpu-control.yml` to point at your runner. The secret and variable setup does not change. |
 
+Run one dispatch at a time. A second dispatch does not start until the
+first run is complete. A `stop` can wait up to 20 minutes behind a
+`start`, and the GPU continues to cost money during this time. A newer
+dispatch replaces an older dispatch that waits in the queue. Wait for
+each run to complete before you start the next run.
+
 `gpu-control` never holds a provider credential. It only calls the
 management API, with the same idempotent, budget-gated behavior as
 `vk-llm`. A GPU started from Actions idles out on the usual 30-minute

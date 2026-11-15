@@ -40,6 +40,7 @@ jobs:
               - 'test/kind/**'
               - 'scripts/gpu-control.sh'
               - 'test/gpucontrol/**'
+              - '.github/workflows/gpu-control.yml'
             helm:
               - 'deploy/helm/**'
               - 'test/kind/**'

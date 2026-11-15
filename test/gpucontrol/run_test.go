@@ -35,6 +35,9 @@ func runScript(t *testing.T, env map[string]string) result {
 		"PATH":                os.Getenv("PATH"),
 		"GITHUB_STEP_SUMMARY": summaryFile,
 	}
+	if ca := os.Getenv("CURL_CA_BUNDLE"); ca != "" {
+		merged["CURL_CA_BUNDLE"] = ca
+	}
 	for k, v := range env {
 		merged[k] = v
 	}

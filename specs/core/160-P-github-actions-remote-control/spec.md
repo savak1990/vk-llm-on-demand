@@ -8,7 +8,9 @@ adrs: ["0012", "0011", "0013"]
 
 # 160 — GitHub Actions remote control
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DRAFT. Written 2026-11-01; implemented afterwards on this
+branch. The Design section below matches the implemented script; status
+moves to DONE only after a green CI run.
 
 **Complexity:** S — one manually triggered workflow, `curl` and `jq`
 against an API CORE-055 already contracts; no new server-side behaviour.
@@ -106,10 +108,12 @@ into a `run:` string (NFR-8.8); same for `VK_LLM_TOKEN` and `ENDPOINT`.
 any literal value of a secret (`secrets.VK_LLM_TOKEN`) that reaches a log
 line, so an explicit mask would only duplicate that for a value which, by
 construction, this script never prints (next section). `ENDPOINT` is a
-*variable*, not a secret, so GitHub does not auto-mask it; the script's
-first action is `echo "::add-mask::${ENDPOINT#https://}"` so a `curl`
+*variable*, not a secret, so GitHub does not auto-mask it; before any
+call, the script runs `echo "::add-mask::${ENDPOINT#https://}"` so a `curl`
 connection failure (e.g. "Could not resolve host") never prints the
 installation's hostname into a public run log (NFR-8.6, architecture §6).
+The only thing before the mask line is the scheme check (next section),
+whose error message does not print `ENDPOINT`.
 
 ### `scripts/gpu-control.sh` contract
 
@@ -121,45 +125,65 @@ set -euo pipefail
 : "${START_MAX_WAIT:=1200}"  # 20 min (ADR 0012 §5)
 : "${STOP_MAX_WAIT:=300}"    # 5 min, mirrors `vk-llm stop --timeout` (ADR 0012 §4)
 
-req() {                      # req METHOD PATH [BODY] -> curl, auth via stdin
-  local method=$1 path=$2 body=${3-}
-  local extra=()
-  [[ -n "$body" ]] && extra=(-d "$body")
-  printf 'Authorization: Bearer %s\n' "$VK_LLM_TOKEN" |
-    curl -sS --max-time 30 --fail-with-body -X "$method" -H @- \
-         -H 'Content-Type: application/json' \
-         "${extra[@]}" \
-         "$ENDPOINT/api/v1/gpu/$path"
+: "${GITHUB_STEP_SUMMARY:=/dev/null}"
+
+if [[ "$ENDPOINT" != https://* ]]; then
+  echo "gpu-control: ENDPOINT must start with https://" >&2
+  exit 2
+fi
+ENDPOINT=${ENDPOINT%/}
+
+echo "::add-mask::${ENDPOINT#https://}" >&2
+
+req() {                      # req METHOD PATH -> body on stdout, 2xx or fail
+  local method=$1 path=$2
+  local raw status
+  raw=$(printf 'Authorization: Bearer %s\n' "$VK_LLM_TOKEN" |
+    curl -s --max-time 30 -X "$method" -H @- -w '\n%{http_code}' \
+         "$ENDPOINT/api/v1/gpu/$path")
+  status=${raw: -3}
+  local body=${raw%???}
+  body=${body%$'\n'}
+  printf '%s' "$body"
+  [[ "$status" -ge 200 && "$status" -lt 300 ]]
 }
 ```
 
 The three poll constants are `${VAR:=default}`, not plain assignments, so
 a test can set `POLL_INTERVAL=1` in its own environment before invoking
-the script without editing it (AC4–AC6 use this). `--fail-with-body`
-(curl ≥ 7.76; see Open questions) replaces plain `-f`: a non-2xx response
-still makes `req` exit non-zero, but the error document's body — the one
-place `jq` needs to read `.error.code`/`.error.reason` from — reaches
-stdout first instead of being discarded, which plain `-f` would do. `extra`
-is a bash array so an empty `$body` disappears from the argument list
-cleanly rather than through unquoted word-splitting.
+the script without editing it (AC4–AC6 use this).
+
+`ENDPOINT` must start with `https://`; anything else exits 2 before the
+mask line and before any `curl` call. A plain `http://` endpoint would
+send the token in cleartext. A trailing slash is stripped, so a value
+like `https://llm.example.com/` does not build a `//api/...` path that
+Go's `ServeMux` answers with a redirect.
+
+No action sends a request body, so `req` takes only a method and a path,
+and sends no `Content-Type` header. `curl -s` (not `-sS`) keeps curl's
+own error text off stderr, because that text can name the host (AC11).
+`-w '\n%{http_code}'` appends the status code after the body; `req`
+splits it off, prints the body, and succeeds only on a 2xx. Every other
+code fails, including a 3xx (curl does not follow redirects without
+`-L`) and `000` (no connection). `curl --fail-with-body` is not used:
+it treats only 4xx/5xx as failure, so a redirect would look like success
+with an empty body.
 
 `-H @-` reads the single `Authorization` header from stdin, piped in by
-`printf`; the request body (`-d`, empty or `{}`) is a plain argument, so
-there is no stdin conflict. The token is therefore never a literal `argv`
-element of the `curl` process and never appears in a process listing or an
-echoed command — the choice `req` makes between the brief's two options
-(`-H @-` vs. `--config -`): `-H @-` composes more simply with the `-X`/`-d`
-flags the three actions already need, while `--config -` would require the
-method, URL and body to move into the same stdin stream.
+`printf`. The token is therefore never a literal `argv` element of the
+`curl` process and never appears in a process listing or an echoed
+command — the choice `req` makes between the brief's two options (`-H @-`
+vs. `--config -`): `-H @-` composes simply with `-X`, while `--config -`
+would require the method and URL to move into the same stdin stream.
 
 Every call's JSON response is parsed with `jq`; the script never writes
 the raw response body or the response headers to stdout, stderr or the
 job summary — only named fields it has explicitly selected, both on
-success and on a `4xx`/`5xx` error body (`.error.code`, `.error.reason`).
-`curl --fail-with-body` makes any non-2xx response exit `req` non-zero
-after printing the body (the brief's "failure on non-2xx"); the caller
-reads `.error.code`/`.error.reason` from that body before re-raising
-under `set -e`, so the case arm still exits non-zero overall.
+success and on an error body (`.error.code`, `.error.reason`). Callers
+use `body=$(req ...) || fail_from_body "$body"`: on a non-2xx,
+`fail_from_body` reads `.error.code`/`.error.reason` from the body (or
+reports "no response" when the body is empty), writes the summary line,
+and exits 1.
 
 | `$ACTION` | Calls | Poll until | Prints |
 |---|---|---|---|
@@ -168,11 +192,13 @@ under `set -e`, so the case arm still exits non-zero overall.
 | `stop` | `POST stop`, then `GET status` every `POLL_INTERVAL` | `.state == "STOPPED"` or `STOP_MAX_WAIT` elapsed | one line per distinct `.state` seen |
 
 A timed-out poll (ready never reached / `STOPPED` never reached) exits 1
-with the last known `.state` and `.unavailable`. `secondsUntilIdleShutdown`
+with the last known `.state` and `.unavailable`, and logs a "timed out"
+reason to stderr. `secondsUntilIdleShutdown`
 is `null` on every state but `READY`; the script renders `null` as `n/a`.
 `$GITHUB_STEP_SUMMARY` gets one line on completion: `state=<final state>
 secondsUntilIdleShutdown=<value or n/a>`, for every action including
-`status`.
+`status`. A failed request writes `state=unknown
+secondsUntilIdleShutdown=n/a`.
 
 ### Credentials and access (ADR 0012 §3, §5, §6)
 
@@ -236,7 +262,7 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 - AC4. `start` polling (FR-7.8, FR-3.5, ADR 0011 §2). Fake server's `GET status` returns `ALLOCATING`, `STARTING`, `LOADING_MODEL`, `READY` on its 1st–4th call respectively (state fixed to `READY` thereafter), each with a fixed `idleDeadline`. Action: `ACTION=start POLL_INTERVAL=1 scripts/gpu-control.sh`. Expected: exit 0; stdout shows exactly those four states, each once, in order; wall time ≤ 10 s at `POLL_INTERVAL=1`; `idleDeadline` byte-identical across all 4 `GET` calls recorded by the fake server.
 - AC5. `stop` polling (R8). Fake server's `GET status` returns `DRAINING`, `DELETING`, `STOPPED` on its 1st–3rd call. Action: `ACTION=stop POLL_INTERVAL=1 scripts/gpu-control.sh`. Expected: exit 0; three state lines; summary line `state=STOPPED secondsUntilIdleShutdown=n/a`.
 - AC6. Timeout (R8). Fake server's `GET status` always returns `ALLOCATING`. Action: `ACTION=start POLL_INTERVAL=1 START_MAX_WAIT=2 scripts/gpu-control.sh`. Expected: exit 1 after 2 polls (~2 s); last printed state is `ALLOCATING`.
-- AC7. Start denial (R6, R7). Fake server's `POST start` returns `503 {"error":{"code":"gpu_unavailable","reason":"no_offer","message":"…"}}`. Action: `ACTION=start`. Expected: exit 1; 0 `GET status` calls made (the denial is on `POST start` itself); stderr contains `gpu_unavailable` and `no_offer` (read from the body `--fail-with-body` preserved on disk); stderr does not contain the literal substring `{"error"` (the curated fields are printed, not the raw body).
+- AC7. Start denial (R6, R7). Fake server's `POST start` returns `503 {"error":{"code":"gpu_unavailable","reason":"no_offer","message":"…"}}`. Action: `ACTION=start`. Expected: exit 1; 0 `GET status` calls made (the denial is on `POST start` itself); stderr contains `gpu_unavailable` and `no_offer` (read from the error body that `req` prints and the caller holds in a shell variable); stderr does not contain the literal substring `{"error"` (the curated fields are printed, not the raw body).
 - AC8. Token never on argv (R5). Wrap `curl` with a recording stub on `PATH`. Action: run AC3 and AC7. Expected: in every recorded invocation, no argv element equals or contains the token value; the token appears only on the stub's captured stdin.
 - AC9. Deadline isolation (R9, FR-3.5, FR-7.9). Run AC3 ten times and AC5's stop-when-already-`STOPPED` case ten times against one fake server instance that persists `idleDeadline`. Expected: `idleDeadline` unchanged across all 20 calls; fake server records 0 writes to `lastInferenceFinishedAt`.
 - AC10. Concurrency (FR-7.9; static half of the requirements.md "Concurrency group test"). Covered by AC2's `concurrency` assertion; the dynamic half (two real dispatches, one queuing behind the other) is a documented manual check, run once as part of CORE-140's acceptance pass, not a tier 1/2 check.
@@ -270,7 +296,7 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 |---|---|---|---|
 | Exact shared fixture/package for the "fake management server" (`docs/testing-strategy.md` tier 2) that both this spec and CORE-150 use | avoids two incompatible fakes for the same contract | whichever of CORE-150/160 lands first names the Go package and its Make target; the other imports it | a small `httptest`-backed server, scripted per-call, started by one Make target before the shellcheck/CI step runs |
 | Do `ubuntu-latest` runners still ship `curl` and `jq` with no install step at implementation time | the script has no fallback if either is missing | verified against `actions/runner-images`'s current manifest when CORE-160 is implemented (not in `docs/research.md`) | add a defensive `command -v jq >/dev/null \|\| { sudo apt-get update -qq && sudo apt-get install -y -qq jq; }` guard; `curl` ships with every runner image to date and needs no guard |
-| Does the `ubuntu-latest` runner's bundled `curl` support `--fail-with-body` (added curl 7.76, 2021) | `req`'s error-body path depends on it | verified the same way, same runner-image check, when CORE-160 is implemented (not in `docs/research.md`) | assume yes (every `ubuntu-latest` image since has shipped a newer curl); if a future minimal image regresses, fall back to `-fsS` plus a second unauthenticated-looking retry without `-f` only to read the error body |
+| Does the `ubuntu-latest` runner's bundled `curl` support `--fail-with-body` (added curl 7.76, 2021) | was `req`'s error-body path | settled: `req` no longer uses `--fail-with-body`; it reads `%{http_code}` (`-w`, available in every curl) and checks for 2xx itself | n/a |
 | 5-minute stop poll cap | ADR 0012 §5 gives `start`'s 20 min cap explicitly but says nothing about a `stop` cap | this spec's default stands unless ADR 0012 is amended | 300 s, mirroring `vk-llm stop --timeout`'s default (ADR 0012 §4) |
 | Rendering of `secondsUntilIdleShutdown: null` in script/job-summary output | not specified by any ADR; CORE-150's CLI makes an equivalent choice independently | align with CORE-150 in review if its rendering differs | `n/a` |
 
@@ -285,6 +311,8 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 | `9404a52` | 2 | start/stop poll loops, AC4-AC7/AC9 |
 | `0b209c9` | 2 | fix Task 2 review findings — comment length, mask assertion, shared error message |
 | `48d47bb` | 3 | `gpu-control.yml`, AC2 shape test, CI wiring |
+| `ee795f2` | 4 | README setup doc, spec Evidence and DoD |
+| final review fixes | review | https-only `ENDPOINT`, explicit 2xx check in `req`, TLS fake, `go` filter covers `gpu-control.yml`, summary line on failure |
 
 ### AC → test mapping (tier 1/2, `test/gpucontrol/`)
 
@@ -299,7 +327,7 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 | AC7 start denial | `TestStartDenied` (`start_test.go`) | `9404a52` |
 | AC8 token never on argv | `TestTokenNeverOnArgv` (`curlstub_test.go`) — status half | `ca8fe4e` |
 | AC8 token never on argv (start-denial half) | `TestTokenNeverOnArgv` extended | `9404a52` |
-| AC9 deadline isolation | `TestDeadlineUnchangedAcrossPolling` (`stop_test.go`) | `9404a52` |
+| AC9 deadline isolation | `TestDeadlineUnchangedAcrossPolling` (`stop_test.go`) proves the script only calls the documented `status` and `stop` routes across 20 runs: the fake has no other route, so any extra (e.g. mutating) call fails the test. It does not observe a deadline write. That `status`/`start`/`stop` never count as activity is a management-API invariant (CORE-055's handlers), out of this workflow's scope to test. `TestStartWalk` also checks that `idleDeadline` is the same in all 4 status responses the fake served. | `9404a52` |
 | AC10 concurrency, static half | `TestWorkflowShape`'s concurrency-block assertion | `48d47bb` |
 | AC10 concurrency, dynamic half | not run — two real dispatches, one queuing behind the other, is a manual check against the platform installation; a real dispatch costs money and needs the user's explicit go-ahead first, so it stays a documented manual check, same as CORE-150's AC13 | — |
 | AC11 endpoint masking | `TestEndpointMasked` (`status_test.go`) | `ca8fe4e`, tightened in `0b209c9` |
@@ -307,4 +335,7 @@ also used by CORE-150); no real provider or network beyond `httptest`.
 Other tests exercised by the suite but not tied to a single AC:
 `TestStartFailsMidPoll` (mid-poll denial after `ALLOCATING`, not covered
 by any AC's literal wording but defends R7's "no retry" behaviour),
+`TestStatusRedirectFails` (a 301 exits 1, not 0 — R7 covers 3xx too),
+`TestPlainHTTPEndpointRejected` (an `http://` `ENDPOINT` exits 2 before
+any `curl` call),
 `fake_test.go` and `run_test.go` (shared scripted-fake harness).
