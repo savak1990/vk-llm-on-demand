@@ -282,6 +282,65 @@ func TestUsage(t *testing.T) {
 	}
 }
 
+func TestRetryAfter429(t *testing.T) {
+	f := newFake(t)
+	f.script("POST /api/v1/gpu/start", fakeResponse{code: 202, body: `{"state":"ALLOCATING"}`})
+	f.script("GET /api/v1/gpu/status",
+		fakeResponse{code: 429, headers: map[string]string{"Retry-After": "7"}, body: `{}`},
+		fakeResponse{code: 200, body: `{"state":"READY","ready":true,"model":{"alias":"qwen3.6-35b-a3b"},"instance":{"gpu":"L40S"},"secondsUntilIdleShutdown":1800}`},
+	)
+	clk := fake.New(time.Unix(0, 0))
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() { done <- run([]string{"start"}, testGetenv(f, "sk-vkllm-REPLACE_ME"), &stdout, &stderr, clk) }()
+
+	clk.BlockUntil(1)
+	clk.Advance(5 * time.Second)
+	if got := f.callCount("GET /api/v1/gpu/status"); got != 1 {
+		t.Fatalf("status calls after 5s = %d, want 1 (must still be waiting for Retry-After=7s, not the 5s floor)", got)
+	}
+	clk.Advance(2 * time.Second)
+
+	code := <-done
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "ready:") {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), "ready:")
+	}
+	if got := f.callCount("GET /api/v1/gpu/status"); got != 2 {
+		t.Errorf("status calls = %d, want 2", got)
+	}
+}
+
+func TestMidPollForbidden(t *testing.T) {
+	f := newFake(t)
+	f.script("POST /api/v1/gpu/start", fakeResponse{code: 202, body: `{"state":"ALLOCATING"}`})
+	f.script("GET /api/v1/gpu/status",
+		fakeResponse{code: 200, body: `{"state":"ALLOCATING"}`},
+		fakeResponse{code: 200, body: `{"state":"STARTING"}`},
+		fakeResponse{code: 403, body: `{"error":{"code":"permission_denied"}}`},
+	)
+	clk := fake.New(time.Unix(0, 0))
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	go func() { done <- run([]string{"start"}, testGetenv(f, "sk-vkllm-REPLACE_ME"), &stdout, &stderr, clk) }()
+	for i := 0; i < 2; i++ {
+		clk.BlockUntil(1)
+		clk.Advance(5 * time.Second)
+	}
+	code := <-done
+	if code != 3 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "permission_denied") {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), "permission_denied")
+	}
+	if got := f.callCount("GET /api/v1/gpu/status"); got != 3 {
+		t.Errorf("status calls = %d, want 3 (poll loop must not retry past the 403)", got)
+	}
+}
+
 func TestNoTokenInOutput(t *testing.T) {
 	const token = "sk-vkllm-REPLACE_ME"
 	f := newFake(t)
