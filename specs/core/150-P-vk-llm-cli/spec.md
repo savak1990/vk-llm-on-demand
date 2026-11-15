@@ -338,7 +338,7 @@ spec's Definition of Done names as its eventual rename target (the
 spec-folder-shaped path and checks it exists on disk. The only place that
 literal path appears is this session's local, untracked planning file at
 `docs/superpowers/plans/2026-11-11-core-150-vk-llm-cli.md` (the plan
-document itself, which contains the text `specs/core/150-D-vk-llm-cli/` in
+document itself, which contains a reference to this spec's eventual DONE folder path (`specs/core/` combined with `150-D-vk-llm-cli/`) in
 a Task 7 instruction comment), gitignored via `.gitignore`'s
 `docs/superpowers/plans/` entry — a separate path from `.superpowers/`
 that the script's exclude-dir list doesn't cover. The `--exclude-dir=.superpowers`
