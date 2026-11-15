@@ -7,7 +7,7 @@ set -euo pipefail
 : "${STOP_MAX_WAIT:=300}"
 : "${GITHUB_STEP_SUMMARY:=/dev/null}"
 
-echo "::add-mask::${ENDPOINT#https://}"
+echo "::add-mask::${ENDPOINT#https://}" >&2
 
 req() {
   local method=$1 path=$2
@@ -59,14 +59,62 @@ do_status() {
   summarize "$state" "$idle"
 }
 
+poll_until() {
+  # Exits early on STOPPED+unavailable so a denied start doesn't poll
+  # uselessly for the rest of max_wait. Sets LAST_BODY for the caller.
+  local want_field=$1 want_value=$2 max_wait=$3
+  local elapsed=0 last_state=""
+  while true; do
+    LAST_BODY=$(req GET status) || fail_from_body "$LAST_BODY"
+    local state
+    state=$(jq -r '.state' <<<"$LAST_BODY")
+    if [[ "$state" != "$last_state" ]]; then
+      echo "$state"
+      last_state=$state
+    fi
+    local got
+    got=$(jq -r ".$want_field" <<<"$LAST_BODY")
+    if [[ "$got" == "$want_value" ]]; then
+      return 0
+    fi
+    if [[ "$state" == "STOPPED" ]]; then
+      local unavailable
+      unavailable=$(jq -r '.unavailable // ""' <<<"$LAST_BODY")
+      if [[ -n "$unavailable" ]]; then
+        echo "gpu-control: start failed: $unavailable" >&2
+        return 1
+      fi
+    fi
+    if [[ "$elapsed" -ge "$max_wait" ]]; then
+      return 1
+    fi
+    sleep "$POLL_INTERVAL"
+    elapsed=$(( elapsed + POLL_INTERVAL ))
+  done
+}
+
 do_start() {
-  echo "gpu-control: not implemented" >&2
-  exit 1
+  local body
+  body=$(req POST start) || fail_from_body "$body"
+  local idle
+  if poll_until ready true "$START_MAX_WAIT"; then
+    idle=$(jq -r '.secondsUntilIdleShutdown // "n/a"' <<<"$LAST_BODY")
+    summarize "$(jq -r '.state' <<<"$LAST_BODY")" "$idle"
+  else
+    summarize "$(jq -r '.state' <<<"$LAST_BODY")" "n/a"
+    exit 1
+  fi
 }
 
 do_stop() {
-  echo "gpu-control: not implemented" >&2
-  exit 1
+  local body
+  body=$(req POST stop) || fail_from_body "$body"
+  if poll_until state STOPPED "$STOP_MAX_WAIT"; then
+    summarize STOPPED n/a
+  else
+    summarize "$(jq -r '.state' <<<"$LAST_BODY")" "n/a"
+    exit 1
+  fi
 }
 
 case "$ACTION" in
