@@ -8,10 +8,11 @@ adrs: ["0012", "0013", "0011"]
 
 # 150 — `vk-llm` CLI
 
-**Status note:** DRAFT. The CLI is implemented and AC1-AC11 pass locally
-this session; AC12 (the kind job) is wired but not yet verified by a real
-CI run, and AC13 (a real release dispatch) is still open by user decision.
-Stays DRAFT in `150-P-vk-llm-cli` until both are resolved. See Evidence.
+**Status note:** DRAFT. The CLI is implemented; AC1-AC12 and `make
+specs-check` all pass, confirmed in real CI on PR #29 (run 43734025623).
+AC13 (a real release dispatch) is still open by user decision. Stays
+DRAFT in `150-P-vk-llm-cli` pending the user's call on whether AC13's
+open state still permits closing. See Evidence.
 
 **Complexity:** S
 **Risk:** medium — the CLI holds a management token that can rent a GPU, so token handling and exit codes guard money
@@ -258,10 +259,12 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 ## Definition of done
 
 - [x] AC1–AC11 pass (tier 1, `go test ./cmd/vk-llm/...`, run locally this
-      session; see Evidence for the AC→test mapping). CI run on this branch
-      is pending the controller's push.
-- [ ] AC12 passes in the kind job. Wired this round (`.github/workflows/ci.yml`
-      lines 311-320); not yet verified by a real CI run.
+      session; see Evidence for the AC→test mapping). Also passed in the
+      real PR #29 CI run (`go` job, run 43734025623).
+- [x] AC12 passes in the kind job. Wired this round (`.github/workflows/ci.yml`
+      lines 311-320) and confirmed by a real `chart-kind` run: PR #29, run
+      [43734025623](https://github.com/savak1990/vk-llm-on-demand/actions/runs/43734025623/job/132872594086),
+      conclusion success.
 - [ ] AC13 checked in the first release dry run (CORE-120). `.goreleaser.yaml`
       confirmed correct via a local `goreleaser --snapshot` build during
       Task 5's review, but the user declined triggering a real `release.yml`
@@ -271,17 +274,19 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
       lines 79 and 277).
 - [x] README install section present with checksum verification and
       placeholders only (`README.md` lines 99-124).
-- [ ] `make specs-check` passes. It fails locally on this machine only
-      because of an untracked local planning file; `git grep` over tracked
-      files shows no trigger, so CI is expected to pass. Left unchecked
-      until a real CI run confirms it; see Evidence.
+- [x] `make specs-check` passes in real CI (PR #29, `repo` job,
+      [43734025623](https://github.com/savak1990/vk-llm-on-demand/actions/runs/43734025623/job/132872594160),
+      conclusion success). It still fails locally on this machine only
+      because of an untracked local planning file (confirmed by temporarily
+      moving it aside and re-running `make specs-check` clean); `git grep`
+      over tracked files shows no trigger.
 - [ ] Status flipped to DONE in the same PR; folder renamed
-      `150-D-vk-llm-cli`. Deferred: AC12 is not yet verified by a real CI
-      run and AC13 is still open, so this spec stays `150-P` and DRAFT.
-      The controller makes the DONE/rename call in a follow-up once AC12's
-      CI result is in and the user has weighed in on whether AC13's open
-      state still permits closing (as with CORE-120) or should keep this
-      DRAFT (as with CORE-110).
+      `150-D-vk-llm-cli`. AC12 and `specs-check` are now both confirmed by
+      real CI; AC13 is still open (user-declined release dispatch). This
+      spec stays `150-P` and DRAFT pending the user's call on whether
+      AC13's open state still permits closing (as with CORE-120) or should
+      keep this DRAFT (as with CORE-110) — asked directly, not decided
+      silently.
 - [x] Evidence section filled.
 
 ## Open questions
@@ -322,7 +327,7 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 | AC9 config precedence | `TestConfigPrecedence`, `TestTokenInFileRejected`, `TestUnknownKeyRejected`, `TestPlainHTTPRejected` |
 | AC10 headers/redaction | `TestHeaders`, `TestNoTokenInOutput` |
 | AC11 429 retry-after | `TestRetryAfter429` |
-| AC12 tier 2, kind job | wired this round (`.github/workflows/ci.yml` "Build the vk-llm CLI" / "vk-llm status shows STOPPED" steps, lines 311-320); **not yet verified by a real CI run** — the controller pushes this branch and watches the real `chart-kind` job after this task |
+| AC12 tier 2, kind job | wired this round (`.github/workflows/ci.yml` "Build the vk-llm CLI" / "vk-llm status shows STOPPED" steps, lines 311-320); confirmed by a real `chart-kind` CI run, PR #29, run 43734025623, conclusion success |
 | AC13 distribution / release dry run | stays unchecked; needs a real `release.yml` dispatch. `.goreleaser.yaml` is already correct (confirmed via a real local `goreleaser --snapshot` build during Task 5's review), but the user previously declined triggering a real release dispatch (same decision as CORE-120/CORE-110) |
 
 Other tests not tied to a single AC but exercised by the suite:
@@ -350,15 +355,14 @@ tracked files for the same pattern turns up no match tied to this spec's
 number, and no match for spec 130, 160 or 180's Definition-of-Done text
 either (their checklist prose lacks the `specs/core/` prefix the checker's
 regex requires, so it was never actually a trigger for them despite the
-superficially similar wording). Since CI checks out tracked files only,
-`make specs-check` is expected to pass there; this line stays unchecked
-until a real CI run confirms it.
+superficially similar wording). Confirmed in real CI: PR #29's `repo` job
+(run 43734025623) passed, including `make specs-check`.
 
 ### Folder / status
 
-AC12 is pending a real CI run and AC13 is open by user decision, so this
-spec stays in `150-P-vk-llm-cli` with `status: DRAFT`. It does not rename
-to `150-D-vk-llm-cli` or flip to DONE in this task. The DONE/rename
-decision is for a follow-up once AC12's real CI result is in and the user
-has weighed in on whether AC13's open state still permits a DONE close
-(as CORE-120's did) or should keep this DRAFT (as CORE-110's did).
+AC12 and `make specs-check` are now confirmed by a real CI run (PR #29,
+run 43734025623). AC13 is still open by user decision. This spec stays
+in `150-P-vk-llm-cli` with `status: DRAFT` pending the user's call on
+whether AC13's open state still permits a DONE close (as CORE-120's did)
+or should keep this DRAFT (as CORE-110's did) — the controller is asking
+rather than deciding silently.
