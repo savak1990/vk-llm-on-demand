@@ -32,7 +32,7 @@ tee -a %q | %q "$@"
 	return dir, argvLog, stdinLog
 }
 
-func TestTokenNeverOnArgv(t *testing.T) { // AC8 (status half; Task 2 Step 4 adds the start-denial half once do_start is real)
+func TestTokenNeverOnArgv(t *testing.T) {
 	stubDir, argvLog, stdinLog := writeCurlStub(t)
 	token := "sk-vkllm-supersecrettoken"
 

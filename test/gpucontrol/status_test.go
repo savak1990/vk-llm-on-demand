@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-func TestStatus(t *testing.T) { // AC3
+func TestStatus(t *testing.T) {
 	f := newFake(t)
 	f.script("GET /api/v1/gpu/status", fakeResp{code: 200, body: mustJSON(t, map[string]any{
 		"provider": "vastai", "state": "READY", "ready": true,
-		"instance": map[string]any{"gpu": "L40S", "priceUSDPerHour": 0.71},
-		"model":    map[string]any{"alias": "qwen3.6-35b-a3b"},
-		"uptimeSeconds": 1830,
-		"cost":          map[string]any{"estimatedInstanceUSD": 0.36, "estimatedMonthUSD": 12.1},
+		"instance":                 map[string]any{"gpu": "L40S", "priceUSDPerHour": 0.71},
+		"model":                    map[string]any{"alias": "qwen3.6-35b-a3b"},
+		"uptimeSeconds":            1830,
+		"cost":                     map[string]any{"estimatedInstanceUSD": 0.36, "estimatedMonthUSD": 12.1},
 		"secondsUntilIdleShutdown": 1440,
 	})})
 
@@ -38,7 +38,7 @@ func TestStatus(t *testing.T) { // AC3
 	}
 }
 
-func TestEndpointMasked(t *testing.T) { // AC11
+func TestEndpointMasked(t *testing.T) {
 	// An endpoint nothing listens on: connection refused, no real network dependency.
 	r := runScript(t, map[string]string{"ACTION": "status", "ENDPOINT": "https://llm.lab.example.com"})
 
