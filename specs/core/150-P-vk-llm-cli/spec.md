@@ -1,14 +1,17 @@
 ---
 id: "CORE-150"
 status: "DRAFT"
-updated: "2026-11-01"
+updated: "2026-11-15"
 depends_on: ["CORE-055", "CORE-120"]
 adrs: ["0012", "0013", "0011"]
 ---
 
 # 150 — `vk-llm` CLI
 
-**Status note:** DRAFT, written 2026-11-01 before any code exists.
+**Status note:** DRAFT. The CLI is implemented and AC1-AC11 pass locally
+this session; AC12 (the kind job) is wired but not yet verified by a real
+CI run, and AC13 (a real release dispatch) is still open by user decision.
+Stays DRAFT in `150-P-vk-llm-cli` until both are resolved. See Evidence.
 
 **Complexity:** S
 **Risk:** medium — the CLI holds a management token that can rent a GPU, so token handling and exit codes guard money
@@ -254,13 +257,30 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 
 ## Definition of done
 
-- [ ] AC1–AC11 pass in CI (tier 1); AC12 passes in the kind job.
-- [ ] AC13 checked in the first release dry run (CORE-120).
-- [ ] `go.mod` lists `gopkg.in/yaml.v3` and CORE-010's allowed-module list names it.
-- [ ] README install section present with checksum verification and placeholders only.
-- [ ] `make specs-check` passes.
-- [ ] Status flipped to DONE in the same PR; folder renamed `150-D-vk-llm-cli`.
-- [ ] Evidence section filled.
+- [x] AC1–AC11 pass (tier 1, `go test ./cmd/vk-llm/...`, run locally this
+      session; see Evidence for the AC→test mapping). CI run on this branch
+      is pending the controller's push.
+- [ ] AC12 passes in the kind job. Wired this round (`.github/workflows/ci.yml`
+      lines 311-320); not yet verified by a real CI run.
+- [ ] AC13 checked in the first release dry run (CORE-120). `.goreleaser.yaml`
+      confirmed correct via a local `goreleaser --snapshot` build during
+      Task 5's review, but the user declined triggering a real `release.yml`
+      dispatch (same decision as CORE-120/CORE-110). Stays open.
+- [x] `go.mod` lists `gopkg.in/yaml.v3` and CORE-010's allowed-module list
+      names it (`go.mod:9`; `specs/core/010-D-repo-skeleton-and-ci/spec.md`
+      lines 79 and 277).
+- [x] README install section present with checksum verification and
+      placeholders only (`README.md` lines 99-124).
+- [ ] `make specs-check` passes. It fails for a pre-existing, repo-wide
+      reason unrelated to this branch's work; see Evidence.
+- [ ] Status flipped to DONE in the same PR; folder renamed
+      `150-D-vk-llm-cli`. Deferred: AC12 is not yet verified by a real CI
+      run and AC13 is still open, so this spec stays `150-P` and DRAFT.
+      The controller makes the DONE/rename call in a follow-up once AC12's
+      CI result is in and the user has weighed in on whether AC13's open
+      state still permits closing (as with CORE-120) or should keep this
+      DRAFT (as with CORE-110).
+- [x] Evidence section filled.
 
 ## Open questions
 
@@ -275,4 +295,58 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 
 ## Evidence
 
-None yet.
+### Commits
+
+| Commit | Task | Content |
+|---|---|---|
+| `a0dd748` | 1 | config resolution (flag > env > file > default) |
+| `f6eda5b` | 2 | management-API client, error mapping, shared test fake |
+| `fa83ea6`..`15c3060` | 3 | status table and JSON rendering; `15c3060` is a same-task fix round that corrected a broken state/desired comparison, local-time rendering, and duration padding |
+| `67dc541`..`0e0b12e` | 4 | start/status/stop/version subcommands and poll loop; `0e0b12e` is a same-task fix round that added AC11/AC8-mid-poll test coverage |
+| `a9fa457`..`7c23bd0` | 5 | kind job wiring, README install section; `7c23bd0` is a same-task fix that corrected the GoReleaser archive naming/checksum commands |
+
+### AC → test mapping (tier 1, `go test ./cmd/vk-llm/...`, ran locally this session: `ok`)
+
+| AC | Tests |
+|---|---|
+| AC1 start walk | `TestStartWalk` |
+| AC2 already running | `TestStartAlreadyRunning` |
+| AC3 detach | `TestDetach` |
+| AC4 start timeout | `TestStartTimeout` |
+| AC5 start failure / no offer | `TestStartNoOffer` |
+| AC6 stop walk | `TestStopWalk` |
+| AC7 status golden/JSON | `TestStatusGolden`, `TestJSONRender` |
+| AC8 exit codes, incl. mid-poll 403 | `TestErrorMapping`, `TestMidPollForbidden`, `TestUsage` |
+| AC9 config precedence | `TestConfigPrecedence`, `TestTokenInFileRejected`, `TestUnknownKeyRejected`, `TestPlainHTTPRejected` |
+| AC10 headers/redaction | `TestHeaders`, `TestNoTokenInOutput` |
+| AC11 429 retry-after | `TestRetryAfter429` |
+| AC12 tier 2, kind job | wired this round (`.github/workflows/ci.yml` "Build the vk-llm CLI" / "vk-llm status shows STOPPED" steps, lines 311-320); **not yet verified by a real CI run** — the controller pushes this branch and watches the real `chart-kind` job after this task |
+| AC13 distribution / release dry run | stays unchecked; needs a real `release.yml` dispatch. `.goreleaser.yaml` is already correct (confirmed via a real local `goreleaser --snapshot` build during Task 5's review), but the user previously declined triggering a real release dispatch (same decision as CORE-120/CORE-110) |
+
+Other tests not tied to a single AC but exercised by the suite:
+`TestNoRedirect`, `TestVersion`, `TestFakeServerScriptsPerRoute`,
+`TestStartAndStop`.
+
+### Known pre-existing issue: `make specs-check`
+
+`make specs-check` fails repo-wide, reporting a missing path for the
+folder this spec's own Definition of Done names as its eventual rename
+target. The script's link-checker (`scripts/specs-check.sh`) treats any
+spec-folder-shaped path it finds anywhere in the repo as a reference to
+validate on disk; this spec's Definition of Done names the folder it
+would be renamed to, and the checker flags that name as missing because
+the rename has not happened. This is not specific to this branch: the
+identical pattern exists unchanged in spec 130 (platform integration),
+spec 160 (GitHub Actions remote control), and spec 180 (persistent-volume
+cache) — none touched by this branch — and was confirmed present on
+`main` before this branch started. It is a pre-existing, repo-wide quirk,
+not something to fix in this spec's closeout.
+
+### Folder / status
+
+AC12 is pending a real CI run and AC13 is open by user decision, so this
+spec stays in `150-P-vk-llm-cli` with `status: DRAFT`. It does not rename
+to `150-D-vk-llm-cli` or flip to DONE in this task. The DONE/rename
+decision is for a follow-up once AC12's real CI result is in and the user
+has weighed in on whether AC13's open state still permits a DONE close
+(as CORE-120's did) or should keep this DRAFT (as CORE-110's did).
