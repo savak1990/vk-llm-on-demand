@@ -96,6 +96,39 @@ the SSH key for the worker tunnel) are referenced by name from existing
 Kubernetes Secrets and never appear in `values.yaml`. This repository is
 public; see [`SECURITY.md`](SECURITY.md).
 
+## Install the CLI
+
+Download the archive for your platform from the [latest
+release](https://github.com/savak1990/vk-llm-on-demand/releases/latest),
+verify it against `checksums.txt`, and put the `vk-llm` binary on your
+`PATH`.
+
+```bash
+# Linux, amd64 (use vk-llm_linux_arm64.tar.gz on arm64)
+curl -LO https://github.com/savak1990/vk-llm-on-demand/releases/latest/download/vk-llm_linux_amd64.tar.gz
+curl -LO https://github.com/savak1990/vk-llm-on-demand/releases/latest/download/checksums.txt
+sha256sum -c --ignore-missing checksums.txt
+tar -xzf vk-llm_linux_amd64.tar.gz vk-llm
+sudo install -m 0755 vk-llm /usr/local/bin/vk-llm
+```
+
+```bash
+# macOS, arm64 (use vk-llm_darwin_amd64.tar.gz on an Intel Mac)
+curl -LO https://github.com/savak1990/vk-llm-on-demand/releases/latest/download/vk-llm_darwin_arm64.tar.gz
+curl -LO https://github.com/savak1990/vk-llm-on-demand/releases/latest/download/checksums.txt
+shasum -a 256 -c checksums.txt
+tar -xzf vk-llm_darwin_arm64.tar.gz vk-llm
+sudo install -m 0755 vk-llm /usr/local/bin/vk-llm
+```
+
+Point it at your cluster's management API and a management token:
+
+```bash
+export VK_LLM_API_ENDPOINT=https://api.lab.example.com
+export VK_LLM_TOKEN=<your management token>
+vk-llm status
+```
+
 ## OpenCode
 
 ```json

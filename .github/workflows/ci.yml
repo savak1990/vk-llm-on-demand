@@ -308,13 +308,16 @@ jobs:
           kubectl rollout status deployment/gpu-on-demand --timeout=60s
           kubectl wait --for=condition=Ready pod -l app.kubernetes.io/instance=gpu-on-demand --timeout=60s
 
-      - name: Confirm initial state is STOPPED
+      - name: Build the vk-llm CLI
+        run: go build -o bin/vk-llm ./cmd/vk-llm
+
+      - name: vk-llm status shows STOPPED
         run: |
           set -euo pipefail
           kubectl port-forward svc/gpu-on-demand 18080:80 >/dev/null 2>&1 &
           sleep 2
-          state=$(curl -sf -H "Authorization: Bearer sk-vkllm-citestmgmttoken" http://localhost:18080/api/v1/gpu/status | jq -r .state)
-          test "$state" = "STOPPED"
+          VK_LLM_API_ENDPOINT=http://127.0.0.1:18080 VK_LLM_TOKEN=sk-vkllm-citestmgmttoken \
+            ./bin/vk-llm status | grep -q 'State  *STOPPED'
 
       - name: Start, poll for Ready
         run: |
