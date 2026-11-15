@@ -336,17 +336,23 @@ spec's Definition of Done names as its eventual rename target (the
 160-D/180-D form) as a missing spec folder. The script's link-checker
 (`scripts/specs-check.sh`) scans every file under the repo root for a
 spec-folder-shaped path and checks it exists on disk. The only place that
-literal path appears is this session's local, untracked planning file
-under `.superpowers/` (gitignored, confirmed via `git check-ignore -v
-.superpowers` and `git ls-files .superpowers` returning nothing) — the
-script's own `--exclude-dir=.superpowers` does not reliably filter it out
-on this machine. `git grep` over tracked files for the same pattern turns
-up no match tied to this spec's number, and no match for spec 130, 160 or
-180's Definition-of-Done text either (their checklist prose lacks the
-`specs/core/` prefix the checker's regex requires, so it was never
-actually a trigger for them despite the superficially similar wording).
-Since CI checks out tracked files only, `make specs-check` is expected to
-pass there; this line stays unchecked until a real CI run confirms it.
+literal path appears is this session's local, untracked planning file at
+`docs/superpowers/plans/2026-11-11-core-150-vk-llm-cli.md` (the plan
+document itself, which contains the text `specs/core/150-D-vk-llm-cli/` in
+a Task 7 instruction comment), gitignored via `.gitignore`'s
+`docs/superpowers/plans/` entry — a separate path from `.superpowers/`
+that the script's exclude-dir list doesn't cover. The `--exclude-dir=.superpowers`
+flag works correctly and deterministically; the issue is simply that a
+*different* gitignored directory isn't in that exclude list. Both the plan
+file and any `.superpowers/` content are untracked/gitignored either way,
+so CI (which only sees tracked files) is unaffected. `git grep` over
+tracked files for the same pattern turns up no match tied to this spec's
+number, and no match for spec 130, 160 or 180's Definition-of-Done text
+either (their checklist prose lacks the `specs/core/` prefix the checker's
+regex requires, so it was never actually a trigger for them despite the
+superficially similar wording). Since CI checks out tracked files only,
+`make specs-check` is expected to pass there; this line stays unchecked
+until a real CI run confirms it.
 
 ### Folder / status
 
