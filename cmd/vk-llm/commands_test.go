@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -243,6 +245,30 @@ func TestDetach(t *testing.T) {
 	}
 	if got := f.callCount("GET /api/v1/gpu/status"); got != 0 {
 		t.Errorf("status calls = %d, want 0 (no polling under --detach)", got)
+	}
+}
+
+// TestWaitForReadyFalseDetaches confirms a config file's waitForReady: false
+// is honoured even without --detach, so start makes one call and returns.
+func TestWaitForReadyFalseDetaches(t *testing.T) {
+	f := newFake(t)
+	f.script("POST /api/v1/gpu/start", fakeResponse{code: 202, body: `{"state":"ALLOCATING"}`})
+
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("defaults:\n  waitForReady: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"start", "--config", cfgPath}, testGetenv(f, "sk-vkllm-REPLACE_ME"), &stdout, &stderr, fake.New(time.Unix(0, 0)))
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	if got := f.callCount("POST /api/v1/gpu/start"); got != 1 {
+		t.Errorf("start calls = %d, want 1", got)
+	}
+	if got := f.callCount("GET /api/v1/gpu/status"); got != 0 {
+		t.Errorf("status calls = %d, want 0 (waitForReady: false must skip polling)", got)
 	}
 }
 

@@ -22,30 +22,36 @@ defaults:
 	}
 
 	cases := []struct {
-		name    string
-		args    []string
-		env     map[string]string
-		wantEnd string
-		wantTO  time.Duration
+		name         string
+		args         []string
+		env          map[string]string
+		wantEnd      string
+		wantTO       time.Duration
+		wantWait     bool
+		wantTokenEnv string
 	}{
 		{
-			name:    "flag beats everything",
-			args:    []string{"--config", cfgPath, "--endpoint", "https://flag.example.com"},
-			env:     map[string]string{"VK_LLM_API_ENDPOINT": "https://env.example.com", "FILE_TOKEN_VAR": "sk-vkllm-REPLACE_ME"},
-			wantEnd: "https://flag.example.com",
+			name:         "flag beats everything",
+			args:         []string{"--config", cfgPath, "--endpoint", "https://flag.example.com", "--token-env", "FLAG_TOKEN_VAR"},
+			env:          map[string]string{"VK_LLM_API_ENDPOINT": "https://env.example.com", "FILE_TOKEN_VAR": "sk-vkllm-REPLACE_ME", "FLAG_TOKEN_VAR": "sk-vkllm-REPLACE_ME"},
+			wantEnd:      "https://flag.example.com",
+			wantTokenEnv: "FLAG_TOKEN_VAR",
+			wantWait:     true,
 		},
 		{
-			name:    "env beats file",
-			args:    []string{"--config", cfgPath},
-			env:     map[string]string{"VK_LLM_API_ENDPOINT": "https://env.example.com", "FILE_TOKEN_VAR": "sk-vkllm-REPLACE_ME"},
-			wantEnd: "https://env.example.com",
+			name:     "env beats file",
+			args:     []string{"--config", cfgPath},
+			env:      map[string]string{"VK_LLM_API_ENDPOINT": "https://env.example.com", "FILE_TOKEN_VAR": "sk-vkllm-REPLACE_ME"},
+			wantEnd:  "https://env.example.com",
+			wantWait: true,
 		},
 		{
-			name:    "file beats default",
-			args:    []string{"--config", cfgPath},
-			env:     map[string]string{"FILE_TOKEN_VAR": "sk-vkllm-REPLACE_ME"},
-			wantEnd: "https://file.example.com",
-			wantTO:  20 * time.Minute,
+			name:     "file beats default",
+			args:     []string{"--config", cfgPath},
+			env:      map[string]string{"FILE_TOKEN_VAR": "sk-vkllm-REPLACE_ME"},
+			wantEnd:  "https://file.example.com",
+			wantTO:   20 * time.Minute,
+			wantWait: true,
 		},
 	}
 	for _, c := range cases {
@@ -58,7 +64,66 @@ defaults:
 			if cfg.Endpoint != c.wantEnd {
 				t.Errorf("Endpoint = %q, want %q", cfg.Endpoint, c.wantEnd)
 			}
+			if c.wantTO != 0 && cfg.StartupTimeout != c.wantTO {
+				t.Errorf("StartupTimeout = %v, want %v", cfg.StartupTimeout, c.wantTO)
+			}
+			if c.wantTokenEnv != "" && cfg.TokenEnv != c.wantTokenEnv {
+				t.Errorf("TokenEnv = %q, want %q", cfg.TokenEnv, c.wantTokenEnv)
+			}
+			if cfg.WaitForReady != c.wantWait {
+				t.Errorf("WaitForReady = %v, want %v", cfg.WaitForReady, c.wantWait)
+			}
 		})
+	}
+}
+
+func TestWaitForReadyFromFile(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+api:
+  endpoint: https://file.example.com
+defaults:
+  waitForReady: false
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, code, _ := loadConfig([]string{"--config", cfgPath}, func(k string) string {
+		if k == "VK_LLM_TOKEN" {
+			return "sk-vkllm-REPLACE_ME"
+		}
+		return ""
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if cfg.WaitForReady {
+		t.Error("WaitForReady = true, want false from the config file")
+	}
+}
+
+func TestBadStartupTimeoutRejected(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+api:
+  endpoint: https://file.example.com
+defaults:
+  startupTimeout: not-a-duration
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, code, usage := loadConfig([]string{"--config", cfgPath}, func(k string) string {
+		if k == "VK_LLM_TOKEN" {
+			return "sk-vkllm-REPLACE_ME"
+		}
+		return ""
+	})
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 for a bad startupTimeout", code)
+	}
+	if usage == "" || !contains(usage, "startupTimeout") {
+		t.Errorf("usage = %q, want it to mention startupTimeout", usage)
 	}
 }
 

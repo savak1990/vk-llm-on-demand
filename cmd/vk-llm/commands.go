@@ -78,14 +78,15 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 		return code
 	}
 	cl := newClient(cfg)
+	detach := *detachFlag || !cfg.WaitForReady
 
 	switch sub {
 	case "start":
-		return cmdStart(cfg, cl, c, stdout, stderr, *timeoutFlag, *detachFlag, *jsonFlag)
+		return cmdStart(cfg, cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag)
 	case "status":
 		return cmdStatus(cl, stdout, stderr, *jsonFlag)
 	case "stop":
-		return cmdStop(cl, c, stdout, stderr, *timeoutFlag, *detachFlag, *jsonFlag)
+		return cmdStop(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag)
 	default:
 		return 2
 	}

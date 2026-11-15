@@ -120,7 +120,7 @@ func (c *client) do(ctx context.Context, method, path string, body io.Reader) (a
 		return apiResult{}, 1, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	switch {
 	case resp.StatusCode == 401 || resp.StatusCode == 403:

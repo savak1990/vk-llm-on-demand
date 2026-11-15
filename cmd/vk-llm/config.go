@@ -50,7 +50,7 @@ func loadConfig(args []string, getenv func(string) string) (cfg Config, exitCode
 	endpointFlag := fs.String("endpoint", "", "management API endpoint")
 	tokenEnvFlag := fs.String("token-env", "", "environment variable holding the management token")
 	configFlag := fs.String("config", "", "path to config.yaml")
-	fs.String("timeout", "", "") // consumed by commands.go in Task 4; parsed here only to avoid "flag provided but not defined"
+	fs.String("timeout", "", "") // these exist in this flag set only so parsing doesn't fail; the values are read in commands.go
 	fs.Bool("detach", false, "")
 	fs.Bool("json", false, "")
 	fs.String("force", "", "")
@@ -66,7 +66,7 @@ func loadConfig(args []string, getenv func(string) string) (cfg Config, exitCode
 	if path == "" {
 		path = defaultConfigPath(getenv)
 	}
-	if data, err := os.ReadFile(path); err == nil { // nolint:gosec
+	if data, err := os.ReadFile(path); err == nil { //nolint:gosec
 		if msg := rejectTokenKey(data); msg != "" {
 			return Config{}, 2, msg
 		}
@@ -83,9 +83,11 @@ func loadConfig(args []string, getenv func(string) string) (cfg Config, exitCode
 			cfg.TokenEnv = fc.API.TokenEnv
 		}
 		if fc.Defaults.StartupTimeout != "" {
-			if d, err := time.ParseDuration(fc.Defaults.StartupTimeout); err == nil {
-				cfg.StartupTimeout = d
+			d, err := time.ParseDuration(fc.Defaults.StartupTimeout)
+			if err != nil {
+				return Config{}, 2, fmt.Sprintf("bad defaults.startupTimeout: %v", err)
 			}
+			cfg.StartupTimeout = d
 		}
 		if fc.Defaults.WaitForReady != nil {
 			cfg.WaitForReady = *fc.Defaults.WaitForReady

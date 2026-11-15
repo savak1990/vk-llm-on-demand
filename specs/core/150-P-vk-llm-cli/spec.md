@@ -121,8 +121,9 @@ defaults:
 - `http.Client{Timeout: 15 * time.Second}`; default transport, TLS
   verification on; `CheckRedirect` returns `http.ErrUseLastResponse` so the
   bearer token never follows a redirect; a 3xx is a failure (exit 1).
-- Headers: `Authorization: Bearer <token>`, `User-Agent: vk-llm/<version>`,
-  `Content-Type: application/json` with body `{}` on POST.
+- Headers: `Authorization: Bearer <token>`, `User-Agent: vk-llm/<version>`.
+  `start` and non-forced `stop` POST with an empty body and no `Content-Type`;
+  a forced `stop` POSTs `{"force":true}` with `Content-Type: application/json`.
 - Responses are decoded into a struct that ignores unknown fields, so both
   the ADR 0012 §1 document (with `result`, `nextCreateAt`) and the CORE-055
   document parse. Body read is capped at 1 MiB.
@@ -251,7 +252,7 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 - AC7. Status (FR-7.4, FR-6.8). Five scripted documents (STOPPED with null `instance`, ALLOCATING, READY, DRAINING, STOPPED with `unavailable` `no_offer`). Expected: output equals the golden files byte for byte; the READY table has all 10 rows of the Status table and the word `estimate`. `status --json` stdout equals the fake body byte for byte.
 - AC8. Exit codes. 401 → 3, 403 → 3 (on start, status and stop, and on the 3rd poll of a start), 500 → 1, 302 → 1 with the fake's redirect target receiving 0 requests, unknown subcommand → 2, `--timeout abc` → 2, missing token variable → 2.
 - AC9. Config precedence (FR-7.6). Table test over the five Configuration rows: every combination of the sources each row has (flag, environment, file, default); expected value is from the highest source present in every case. A file with `api.token`, `token` at top level, or `Token` → exit 2 and 0 requests to the fake. `--endpoint http://llm.example.com` → exit 2; `http://127.0.0.1:<port>` accepted.
-- AC10. Headers and redaction (C-16). Every request the fake records has `Authorization: Bearer sk-vkllm-REPLACE_ME`, `User-Agent: vk-llm/dev`; no request carries a body other than `{}`. Across all tests' captured stdout and stderr, the token string occurs 0 times, including the 401 error path.
+- AC10. Headers and redaction (C-16). Every request the fake records has `Authorization: Bearer sk-vkllm-REPLACE_ME`, `User-Agent: vk-llm/dev`; no request carries a body except a forced `stop`'s `{"force":true}`. Across all tests' captured stdout and stderr, the token string occurs 0 times, including the 401 error path.
 - AC11. 429 during polling. Status returns 429 with `Retry-After: 7` once, then `READY`. Expected: the next poll is registered for 7 s (fake `BlockUntil`), exit 0.
 - AC12. Tier 2 (docs/testing-strategy.md). The CORE-080 kind job runs `vk-llm status` built from the PR against the installed chart via `kubectl port-forward` to `127.0.0.1`. Expected: exit 0, table shows `State` `STOPPED`.
 - AC13. Distribution (FR-7.7). A CORE-120 release dry run lists 4 `vk-llm` archives and `checksums.txt`; `vk-llm version` from one archive prints the release `X.Y.Z`.
