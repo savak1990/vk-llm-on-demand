@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -54,6 +56,9 @@ type apiError struct {
 	Code    string
 	Message string
 	Reason  string
+	// RetryAfterSeconds is set from a 429 response's Retry-After header,
+	// so the caller's poll loop can wait that long instead of the normal tick.
+	RetryAfterSeconds int
 }
 
 func (e *apiError) Error() string {
@@ -120,6 +125,8 @@ func (c *client) do(ctx context.Context, method, path string, body io.Reader) (a
 	switch {
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
 		return apiResult{}, 3, decodeAPIError(raw, resp.StatusCode)
+	case resp.StatusCode == 429:
+		return apiResult{}, 1, decodeRetryAfter(raw, resp)
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		return apiResult{}, 1, fmt.Errorf("unexpected redirect: %d", resp.StatusCode)
 	case resp.StatusCode >= 400:
@@ -145,4 +152,18 @@ func decodeAPIError(raw []byte, statusCode int) error {
 		return fmt.Errorf("http %d", statusCode)
 	}
 	return &apiError{Code: wire.Error.Code, Message: wire.Error.Message, Reason: wire.Error.Reason}
+}
+
+// decodeRetryAfter builds the 429 error, carrying the Retry-After header
+// even when the body doesn't decode into the usual error shape.
+func decodeRetryAfter(raw []byte, resp *http.Response) error {
+	err := decodeAPIError(raw, resp.StatusCode)
+	var ae *apiError
+	if !errors.As(err, &ae) {
+		ae = &apiError{Code: "rate_limited"}
+	}
+	if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil {
+		ae.RetryAfterSeconds = secs
+	}
+	return ae
 }
