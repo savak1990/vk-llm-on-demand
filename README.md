@@ -32,13 +32,13 @@ done:
 - Observability
 - The release pipeline
 - The `vk-llm` CLI
+- Remote control from GitHub Actions
 
 These parts are not yet done:
 
 - Security hardening
 - Platform wiring
 - End-to-end acceptance tests
-- Remote control from GitHub Actions
 - CI and release hardening
 - Persistent-volume caching
 
@@ -130,6 +130,40 @@ export VK_LLM_API_ENDPOINT=https://api.lab.example.com
 export VK_LLM_TOKEN=<your management token>
 vk-llm status
 ```
+
+## Remote control from GitHub Actions
+
+Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
+
+1. Go to the repository's Settings, then Secrets and variables, then
+   Actions.
+2. Add a repository secret named `VK_LLM_TOKEN`. Use a management token
+   issued for this workflow, separate from any token on your laptop.
+3. Add a repository variable named `VK_LLM_API_ENDPOINT`. Set it to your
+   installation's management API URL, for example
+   `https://llm.<your-domain>`.
+4. Go to the Actions tab, select `gpu-control`, and run it with the
+   `action` input set to `start`, `status`, or `stop`.
+
+The workflow reaches your installation over the network. Pick the option
+that matches your setup:
+
+| Access | When to use it | Note |
+|---|---|---|
+| HTTPS (default) | Your installation accepts connections from the internet. | The token is the only gate. The same rate limit and budget cap apply as for any other client. |
+| VPN | You keep your installation off the public internet. | The workflow needs a self-hosted runner with access to the VPN. |
+| Self-hosted runner | `VK_LLM_API_ENDPOINT` is not reachable from the internet. | Change `runs-on` in `gpu-control.yml` to point at your runner. The secret and variable setup does not change. |
+
+Run one dispatch at a time. A second dispatch does not start until the
+first run is complete. A `stop` can wait up to 20 minutes behind a
+`start`, and the GPU continues to cost money during this time. A newer
+dispatch replaces an older dispatch that waits in the queue. Wait for
+each run to complete before you start the next run.
+
+`gpu-control` never holds a provider credential. It only calls the
+management API, with the same idempotent, budget-gated behavior as
+`vk-llm`. A GPU started from Actions idles out on the usual 30-minute
+schedule — the workflow does not reset it.
 
 ## OpenCode
 

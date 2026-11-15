@@ -38,12 +38,16 @@ jobs:
               - 'deploy/docker/gpu-on-demand.Dockerfile'
               - 'Makefile'
               - 'test/kind/**'
+              - 'scripts/gpu-control.sh'
+              - 'test/gpucontrol/**'
+              - '.github/workflows/gpu-control.yml'
             helm:
               - 'deploy/helm/**'
               - 'test/kind/**'
               - 'scripts/check-rbac.sh'
             workflows:
               - '.github/**'
+              - 'scripts/gpu-control.sh'
             cli:
               - 'cmd/vk-llm/**'
               - '.goreleaser.yaml'
@@ -455,6 +459,8 @@ jobs:
           sudo mv actionlint /usr/local/bin/actionlint
 
       - run: actionlint -color
+
+      - run: make lint-gpu-control-script
 
   repo:
     needs: changes
