@@ -207,7 +207,7 @@ secondsUntilIdleShutdown=n/a`.
 
 | Item | Kind | Set by |
 |---|---|---|
-| `VK_LLM_TOKEN` | repository secret | a `management-tokens` entry (ADR 0012 §3) issued for this workflow, distinct from the one a human puts in `~/.config/vk-llm/config.yaml`, so leaking one does not force rotating the other |
+| `VK_LLM_TOKEN` | Environment secret in `gpu-control` (2026-11-21, ADR 0015; was a repository secret) | a `management-tokens` entry (ADR 0012 §3) issued for this workflow, distinct from the one a human puts in `~/.config/vk-llm/config.yaml`, so leaking one does not force rotating the other; the Environment is deployable from `main` only, so a branch workflow cannot read it |
 | `VK_LLM_API_ENDPOINT` | repository variable | `https://llm.<fqdn>` (placeholder; never the real domain in Git, ADR 0013 §1) |
 
 Access options, documented, not all defaults:

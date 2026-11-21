@@ -135,11 +135,15 @@ vk-llm status
 
 Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
 
-1. Go to the repository's Settings, then Secrets and variables, then
-   Actions.
-2. Add a repository secret named `VK_LLM_TOKEN`. Use a management token
-   issued for this workflow, separate from any token on your laptop.
-3. Add a repository variable named `VK_LLM_API_ENDPOINT`. Set it to your
+1. Go to the repository's Settings, then Environments. Create an
+   environment named `gpu-control`. Under Deployment branches and tags,
+   select "Protected branches only". `make repo-settings` does this
+   step for you.
+2. In that environment, add a secret named `VK_LLM_TOKEN`. Use a
+   management token issued for this workflow, separate from any token on
+   your laptop. Only runs from `main` can read it.
+3. Go to Settings, then Secrets and variables, then Actions. Add a
+   repository variable named `VK_LLM_API_ENDPOINT`. Set it to your
    installation's management API URL, for example
    `https://llm.<your-domain>`.
 4. Go to the Actions tab, select `gpu-control`, and run it with the

@@ -69,4 +69,12 @@ gh api -X PATCH "repos/$REPO" \
   --silent
 echo "REPO-SETTINGS: squash-only, branch deleted on merge"
 
+# The gpu-control workflow reads VK_LLM_TOKEN from this Environment, so only
+# a run from a protected branch (main) can get the secret. -F sends booleans.
+gh api -X PUT "repos/$REPO/environments/gpu-control" \
+  -F 'deployment_branch_policy[protected_branches]=true' \
+  -F 'deployment_branch_policy[custom_branch_policies]=false' \
+  --silent
+echo "REPO-SETTINGS: environment gpu-control deploys from protected branches only"
+
 echo "REPO-SETTINGS: done."
