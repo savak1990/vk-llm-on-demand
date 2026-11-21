@@ -51,8 +51,9 @@ HELM_TEST_SET = --set image.tag=test \
 	--set existingSecrets.provider=p --set existingSecrets.apiKeys=k --set existingSecrets.ssh=s \
 	--set config.model.url=https://example.com/m.gguf \
 	--set config.model.sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
-	--set config.worker.image=example/worker \
-	--set prometheusRule.enabled=true --set dashboard.enabled=true
+	--set config.worker.image=example/worker@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
+	--set prometheusRule.enabled=true --set dashboard.enabled=true \
+	--set networkPolicy.enabled=true --set 'networkPolicy.apiServerCidrs[0]=10.96.0.1/32'
 
 helm-lint: ## Lint the deploy/helm/<CHART> chart
 	helm lint deploy/helm/$(CHART) $(HELM_TEST_SET)
