@@ -1,10 +1,10 @@
-# Set by the platform's helm parameter; never committed (C-14).
+# Set by the platform's helm parameter; never committed.
 fqdn: ""
 hostPrefix: llm
 namespace: llm
 
-# The one place versions are pinned (ADR 0008 §5). Both come from the same
-# commit so the chart and the image it runs always match.
+# The one place versions are pinned. Both come from the same commit so the
+# chart and the image it runs always match.
 charts:
   registry: ghcr.io/savak1990/vk-llm-on-demand/charts
 chartVersion: "0.1.1-main.0ab826b"
@@ -18,7 +18,8 @@ secrets:
   apiKeys: vk-llm-api-token
   ssh: vk-llm-ssh-key
 
-# Pinned by the CORE-030 spike; the chart has no default on purpose.
+# Pinned from the model/image values already verified elsewhere; the chart
+# has no default on purpose.
 model:
   url: https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen_Qwen3.6-35B-A3B-Q5_K_M.gguf
   sha256: ec438d1326eb11d8bb94785c54739cd4b60b01ae32bd8532e232a046b19d296d

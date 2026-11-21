@@ -2,8 +2,8 @@ apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   # Name, namespace and the default release name together fix the HTTPRoute
-  # name (gpu-on-demand), the state ConfigMap name and the installationId
-  # CORE-140 recomputes. Never set helm.releaseName, never rename this.
+  # name (gpu-on-demand), the state ConfigMap name and the installationId a
+  # later consumer recomputes. Never set helm.releaseName, never rename this.
   name: gpu-on-demand
   namespace: argocd
   finalizers:
