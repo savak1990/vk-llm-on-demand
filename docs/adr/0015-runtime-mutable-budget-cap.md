@@ -47,18 +47,19 @@ chose to keep one credential tier for simplicity rather than add a second.
    would make an old document's implicit zero value indistinguishable from
    a deliberately-exhausted budget, and `EstimatedMTD(doc) >= 0` is always
    true, hard-blocking every start on the first reconcile after upgrade.
-   `internal/budget.Checker.Allow`, `EstimatedMTD`, and `UsedRatio` read
-   this field directly from the `doc` argument they already receive; the
-   `Config.MonthlyUSD` the `Checker` is constructed with stops being the
-   enforced value and becomes only the seed default for a document that
-   has never set `BudgetMonthUSD`.
+   One method, `Checker.CapUSD(doc)`, decides the enforced cap: the
+   document's value when set, `Config.MonthlyUSD` (the Helm value) when
+   `nil`. `Allow` and `UsedRatio` call it; nothing else reads the cap.
 
 2. **A fixed ceiling, outside the document, that the API can never exceed.**
    `config.Budget` gains `MaxMonthlyUSD` (env `VKLLM_BUDGET_MAX_MONTHLY_USD`,
    default 100; Helm value `config.budget.maxMonthlyUSD`). `POST
-   /api/v1/gpu/budget` rejects any value above it with `400`. Raising the
-   ceiling itself still needs `helm upgrade` — only the value between $0
-   and the ceiling is runtime-mutable. This is the one piece of this ADR
+   /api/v1/gpu/budget` rejects any value above it with `400`, and
+   `Checker.CapUSD` also clamps the enforced cap to it — so lowering the
+   ceiling with `helm upgrade` bounds a larger value an API call stored
+   earlier. Raising the ceiling itself still needs `helm upgrade` — only
+   the value between $0 and the ceiling is runtime-mutable. Startup fails
+   if `MaxMonthlyUSD <= 0` or `MonthlyUSD > MaxMonthlyUSD`. This is the one piece of this ADR
    that is not optional: without it, a leaked management token's worst
    case goes from a fixed, operator-chosen number to the full prepaid
    Vast.ai balance, for the cost of one HTTP request. With it, the worst
@@ -75,24 +76,21 @@ chose to keep one credential tier for simplicity rather than add a second.
    within the ceiling, change what a credential is allowed to spend.
 
 4. **`config.Mgmt.BudgetMonthUSD` is removed, not deprecated.**
-   `controller.Snapshot` gains a `BudgetMonthUSD float64` field, populated
-   from the controller's own view of `doc.BudgetMonthUSD` (falling back to
-   `config.Budget.MonthlyUSD` only in the gap before the bootstrap backfill
-   in Decision 5 runs). `buildStatusDocument` and `buildCostDocument` read
+   `controller.Snapshot` gains `BudgetMonthUSD` and `BudgetCeilingUSD`,
+   both filled from `Checker.CapUSD(doc)` and `Checker.CeilingUSD()`.
+   `buildStatusDocument` and `buildCostDocument` read
    `snap.BudgetMonthUSD` instead of `cfg.BudgetMonthUSD`. The env var
-   `VKLLM_MGMT_BUDGET_MONTH_USD`, the `config.Mgmt.BudgetMonthUSD` field,
-   and wherever the Helm chart renders that env var are deleted outright.
-   Keeping a second, now-provably-redundant copy around "just in case"
-   reintroduces the exact two-values problem this ADR exists to close.
+   `VKLLM_MGMT_BUDGET_MONTH_USD`, the `config.Mgmt.BudgetMonthUSD` field
+   and the override line in `cmd/gpu-on-demand/wire.go` are deleted
+   outright. The Helm chart never rendered that env var (spec 080), so
+   the chart needs no removal.
 
-5. **A document missing the field is backfilled once, at controller
-   startup, before the management API begins serving.** The controller's
-   existing bootstrap sequence gains one step: if `doc.BudgetMonthUSD ==
-   nil`, set it to `config.Budget.MonthlyUSD` and persist it through the
-   same `store.Transition` machinery every other mutation already uses.
-   This runs once, synchronously, before the first request is served, so
-   there is no window where `GET /status` can observe a `nil`-derived
-   value.
+5. **No migration write.** A document written before this ADR has no
+   `budgetMonthUsd` key; it decodes to `nil`, and `CapUSD` returns the Helm
+   value — exactly today's behaviour. The field is written only when an
+   operator sets a budget. A startup backfill was rejected: `main.go`
+   starts the controller loop and the API server concurrently, so a
+   backfill inside the loop could race the first API request.
 
 ## Consequences
 
