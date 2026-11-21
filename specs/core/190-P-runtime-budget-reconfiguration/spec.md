@@ -328,13 +328,13 @@ Tier 1 and tier 2 only — no real Vast.ai spend.
 
 ## Definition of done
 
-- [ ] AC1–AC12 pass (tier 1/2).
-- [ ] `make specs-check go-build go-test go-lint helm-lint helm-template`
+- [x] AC1–AC12 pass (tier 1/2).
+- [x] `make specs-check go-build go-test go-lint helm-lint helm-template`
       all exit 0.
-- [ ] CORE-110's threat-model table has the new row.
+- [x] CORE-110's threat-model table has the new row.
 - [ ] ADR 0015 flipped to Accepted in the same PR.
 - [ ] Status flipped to DONE; folder renamed `190-D-...`.
-- [ ] Evidence section filled.
+- [x] Evidence section filled.
 
 ## Open questions
 
@@ -346,4 +346,28 @@ Tier 1 and tier 2 only — no real Vast.ai spend.
 
 ## Evidence
 
-None yet.
+| SHA | Task | Content |
+|---|---|---|
+| `0478c47` | Task 1 | Document field, `Checker.CapUSD`, `config.Budget.MaxMonthlyUSD`, wiring, Helm ceiling value |
+| `0f62fa5` | Task 2 | Controller `Snapshot` fields, `SetBudgetMonthUSD`, errors |
+| `d26d501` | Task 3 | Status/cost documents read the live cap from `Snapshot`; `budget_exhausted` message |
+| `1b0d270` | Task 4 | `POST /api/v1/gpu/budget` with ceiling rejection and audit log |
+| `94fa3a0` | Task 4 (fix) | Review fixes: `keyID` naming, AC12 budget coverage |
+| `d04de3a` | Task 5 | `vk-llm budget` and `vk-llm budget set` |
+| `4505064` | Task 5 (fix) | Fix stale parse-loop comment after `budget` subArgs change |
+| `5002432` | Task 6 | `gpu-control` budget action |
+
+| AC | Test |
+|---|---|
+| AC1 | `TestCapUSDDefaultsToConfig`, `TestStatusBudgetDefaultsToConfig`, existing CORE-100 `Allow` tests unchanged |
+| AC2 | `TestAllowUsesDocumentCap`, `TestRaisedBudgetUnblocksNextStart` |
+| AC3 | `TestCapUSDClampsToCeiling` |
+| AC4 | `TestBudgetRejections`, `TestSetBudgetMonthUSDRejects` |
+| AC5 | `TestSetBudgetMonthUSDStoresValueAndKeepsLedger` |
+| AC6 | `TestStatusDocumentBudgetFromSnapshot`, `TestWireCostShowsBudgetMonthlyUSD` |
+| AC7 | `TestStartBudgetExhaustedMessage` |
+| AC8 | `TestBudgetChangeIsLogged` |
+| AC9 | `TestBudgetShow`, `TestBudgetSet`, `TestBudgetSetRejectsBadAmount` |
+| AC10 | `TestBudgetShowCallsStatus`, `TestBudgetSetPostsBody`, `TestBudgetSetRejectsNonNumeric`, `TestWorkflowShape` |
+| AC11 | `git grep VKLLM_MGMT_BUDGET_MONTH_USD -- '*.go' '*.yaml' '*.tpl'` returns nothing |
+| AC12 | existing gateway tests pass unchanged |
