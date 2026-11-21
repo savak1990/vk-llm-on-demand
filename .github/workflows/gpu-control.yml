@@ -5,8 +5,12 @@ on:
       action:
         description: What to do to the GPU backend
         type: choice
-        options: [start, status, stop]
+        options: [start, status, stop, budget]
         default: status
+      monthly_usd:
+        description: New monthly budget in USD (budget action only; blank shows the current value)
+        required: false
+        type: string
 permissions: {}
 concurrency:
   group: gpu-control
@@ -19,6 +23,7 @@ jobs:
       contents: read
     env:
       ACTION: ${{ inputs.action }}
+      MONTHLY_USD: ${{ inputs.monthly_usd }}
       VK_LLM_TOKEN: ${{ secrets.VK_LLM_TOKEN }}
       ENDPOINT: ${{ vars.VK_LLM_API_ENDPOINT }}
     steps:

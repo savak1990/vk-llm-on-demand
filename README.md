@@ -131,6 +131,21 @@ export VK_LLM_TOKEN=<your management token>
 vk-llm status
 ```
 
+Show or change the monthly budget. The new value applies at once, with no
+redeploy. It cannot exceed the ceiling set by `config.budget.maxMonthlyUSD`
+(default $100).
+
+```bash
+vk-llm budget            # current budget and spend this month
+vk-llm budget set 40     # raise or lower the monthly budget
+```
+
+After you set the budget with `vk-llm budget set`, the stored value
+replaces `config.budget.monthlyUSD`. A later `helm upgrade` does not change
+it. If `config.budget.monthlyUSD` is above `config.budget.maxMonthlyUSD`
+(default $100), the controller refuses to start. Raise `maxMonthlyUSD` in
+the same `helm upgrade`.
+
 ## Remote control from GitHub Actions
 
 Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
@@ -143,7 +158,11 @@ Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
    installation's management API URL, for example
    `https://llm.<your-domain>`.
 4. Go to the Actions tab, select `gpu-control`, and run it with the
-   `action` input set to `start`, `status`, or `stop`.
+   `action` input set to `start`, `status`, `stop`, or `budget`.
+
+To change the budget from the Actions tab, set `action` to `budget` and
+type the new amount in `monthly_usd`. Leave `monthly_usd` blank to show
+the current budget.
 
 The workflow reaches your installation over the network. Pick the option
 that matches your setup:

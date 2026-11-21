@@ -78,6 +78,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [160](core/160-D-github-actions-remote-control/spec.md) | `gpu-control.yml` manual workflow | 055 |
 | [170](core/170-P-security-ci-and-release/spec.md) | gitleaks, govulncheck, trivy, SECURITY.md, release checklist | 010, 120 |
 | [180](core/180-P-persistent-volume-cache/spec.md) | P2: persistent-volume cache and preferred host (not in the initial release) | 020, 050 |
+| [190](core/190-D-runtime-budget-reconfiguration/spec.md) | Runtime-mutable budget cap, with a fixed ceiling | 055, 100, 150, 160 |
 
 ## Order of work
 

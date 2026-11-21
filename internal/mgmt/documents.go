@@ -65,7 +65,7 @@ func buildStatusDocument(snap controller.Snapshot, cfg config.Mgmt, now time.Tim
 		Provider: snap.Provider, State: snap.Public, Desired: snap.Desired,
 		Generation: snap.Generation, Model: modelDoc{Alias: cfg.ModelAlias, ContextSize: cfg.ModelContextSize},
 		Ready: snap.Public == "READY", Cost: costSummary{
-			EstimatedInstanceUSD: snap.SpendInstanceUSD, EstimatedMonthUSD: snap.SpendMTDUSD, BudgetMonthUSD: cfg.BudgetMonthUSD,
+			EstimatedInstanceUSD: snap.SpendInstanceUSD, EstimatedMonthUSD: snap.SpendMTDUSD, BudgetMonthUSD: snap.BudgetMonthUSD,
 		},
 		Unavailable: snap.Unavailable, InstallationID: snap.InstallationID, LabelPrefix: snap.LabelPrefix,
 	}
@@ -94,9 +94,9 @@ func buildStatusDocument(snap controller.Snapshot, cfg config.Mgmt, now time.Tim
 	return doc
 }
 
-func buildCostDocument(snap controller.Snapshot, cfg config.Mgmt, now time.Time) costDocument {
+func buildCostDocument(snap controller.Snapshot, _ config.Mgmt, now time.Time) costDocument {
 	doc := costDocument{
-		Estimates: true, EstimatedMonthUSD: snap.SpendMTDUSD, BudgetMonthUSD: cfg.BudgetMonthUSD,
+		Estimates: true, EstimatedMonthUSD: snap.SpendMTDUSD, BudgetMonthUSD: snap.BudgetMonthUSD,
 		ProviderBalanceUSD: snap.ProviderBalanceUSD, Limitations: limitationsText,
 	}
 	if !snap.CreatedAt.IsZero() {

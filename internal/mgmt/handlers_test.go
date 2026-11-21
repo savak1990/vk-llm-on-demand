@@ -239,3 +239,28 @@ func TestStopCoalescesConcurrentCalls(t *testing.T) {
 		}
 	}
 }
+
+func TestStartBudgetExhaustedMessage(t *testing.T) {
+	fc := newFakeController()
+	fc.startErr = controller.ErrGPUUnavailable
+	fc.startSnap = controller.Snapshot{Unavailable: "budget_exhausted", BudgetMonthUSD: 30, SpendMTDUSD: 30.12}
+	rec := doReq(newTestServer(t, fc), "POST", "/api/v1/gpu/start", "")
+	var body map[string]map[string]string
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	want := "monthly budget of $30.00 reached ($30.12 spent); raise it with vk-llm budget set"
+	if body["error"]["message"] != want {
+		t.Fatalf("message = %q, want %q", body["error"]["message"], want)
+	}
+}
+
+func TestStartOtherDenialsKeepEmptyMessage(t *testing.T) {
+	fc := newFakeController()
+	fc.startErr = controller.ErrGPUUnavailable
+	fc.startSnap = controller.Snapshot{Unavailable: "no_offer"}
+	rec := doReq(newTestServer(t, fc), "POST", "/api/v1/gpu/start", "")
+	var body map[string]map[string]string
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if body["error"]["message"] != "" {
+		t.Fatalf("message = %q, want empty for no_offer", body["error"]["message"])
+	}
+}

@@ -10,6 +10,7 @@ import (
 // Config holds every value this package needs; none are hard-coded.
 type Config struct {
 	MonthlyUSD        float64
+	MaxMonthlyUSD     float64
 	WarnFraction      float64
 	MaxHourlyPriceUSD float64
 }
@@ -29,7 +30,7 @@ var ErrPriceTooHigh = errors.New("budget: offer price above lifecycle.safety.max
 // Allow checks the monthly cap before the balance floor and returns on
 // the first failure — never both reasons at once.
 func (c *Checker) Allow(doc store.Document, balance provider.Money, known bool) string {
-	if c.EstimatedMTD(doc) >= c.cfg.MonthlyUSD {
+	if c.EstimatedMTD(doc) >= c.CapUSD(doc) {
 		return "budget_exhausted"
 	}
 	if !known || balance.USD() < 2*c.cfg.MaxHourlyPriceUSD {
@@ -40,11 +41,27 @@ func (c *Checker) Allow(doc store.Document, balance provider.Money, known bool) 
 
 // UsedRatio never denies by itself; it exists for a future metric.
 func (c *Checker) UsedRatio(doc store.Document) float64 {
-	if c.cfg.MonthlyUSD == 0 {
+	limit := c.CapUSD(doc)
+	if limit == 0 {
 		return 0
 	}
-	return c.EstimatedMTD(doc) / c.cfg.MonthlyUSD
+	return c.EstimatedMTD(doc) / limit
 }
+
+// CapUSD is the enforced monthly cap: an operator-set value wins over the
+// configured default, and neither may exceed the configured ceiling.
+func (c *Checker) CapUSD(doc store.Document) float64 {
+	v := c.cfg.MonthlyUSD
+	if doc.BudgetMonthUSD != nil {
+		v = *doc.BudgetMonthUSD
+	}
+	if c.cfg.MaxMonthlyUSD > 0 && v > c.cfg.MaxMonthlyUSD {
+		v = c.cfg.MaxMonthlyUSD
+	}
+	return v
+}
+
+func (c *Checker) CeilingUSD() float64 { return c.cfg.MaxMonthlyUSD }
 
 // EstimatedMTD is the closed-entries total plus every open entry's
 // current estimate; a closed entry's EstUSD is never added twice.

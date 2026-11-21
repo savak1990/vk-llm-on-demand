@@ -16,7 +16,7 @@ func registerMetrics(reg prometheus.Registerer) {
 		return
 	}
 	reg.MustRegister(mgmtRequestsTotal, mgmtRequestSeconds)
-	for _, op := range []string{"start", "status", "stop", "cost", "other"} {
+	for _, op := range []string{"start", "status", "stop", "cost", "budget", "other"} {
 		mgmtRequestSeconds.WithLabelValues(op)
 		for _, code := range []string{"200", "202", "400", "401", "403", "404", "405", "413", "429", "500", "503"} {
 			mgmtRequestsTotal.WithLabelValues(op, code)

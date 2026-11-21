@@ -71,6 +71,7 @@ func TestAuthMatrix(t *testing.T) {
 	routes := []struct{ method, path string }{
 		{"GET", "/api/v1/gpu/status"}, {"GET", "/api/v1/gpu/cost"},
 		{"POST", "/api/v1/gpu/start"}, {"POST", "/api/v1/gpu/stop"},
+		{"POST", "/api/v1/gpu/budget"},
 	}
 	for _, rt := range routes {
 		for _, c := range []struct {
