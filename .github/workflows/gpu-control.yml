@@ -1,0 +1,28 @@
+name: gpu-control
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do to the GPU backend
+        type: choice
+        options: [start, status, stop]
+        default: status
+permissions: {}
+concurrency:
+  group: gpu-control
+  cancel-in-progress: false
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      ACTION: ${{ inputs.action }}
+      VK_LLM_TOKEN: ${{ secrets.VK_LLM_TOKEN }}
+      ENDPOINT: ${{ vars.VK_LLM_API_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/gpu-control.sh
