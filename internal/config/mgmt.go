@@ -8,7 +8,6 @@ type Mgmt struct {
 	ModelAlias         string
 	ModelContextSize   int
 	ShutdownAllowForce bool
-	BudgetMonthUSD     float64
 	RateLimitPerKeyRPM int
 }
 
@@ -25,9 +24,6 @@ func LoadMgmt() (Mgmt, error) {
 		return Mgmt{}, err
 	}
 	if m.ShutdownAllowForce, err = envBool("VKLLM_LIFECYCLE_SHUTDOWN_ALLOW_FORCE", false); err != nil {
-		return Mgmt{}, err
-	}
-	if m.BudgetMonthUSD, err = envFloat("VKLLM_MGMT_BUDGET_MONTH_USD", 30); err != nil {
 		return Mgmt{}, err
 	}
 	if m.RateLimitPerKeyRPM, err = envInt("VKLLM_MGMT_RATE_LIMIT_RPM", 60); err != nil {

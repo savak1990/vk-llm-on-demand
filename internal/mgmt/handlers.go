@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
@@ -67,7 +68,12 @@ func (s *server) respondOp(w http.ResponseWriter, op string, snap controller.Sna
 		}
 		writeJSON(w, code, doc)
 	case errors.Is(err, controller.ErrGPUUnavailable):
-		writeError(w, http.StatusServiceUnavailable, "gpu_unavailable", "", snap.Unavailable)
+		message := ""
+		if snap.Unavailable == "budget_exhausted" {
+			message = fmt.Sprintf("monthly budget of $%.2f reached ($%.2f spent); raise it with vk-llm budget set",
+				snap.BudgetMonthUSD, snap.SpendMTDUSD)
+		}
+		writeError(w, http.StatusServiceUnavailable, "gpu_unavailable", message, snap.Unavailable)
 	case errors.Is(err, controller.ErrForceNotEnabled):
 		writeError(w, http.StatusBadRequest, "force_not_enabled", "", "")
 	default:

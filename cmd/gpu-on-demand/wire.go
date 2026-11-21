@@ -48,8 +48,6 @@ type wireDeps struct {
 // handlers on one mux. ctl's Run must be started by the caller — wire
 // only constructs it, so a test can inspect it before starting the loop.
 func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, error) {
-	d.Mgmt.BudgetMonthUSD = d.Budget.MonthlyUSD // one source of truth, not a second copy
-
 	if _, err := worker.BuildCreate(worker.CreateParams{
 		Image: d.Worker.WorkerImage, DiskGB: d.Controller.ProviderFilter.MinDiskGB, Label: "wire-validate",
 		ModelURL: d.Worker.ModelURL, ModelSHA256: d.Worker.ModelSHA256, Alias: d.ModelAlias,
