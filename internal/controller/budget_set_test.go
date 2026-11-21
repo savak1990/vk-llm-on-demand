@@ -56,8 +56,12 @@ func TestSetBudgetMonthUSDRejects(t *testing.T) {
 		c, _, _, _, _ := newTestController(t)
 		withCeiling(c)
 		ctx := context.Background()
-		if _, err := c.SetBudgetMonthUSD(ctx, tc.usd); !errors.Is(err, tc.want) {
+		snap, err := c.SetBudgetMonthUSD(ctx, tc.usd)
+		if !errors.Is(err, tc.want) {
 			t.Fatalf("SetBudgetMonthUSD(%v) err = %v, want %v", tc.usd, err, tc.want)
+		}
+		if errors.Is(tc.want, ErrBudgetAboveCeiling) && snap.BudgetCeilingUSD != 100 {
+			t.Fatalf("SetBudgetMonthUSD(%v) snap.BudgetCeilingUSD = %v, want 100", tc.usd, snap.BudgetCeilingUSD)
 		}
 		doc, _, _ := c.deps.Store.Load(ctx)
 		if doc.BudgetMonthUSD != nil {

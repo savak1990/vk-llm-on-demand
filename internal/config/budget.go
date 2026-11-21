@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Budget is internal/budget's own env-parsed configuration.
 type Budget struct {
@@ -29,11 +32,11 @@ func LoadBudget() (Budget, error) {
 	if b.MaxMonthlyUSD, err = envFloat("VKLLM_BUDGET_MAX_MONTHLY_USD", 100); err != nil {
 		return Budget{}, err
 	}
-	if b.MaxMonthlyUSD <= 0 {
-		return Budget{}, fmt.Errorf("config: VKLLM_BUDGET_MAX_MONTHLY_USD must be positive, got %v", b.MaxMonthlyUSD)
+	if !(b.MaxMonthlyUSD > 0) || math.IsInf(b.MaxMonthlyUSD, 0) {
+		return Budget{}, fmt.Errorf("config: VKLLM_BUDGET_MAX_MONTHLY_USD must be a positive finite number, got %v", b.MaxMonthlyUSD)
 	}
-	if b.MonthlyUSD > b.MaxMonthlyUSD {
-		return Budget{}, fmt.Errorf("config: VKLLM_BUDGET_MONTH_USD %v exceeds VKLLM_BUDGET_MAX_MONTHLY_USD %v", b.MonthlyUSD, b.MaxMonthlyUSD)
+	if !(b.MonthlyUSD <= b.MaxMonthlyUSD) {
+		return Budget{}, fmt.Errorf("config: VKLLM_BUDGET_MONTH_USD %v must be a number not above VKLLM_BUDGET_MAX_MONTHLY_USD %v", b.MonthlyUSD, b.MaxMonthlyUSD)
 	}
 	return b, nil
 }

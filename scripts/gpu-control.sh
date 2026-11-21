@@ -61,6 +61,7 @@ print_status_row() {
     "uptimeSeconds=\(.uptimeSeconds // 0) " +
     "estimatedInstanceUSD=\(.cost.estimatedInstanceUSD // "n/a") " +
     "estimatedMonthUSD=\(.cost.estimatedMonthUSD // "n/a") " +
+    "budgetMonthUSD=\(.cost.budgetMonthUSD // "n/a") " +
     "secondsUntilIdleShutdown=\($idle)"
   ' <<<"$body"
 }

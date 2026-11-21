@@ -20,6 +20,9 @@ func TestBudgetShowCallsStatus(t *testing.T) {
 	if !strings.Contains(r.stdout, "estimatedMonthUSD=12.34") {
 		t.Fatalf("stdout = %q, want the status row", r.stdout)
 	}
+	if !strings.Contains(r.stdout, "budgetMonthUSD=40") {
+		t.Fatalf("stdout = %q, want budgetMonthUSD=40", r.stdout)
+	}
 }
 
 func TestBudgetSetPostsBody(t *testing.T) {
@@ -32,6 +35,9 @@ func TestBudgetSetPostsBody(t *testing.T) {
 	calls := f.callLog("POST /api/v1/gpu/budget")
 	if len(calls) != 1 || calls[0].reqBody != `{"monthlyUSD":40}` {
 		t.Fatalf("calls = %+v, want one call with body {\"monthlyUSD\":40}", calls)
+	}
+	if !strings.Contains(r.stdout, "budgetMonthUSD=40") {
+		t.Fatalf("stdout = %q, want budgetMonthUSD=40", r.stdout)
 	}
 }
 

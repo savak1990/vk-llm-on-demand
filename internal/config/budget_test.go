@@ -76,6 +76,9 @@ func TestLoadBudgetRejectsBadCeiling(t *testing.T) {
 		{"30", "0"},
 		{"30", "-1"},
 		{"150", "100"},
+		{"30", "NaN"},
+		{"30", "Inf"},
+		{"NaN", "100"},
 	} {
 		clearBudgetEnv(t)
 		t.Setenv("VKLLM_BUDGET_MONTH_USD", tc.monthly)
