@@ -6,6 +6,7 @@ set -euo pipefail
 : "${START_MAX_WAIT:=1200}"
 : "${STOP_MAX_WAIT:=300}"
 : "${GITHUB_STEP_SUMMARY:=/dev/null}"
+: "${MONTHLY_USD:=}"
 
 if [[ "$ENDPOINT" != https://* ]]; then
   echo "gpu-control: ENDPOINT must start with https://" >&2
@@ -17,15 +18,19 @@ echo "::add-mask::${ENDPOINT#https://}" >&2
 
 req() {
   # Any non-2xx fails, including 3xx (never followed) and 000 (no connection).
-  local method=$1 path=$2
+  local method=$1 path=$2 body=${3-}
+  local extra=()
+  if [[ -n "$body" ]]; then
+    extra=(-d "$body" -H 'Content-Type: application/json')
+  fi
   local raw status
   raw=$(printf 'Authorization: Bearer %s\n' "$VK_LLM_TOKEN" |
-    curl -s --max-time 30 -X "$method" -H @- -w '\n%{http_code}' \
+    curl -s --max-time 30 -X "$method" -H @- ${extra[@]+"${extra[@]}"} -w '\n%{http_code}' \
          "$ENDPOINT/api/v1/gpu/$path")
   status=${raw: -3}
-  local body=${raw%???}
-  body=${body%$'\n'}
-  printf '%s' "$body"
+  local resp=${raw%???}
+  resp=${resp%$'\n'}
+  printf '%s' "$resp"
   [[ "$status" -ge 200 && "$status" -lt 300 ]]
 }
 
@@ -36,10 +41,11 @@ fail_from_body() {
     summarize unknown n/a
     exit 1
   fi
-  local code reason
+  local code reason message
   code=$(jq -r '.error.code // "unknown"' <<<"$body" 2>/dev/null || echo unknown)
-  reason=$(jq -r '.error.reason // "unknown"' <<<"$body" 2>/dev/null || echo unknown)
-  echo "gpu-control: $code: $reason" >&2
+  reason=$(jq -r '.error.reason // ""' <<<"$body" 2>/dev/null || echo "")
+  message=$(jq -r '.error.message // ""' <<<"$body" 2>/dev/null || echo "")
+  echo "gpu-control: $code${reason:+: $reason}${message:+: $message}" >&2
   summarize unknown n/a
   exit 1
 }
@@ -133,9 +139,25 @@ do_stop() {
   fi
 }
 
+do_budget() {
+  if [[ -z "$MONTHLY_USD" ]]; then
+    do_status
+    return
+  fi
+  if ! [[ "$MONTHLY_USD" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "gpu-control: monthly_usd must be a positive number" >&2
+    exit 2
+  fi
+  local body
+  body=$(req POST budget "{\"monthlyUSD\":$MONTHLY_USD}") || fail_from_body "$body"
+  print_status_row "$body"
+  summarize "$(jq -r '.state // "unknown"' <<<"$body")" n/a
+}
+
 case "$ACTION" in
   status) do_status ;;
   start) do_start ;;
   stop) do_stop ;;
+  budget) do_budget ;;
   *) echo "gpu-control: unknown action '$ACTION'" >&2; exit 1 ;;
 esac

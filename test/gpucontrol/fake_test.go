@@ -3,6 +3,7 @@ package gpucontrol
 import (
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ type fakeResp struct {
 type fakeCall struct {
 	authHeader string
 	body       string
+	reqBody    string
 }
 
 type fake struct {
@@ -59,6 +61,7 @@ func (f *fake) callLog(route string) []fakeCall {
 func (f *fake) URL() string { return f.srv.URL }
 
 func (f *fake) handle(w http.ResponseWriter, r *http.Request) {
+	reqBody, _ := io.ReadAll(r.Body)
 	route := r.Method + " " + r.URL.Path
 	f.mu.Lock()
 	queue := f.scripts[route]
@@ -73,7 +76,7 @@ func (f *fake) handle(w http.ResponseWriter, r *http.Request) {
 	if len(queue) > 1 {
 		f.scripts[route] = queue[1:]
 	}
-	f.calls[route] = append(f.calls[route], fakeCall{authHeader: r.Header.Get("Authorization"), body: resp.body})
+	f.calls[route] = append(f.calls[route], fakeCall{authHeader: r.Header.Get("Authorization"), body: resp.body, reqBody: string(reqBody)})
 	f.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
