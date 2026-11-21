@@ -105,6 +105,11 @@ func (c *client) stop(ctx context.Context, force bool) (apiResult, int, error) {
 	return c.do(ctx, http.MethodPost, "/api/v1/gpu/stop", body)
 }
 
+func (c *client) setBudget(ctx context.Context, usd float64) (apiResult, int, error) {
+	body := bytes.NewReader([]byte(fmt.Sprintf(`{"monthlyUSD":%s}`, strconv.FormatFloat(usd, 'f', -1, 64))))
+	return c.do(ctx, http.MethodPost, "/api/v1/gpu/budget", body)
+}
+
 func (c *client) do(ctx context.Context, method, path string, body io.Reader) (apiResult, int, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.endpoint+path, body)
 	if err != nil {
