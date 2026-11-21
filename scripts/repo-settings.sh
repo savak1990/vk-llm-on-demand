@@ -70,8 +70,8 @@ gh api -X PATCH "repos/$REPO" \
 echo "REPO-SETTINGS: squash-only, branch deleted on merge"
 
 # gpu-control.yml assumes an AWS role via OIDC only from within this
-# Environment (ADR 0015); the branch policy is what makes that possible
-# only from main. -F sends booleans.
+# Environment; the branch policy is what makes that possible only from
+# main. -F sends booleans.
 gh api -X PUT "repos/$REPO/environments/gpu-control" \
   -F 'deployment_branch_policy[protected_branches]=true' \
   -F 'deployment_branch_policy[custom_branch_policies]=false' \
