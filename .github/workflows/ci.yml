@@ -304,7 +304,7 @@ jobs:
             --set config.tunnel.dialer=direct --set config.tunnel.directAddr=fake-worker.default.svc.cluster.local:8080 \
             --set config.model.url=https://example.com/m.gguf \
             --set config.model.sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
-            --set config.worker.image=example/worker \
+            --set config.worker.image=example/worker@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
             --set existingSecrets.provider=provider-secret \
             --set existingSecrets.apiKeys=api-keys-secret \
             --set existingSecrets.ssh=ssh-secret \
@@ -385,7 +385,7 @@ jobs:
             --set config.lifecycle.idleShutdown.timeout=10m \
             --set config.model.url=https://example.com/m.gguf \
             --set config.model.sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
-            --set config.worker.image=example/worker \
+            --set config.worker.image=example/worker@sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 \
             --set existingSecrets.provider=provider-secret \
             --set existingSecrets.apiKeys=api-keys-secret \
             --set existingSecrets.ssh=ssh-secret \
