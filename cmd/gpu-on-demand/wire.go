@@ -64,7 +64,7 @@ func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, e
 	controller.RegisterMetrics(d.Reg)
 	store.RegisterMetrics(d.Reg)
 	d.Reg.MustRegister(exp)
-	b := budget.New(budget.Config{MonthlyUSD: d.Budget.MonthlyUSD, WarnFraction: d.Budget.WarnFraction, MaxHourlyPriceUSD: d.Budget.MaxHourlyPriceUSD})
+	b := budget.New(budget.Config{MonthlyUSD: d.Budget.MonthlyUSD, MaxMonthlyUSD: d.Budget.MaxMonthlyUSD, WarnFraction: d.Budget.WarnFraction, MaxHourlyPriceUSD: d.Budget.MaxHourlyPriceUSD})
 
 	ctl, err := controller.New(controller.Deps{
 		Provider: d.Provider, Store: d.Store, Dialer: d.Dialer, Clock: d.Clock,

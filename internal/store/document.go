@@ -25,6 +25,7 @@ type Document struct {
 	Ledger           Ledger          `json:"ledger"`
 	MachineDenylist  []DenyEntry     `json:"machineDenylist"`
 	Cache            json.RawMessage `json:"cache"`
+	BudgetMonthUSD   *float64        `json:"budgetMonthUsd,omitempty"`
 }
 
 type Instance struct {

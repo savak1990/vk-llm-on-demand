@@ -42,6 +42,7 @@ config:
       maxProvisionAttemptsPerHour: 3
   budget:
     monthlyUSD: 30
+    maxMonthlyUSD: 100
     warnFraction: 0.8
   controller:
     reconcileInterval: 60s
