@@ -45,6 +45,8 @@ jobs:
               - 'deploy/helm/**'
               - 'test/kind/**'
               - 'scripts/check-rbac.sh'
+              - 'gitops/**'
+              - 'scripts/gitops-check.sh'
             workflows:
               - '.github/**'
               - 'scripts/gpu-control.sh'
@@ -157,6 +159,10 @@ jobs:
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             rendered.yaml
+
+      # The pointer chart and the pinned inner chart, with the exact values the
+      # platform will pass. Needs network: pulls the pinned OCI chart from GHCR.
+      - run: make gitops-check
 
       # Packaging at the pull request's own version is what proves the version
       # override works before a merge depends on it.

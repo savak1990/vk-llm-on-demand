@@ -75,8 +75,8 @@ jobs:
           git push origin "v$VERSION"
           {
             echo "### Released \`v$VERSION\`"
-            echo "Once CORE-130 lands \`gitops/values.yaml\`, pin it there"
-            echo "then bump \`app.targetRevision\` in vk-lab-platform."
+            echo "Pin it in \`gitops/values.yaml\` (chartVersion + tag) in this repository;"
+            echo "the platform pointer tracks main, so a merge there is the deploy."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0

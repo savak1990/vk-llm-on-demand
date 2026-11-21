@@ -1,0 +1,9 @@
+{{- if not .Values.fqdn }}
+{{ fail "fqdn is required (set by the platform's helm parameter)" }}
+{{- end }}
+{{- if not .Values.chartVersion }}
+{{ fail "chartVersion is required (the gpu-on-demand chart version to install)" }}
+{{- end }}
+{{- if not .Values.tag }}
+{{ fail "tag is required (the gpu-on-demand image tag to install)" }}
+{{- end }}

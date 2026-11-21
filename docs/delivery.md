@@ -56,13 +56,11 @@ to a real build instead of failing.
 
 ## 3. Promotion to the platform
 
-`gitops/` does not exist in this repository yet. Once it is added,
-promotion will mean bumping the pinned chart version in
-`gitops/values.yaml` in this repository, then opening a one-line pull
-request in `vk-lab-platform` that moves its `targetRevision` pointer to
-match. This repository holds no platform code: no Argo `Application`, no
-External Secrets policy, no SSM parameter. Until that file exists, a
-released version sits in GHCR and nothing points the platform at it.
+Promotion means bumping `chartVersion` and `tag` in `gitops/values.yaml` in
+this repository and merging. The platform's pointer `Application`
+(`vk-lab-platform/gitops/templates/apps/vk-llm-on-demand/`) tracks `main`,
+so that merge is the deploy. This repository holds no platform code: no
+`AppProject`, no ExternalSecret policy, no SSM parameter.
 
 ## 4. Artifact retention and GHCR runbook
 
