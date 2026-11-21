@@ -111,6 +111,11 @@ same `known` guard `reconcilePruneAndBudget` already applies to every
 `Allow` check, not necessarily the very next reconcile tick. This ADR does
 not change that cadence.
 
+Rolling back to a binary older than this ADR is safe but lossy: the store
+decoder ignores unknown keys, so the old binary loads the document, and
+its next write drops `budgetMonthUsd`. The cap returns to the Helm value
+— the safe direction, since `budget.monthlyUSD` never exceeds the ceiling.
+
 ## Alternatives considered
 
 **A second `budget-tokens` Secret key**, mirroring the existing
