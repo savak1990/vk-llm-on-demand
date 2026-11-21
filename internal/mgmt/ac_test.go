@@ -235,7 +235,7 @@ func TestAC12_RedactionAcrossAllRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Gather: %v", err)
 	}
-	allowedOps := map[string]bool{"start": true, "status": true, "stop": true, "cost": true, "other": true}
+	allowedOps := map[string]bool{"start": true, "status": true, "stop": true, "cost": true, "budget": true, "other": true}
 	allowedCodes := map[string]bool{
 		"200": true, "202": true, "400": true, "401": true, "403": true, "404": true,
 		"405": true, "413": true, "429": true, "500": true, "503": true,

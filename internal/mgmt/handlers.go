@@ -15,6 +15,7 @@ func (s *server) routes() {
 	s.mux.HandleFunc("/api/v1/gpu/status", s.method(http.MethodGet, s.handleStatus))
 	s.mux.HandleFunc("/api/v1/gpu/stop", s.method(http.MethodPost, s.handleStop))
 	s.mux.HandleFunc("/api/v1/gpu/cost", s.method(http.MethodGet, s.handleCost))
+	s.mux.HandleFunc("/api/v1/gpu/budget", s.method(http.MethodPost, s.handleBudget))
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "", "")
 	})
@@ -89,6 +90,37 @@ func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 func (s *server) handleCost(w http.ResponseWriter, _ *http.Request) {
 	snap := s.d.Controller.Status()
 	writeJSON(w, http.StatusOK, buildCostDocument(snap, s.d.Config, s.d.Clock.Now()))
+}
+
+type budgetRequest struct {
+	MonthlyUSD float64 `json:"monthlyUSD"`
+}
+
+func (s *server) handleBudget(w http.ResponseWriter, r *http.Request) {
+	var req budgetRequest
+	if !decodeStrict(w, r, &req) {
+		return
+	}
+	before := s.d.Controller.Status()
+	snap, err := s.d.Controller.SetBudgetMonthUSD(r.Context(), req.MonthlyUSD)
+	switch {
+	case err == nil:
+		keyID := ""
+		if sink := keyIDSink(r.Context()); sink != nil {
+			keyID = *sink
+		}
+		if s.d.Log != nil {
+			s.d.Log.Info("mgmt: budget changed", "keyID", keyID, "oldUSD", before.BudgetMonthUSD, "newUSD", snap.BudgetMonthUSD)
+		}
+		writeJSON(w, http.StatusOK, buildStatusDocument(snap, s.d.Config, s.d.Clock.Now()))
+	case errors.Is(err, controller.ErrBudgetInvalid):
+		writeError(w, http.StatusBadRequest, "budget_invalid", "monthlyUSD must be a positive number", "")
+	case errors.Is(err, controller.ErrBudgetAboveCeiling):
+		writeError(w, http.StatusBadRequest, "budget_above_ceiling",
+			fmt.Sprintf("monthlyUSD must not exceed the configured ceiling of $%.2f", snap.BudgetCeilingUSD), "")
+	default:
+		writeError(w, http.StatusInternalServerError, "internal_error", "", "")
+	}
 }
 
 // decodeStrict rejects unknown fields and the wrong JSON type for

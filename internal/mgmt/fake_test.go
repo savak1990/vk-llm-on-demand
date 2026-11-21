@@ -15,6 +15,10 @@ type fakeController struct {
 	startBlock                      chan struct{} // when non-nil, Start blocks until closed
 	stopBlock                       chan struct{} // when non-nil, Stop blocks until closed
 	stopForce                       bool          // force passed on the most recent Stop call
+	budgetCalls                     int
+	budgetUSD                       float64
+	budgetSnap                      controller.Snapshot
+	budgetErr                       error
 }
 
 func newFakeController() *fakeController { return &fakeController{} }
@@ -48,6 +52,14 @@ func (f *fakeController) Status() controller.Snapshot {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.statusSnap
+}
+
+func (f *fakeController) SetBudgetMonthUSD(_ context.Context, usd float64) (controller.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.budgetCalls++
+	f.budgetUSD = usd
+	return f.budgetSnap, f.budgetErr
 }
 
 func (f *fakeController) StopForce() bool {
