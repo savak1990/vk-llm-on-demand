@@ -189,10 +189,10 @@ decoder is the finite-number guard; no separate `math.IsNaN` check.
 Every successful change logs one line:
 
 ```go
-s.d.Log.Info("mgmt: budget changed", "keyID", keyID, "oldUSD", before.BudgetMonthUSD, "newUSD", snap.BudgetMonthUSD)
+s.d.Log.Info("mgmt: budget changed", "key_id", keyID, "oldUSD", before.BudgetMonthUSD, "newUSD", snap.BudgetMonthUSD)
 ```
 
-`keyID` comes from `keyIDSink(r.Context())`, which `withAuth` already
+`key_id` comes from `keyIDSink(r.Context())`, which `withAuth` already
 fills.
 
 ### Budget-exhausted message
@@ -248,7 +248,8 @@ inputs:
 application/json'` when `BODY` is non-empty. `do_budget`: blank
 `MONTHLY_USD` → `do_status`; a value not matching
 `^[0-9]+(\.[0-9]+)?$` → exit 2 with no request; otherwise `POST budget`
-and print the status row.
+and print the status row; the row (shared with `status`) includes
+`budgetMonthUSD`.
 
 ## Requirements
 
@@ -264,7 +265,7 @@ and print the status row.
   or below `MonthlyUSD`. (source: ADR 0015 §2)
 - R5. `POST /api/v1/gpu/budget` MUST use the `management-tokens` tier.
   (source: ADR 0015 §3)
-- R6. Every successful change MUST log `keyID`, the old cap and the new
+- R6. Every successful change MUST log `key_id`, the old cap and the new
   cap. (source: ADR 0015 §3)
 - R7. `config.Mgmt.BudgetMonthUSD` and `VKLLM_MGMT_BUDGET_MONTH_USD` MUST
   be deleted; status and cost MUST report the cap `Allow` enforces.
@@ -316,7 +317,7 @@ Tier 1 and tier 2 only — no real Vast.ai spend.
 - AC6. Status and cost show the live cap from `Snapshot`.
 - AC7. The exhausted-start `message` equals the format in Design and
   contracts for a fixture cap and spend.
-- AC8. A successful change logs one line with `keyID`, `oldUSD`, `newUSD`.
+- AC8. A successful change logs one line with `key_id`, `oldUSD`, `newUSD`.
 - AC9. `vk-llm budget`, `vk-llm budget set 40`, and `vk-llm budget set x`
   (exit 2, no request) against the CLI fake server.
 - AC10. `gpu-control` budget action, read and set forms, against the TLS
@@ -352,7 +353,7 @@ Tier 1 and tier 2 only — no real Vast.ai spend.
 | `0f62fa5` | Task 2 | Controller `Snapshot` fields, `SetBudgetMonthUSD`, errors |
 | `d26d501` | Task 3 | Status/cost documents read the live cap from `Snapshot`; `budget_exhausted` message |
 | `1b0d270` | Task 4 | `POST /api/v1/gpu/budget` with ceiling rejection and audit log |
-| `94fa3a0` | Task 4 (fix) | Review fixes: `keyID` naming, AC12 budget coverage |
+| `94fa3a0` | Task 4 (fix) | Review fixes: `key_id` naming, AC12 budget coverage |
 | `d04de3a` | Task 5 | `vk-llm budget` and `vk-llm budget set` |
 | `4505064` | Task 5 (fix) | Fix stale parse-loop comment after `budget` subArgs change |
 | `5002432` | Task 6 | `gpu-control` budget action |

@@ -142,7 +142,9 @@ vk-llm budget set 40     # raise or lower the monthly budget
 
 After you set the budget with `vk-llm budget set`, the stored value
 replaces `config.budget.monthlyUSD`. A later `helm upgrade` does not change
-it.
+it. If `config.budget.monthlyUSD` is above `config.budget.maxMonthlyUSD`
+(default $100), the controller refuses to start. Raise `maxMonthlyUSD` in
+the same `helm upgrade`.
 
 ## Remote control from GitHub Actions
 

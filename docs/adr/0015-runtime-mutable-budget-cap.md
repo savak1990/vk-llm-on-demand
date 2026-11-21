@@ -71,7 +71,7 @@ chose to keep one credential tier for simplicity rather than add a second.
    /api/v1/gpu/budget` is authenticated by the same `management-tokens`
    credential as `start`/`stop`/`status`/`cost`. No new Secret key, no
    approval step, no cooldown between changes. Every change is logged
-   (`keyID`, old value, new value) as the only forensic trail if a token
+   (`key_id`, old value, new value) as the only forensic trail if a token
    leaks — this is the minimum due diligence for an endpoint that can,
    within the ceiling, change what a credential is allowed to spend.
 
