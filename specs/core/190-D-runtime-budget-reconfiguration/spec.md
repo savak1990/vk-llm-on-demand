@@ -1,15 +1,17 @@
 ---
 id: "CORE-190"
-status: "DRAFT"
-updated: "2026-11-21"
+status: "DONE"
+updated: "2026-11-22"
 depends_on: ["CORE-055", "CORE-100", "CORE-150", "CORE-160"]
 adrs: ["0015", "0010", "0011", "0012"]
 ---
 
 # 190 — Runtime budget reconfiguration
 
-**Status note:** DRAFT, written 2026-11-21 before any code exists.
-Amended the same day after reading the code for the implementation plan:
+**Status note:** DONE (2026-11-22). Implemented and reviewed task by task,
+then confirmed green on a real GitHub Actions run (PR #33, run
+44959242039). Written 2026-11-21 and amended the same day after reading
+the code for the implementation plan:
 the startup backfill was replaced by a read-time fallback (a backfill
 could race the first API request), the ceiling now also clamps
 enforcement, and the NaN/Infinity check was dropped (JSON cannot carry
@@ -88,8 +90,8 @@ In this repository:
   Helm-configured ceiling; accepted per ADR 0015.
 - `README.md` — document `vk-llm budget` and the `gpu-control` budget
   action.
-- `docs/adr/0015-runtime-mutable-budget-cap.md` — already written
-  (Proposed); flip to Accepted when this spec flips to DONE.
+- `docs/adr/0015-runtime-mutable-budget-cap.md` — Accepted together with
+  this spec's DONE flip.
 
 Excludes: a second credential tier for budget changes (ADR 0015
 "Alternatives considered"); any change to `MaxInstanceSpendUSD`; any
@@ -333,8 +335,9 @@ Tier 1 and tier 2 only — no real Vast.ai spend.
 - [x] `make specs-check go-build go-test go-lint helm-lint helm-template`
       all exit 0.
 - [x] CORE-110's threat-model table has the new row.
-- [ ] ADR 0015 flipped to Accepted in the same PR.
-- [ ] Status flipped to DONE; folder renamed `190-D-...`.
+- [x] ADR 0015 flipped to Accepted in the same PR.
+- [x] Status flipped to DONE; folder renamed `190-D-...`. Done after CI
+      run 44959242039 (PR #33) went green, with the user's go-ahead.
 - [x] Evidence section filled.
 
 ## Open questions

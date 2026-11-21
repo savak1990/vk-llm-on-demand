@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed (2026-11-21). Amends CORE-100 (DONE); does not reopen ADR 0012,
+Accepted (2026-11-22). Proposed 2026-11-21. Amends CORE-100 (DONE); does not reopen ADR 0012,
 but narrows one of its threat-model mitigations (see Consequences).
 
 ## Context
