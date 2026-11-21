@@ -1,9 +1,9 @@
 ---
 id: "CORE-110"
 status: "DRAFT"
-updated: "2026-11-10"
+updated: "2026-11-21"
 depends_on: ["CORE-060", "CORE-080"]
-adrs: ["0004", "0006", "0007", "0008", "0009", "0010", "0012", "0013"]
+adrs: ["0004", "0006", "0007", "0008", "0009", "0010", "0012", "0013", "0015"]
 ---
 
 # 110 — Security and secrets
@@ -63,7 +63,7 @@ Excludes: the gateway's and the management API's auth *middleware* wiring (CORE-
 |---|---|---|---|
 | Client (inference) key | Leaked via misconfiguration, a pasted log, or phishing | Mounted file, `crypto/subtle.ConstantTimeCompare`, never logged (ADR 0009 §2, §5; C-16); per-key rate limit `gateway.rateLimitPerKeyRPM` 60; cannot start or stop anything — explicit mode never lets the inference path provision (ADR 0010 §2); runbook A | Can exhaust an already-READY instance's rate limit and budget until rotated; bounded by `budget.monthlyUSD` (FR-6.3) and the rate limit, not eliminated |
 | Management token | Leaked, or abused by repeated calls, to start/stop/cost on `/api/v1/*` | Separate `management-tokens` list, same compare/log controls; 403 on `/v1/*` (NFR-8.1); `lifecycle.safety.maxProvisionAttemptsPerHour` 3 (FR-6.5) bounds repeated starts; budget cap; runbook B | Up to 3 starts/hour are still purchasable before the attempt cap stops new creates; the budget cap is the floor |
-| GitHub Actions secret exposure | `VK_LLM_TOKEN` echoed in a workflow log, or the workflow re-dispatched to abuse start/stop | `permissions: {}`; the `action` input passed via `env:`, never interpolated into shell (ADR 0012 §5); concurrency group `gpu-control` without cancel; 25-minute timeout; the API never returns a token in any response (ADR 0012 §5, §6) | A compromised account dispatching the workflow repeatedly is bounded by the same attempt cap and budget as any other management-token use |
+| GitHub Actions secret exposure | `VK_LLM_TOKEN` echoed in a workflow log, or the workflow re-dispatched to abuse start/stop | `permissions: {}`; the `action` input passed via `env:`, never interpolated into shell (ADR 0012 §5); concurrency group `gpu-control` without cancel; 25-minute timeout; the API never returns a token in any response (ADR 0012 §5, §6); the secret lives in Environment `gpu-control`, deployable from `main` only, so a branch workflow cannot read it (ADR 0015) | A compromised account dispatching the workflow from `main` is bounded by the same attempt cap and budget as any other management-token use |
 | Public-repo leak via fixtures/examples | A committed example config or test fixture contains a real-shaped secret | Placeholders only (`sk-vkllm-REPLACE_ME`, `<fqdn>`); R20 binds every file this spec adds; CORE-170's `gitleaks` runs on every PR and weekly over full history (ADR 0013 §1) | A secret committed before scanning existed, or encoded to evade the pattern, surfaces only on the next scheduled full-history run |
 | CLI config file on a laptop | A stolen or synced laptop exposes `~/.config/vk-llm/config.yaml` | The file holds only `api.endpoint` and `api.tokenEnv`; it never holds the token itself (ADR 0012 §4; FR-7.6) | The token still lives wherever the user's shell environment puts it; outside this file and this spec's control |
 | Cross-surface key use | An inference key is tried against `/api/v1/*`, or a management token against `/v1/*` | `internal/auth.Verify` tags every match with its surface before either handler decides 200 vs 403 (NFR-8.1, FR-7.2); path-level 403 tests (AC4) | A defect in the one shared `Verify` call is the single point that could grant cross-surface access — narrower than two independently written checks |
@@ -71,10 +71,12 @@ Excludes: the gateway's and the management API's auth *middleware* wiring (CORE-
 | SSH private key | Leak lets an attacker open a tunnel to any worker the account can reach | Mounted file, private half never leaves the cluster (ADR 0006 Consequences); only the public half reaches Vast | The account-level key is shared across every instance (research §1.3); rotation is permitted only while state is `STOPPED`, so no running instance depends on the old key (runbook E) |
 | Worker host compromise (shared Vast machine) | A co-tenant process on the same host reaches the loopback port or reads env | `--api-key` derived from `worker-seed` required on llama-server (ADR 0006 §4) blocks an unauthenticated local caller; loopback-only bind (C-17); env values never echoed to disk or stdout (CORE-070 R7) | A host-level (hypervisor/co-tenant) compromise is outside this project's control surface; bounded by `maxLifetime` (12h) and idle destroy, not prevented |
 | Prompt/completion disclosure in transit | A party on the Vast network segment reads request or response bytes | SSH-encrypted tunnel end to end (ADR 0006 §2); TLS from client to Envoy (architecture §6) | None known while both hops hold; a tunnel implementation defect is covered by CORE-050 tests, not this spec |
-| SSRF via store tampering | A compromised ConfigMap or an over-privileged writer makes the controller dial an attacker host | The Dialer only ever receives `Instance.SSHHost/Port` as last written from a `Provider.GetInstance` response (ADR 0006 §5, C-18); RBAC restricts ConfigMap writes to this release's own ServiceAccount (ADR 0004 §3); a host-key change on a pinned instance is a hard failure and a destroy (ADR 0006 §3) | A pod that already holds this RBAC's `update` verb could poison the host on the very first write of a generation, before any fingerprint is pinned; accepted, because that pod already controls the Dialer directly at that point |
+| SSRF via store tampering | A compromised ConfigMap or an over-privileged writer makes the controller dial an attacker host | The Dialer only ever receives `Instance.SSHHost/Port` as last written from a `Provider.GetInstance` response (ADR 0006 §5, C-18); RBAC restricts ConfigMap writes to this release's own ServiceAccount (ADR 0004 §3); a host-key change on a pinned instance is a hard failure and a destroy (ADR 0006 §3) | A pod that already holds this RBAC's `update` verb could poison the host on the very first write of a generation, before any fingerprint is pinned; accepted, because that pod already controls the Dialer directly at that point. With `networkPolicy.enabled`, egress to private ranges is dropped (R21), so a poisoned host must be a public address |
+| Worker response amplification | A compromised worker host or a co-tenant answers our own request with a multi-GB 4xx body | the upstream 4xx read is capped at `gateway.maxBodyBytes` (R24); the 2xx path was already capped | none known |
+| Plaintext management token on an Ingress | `ingress.enabled` without TLS sends the bearer token in clear to anyone on the path | the chart refuses to render (R23) unless `ingress.insecurePlaintext` is set | an operator who sets the escape hatch with no TLS terminated in front |
 | Budget drain | Sustained abuse or a stuck instance accrues cost beyond intent | `budget.monthlyUSD` 30 with `budget.warnFraction` 0.8 alert (FR-6.4); `maxLifetime` 12h forced drain; worker dead-man timer independent of the control plane (FR-4.5) | The ledger is an estimate, rebuilt from zero on store loss (ADR 0004 §6); Vast's prepaid balance (research §1.5) is the real floor |
 | Log leakage of secrets or prompts | A debugging change or a library default logs a header or body | Authorization, prompts, completions, provider keys and SSH material are never logged (NFR-8.7; C-16); redaction tests below | A new call site added later is caught only where a redaction test already exists; coverage is enumerated, not exhaustive (open question) |
-| Supply chain (image digest, pinned actions) | A compromised base image or Action substitutes code at build or release time | `worker.image` and the distroless runtime pinned by digest, never a tag (ADR 0008 §3); every `uses:` step pinned to a full commit SHA (C-22); `gitleaks`/`trivy` run as sha256-verified binaries, not actions (ADR 0013 §1); Dependabot tracks both | A digest pin is only as good as the one verification that it is the intended artifact; Dependabot pull requests still need human review (ADR 0008 Risks) |
+| Supply chain (image digest, pinned actions) | A compromised base image or Action substitutes code at build or release time | `worker.image` and the distroless runtime pinned by digest, never a tag (ADR 0008 §3); every `uses:` step pinned to a full commit SHA (C-22); `gitleaks`/`trivy` run as sha256-verified binaries, not actions (ADR 0013 §1); Dependabot tracks both; `values.schema.json` rejects `image.tag: latest` and a tagless or `:latest` worker image (R22) | A digest pin is only as good as the one verification that it is the intended artifact; Dependabot pull requests still need human review (ADR 0008 Risks) |
 
 ### Key format and `make keygen`
 
@@ -86,7 +88,7 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
 
 `make keygen` (CORE-010) already runs this and prints a `sk-vkllm-`-prefixed key; this spec fixes the acceptance regex: `^sk-vkllm-[A-Za-z0-9_-]{43}$`. For logs, the key id is the first 8 characters after the prefix (ADR 0009 §5); nothing else is ever logged.
 
-`worker-seed` is a different shape: 32 random bytes, base64-encoded, with no `sk-vkllm-` prefix (ADR 0009 §1) — it is HMAC key material, never presented as a bearer credential, so R1's regex does not apply to it, and it is generated once at install (`openssl rand -base64 32`, no prefix-stripping) rather than by `make keygen`.
+`worker-seed` is a different shape: 32 random bytes, base64-encoded, with no `sk-vkllm-` prefix (ADR 0009 §1) — it is HMAC key material, never presented as a bearer credential, so R1's regex does not apply to it, and it is generated once at install (`openssl rand -base64 32`, no prefix-stripping) rather than by `make keygen`. The file may hold that base64 text or the 32 raw bytes; one trailing newline is ignored (R25).
 
 ### Secret layout
 
@@ -102,7 +104,7 @@ existingSecrets.ssh:
   known_hosts: "<optional seed>"
 ```
 
-(ADR 0009 §1; ADR 0012 §3.) Secrets are mounted as files under `/etc/vkllm/secrets/{apiKeys,provider,ssh}` (CORE-080), never as environment variables, so a reload needs no restart.
+(ADR 0009 §1; ADR 0012 §3.) Secrets are mounted as files under `/etc/vkllm/api-keys/` (the three `apiKeys` entries) and `/etc/vkllm/secrets/{provider,ssh}` (CORE-080, `values.yaml` `config.auth.*` and `config.tunnel.sshKeyFile`), never as environment variables, so a reload needs no restart.
 
 Hand-created Secrets via `kubectl create secret` in the `llm` namespace are a supported first-deployment path: Argo CD never manages them, since `existingSecrets.*` are references the chart reads, not objects it creates (ADR 0009 §1). They survive an `Application` sync but not a cluster rebuild — a rebuilt namespace needs every Secret recreated by hand before the chart installs. The External Secrets / SSM path (ADR 0009 §3, CORE-130) exists for survival across a cluster rebuild, not for the first deployment.
 
@@ -137,24 +139,24 @@ Each step below is observable without reading source.
 
 **A. Client key**
 
-1. `make keygen` → new key. 2. Append it as a new line in `client-keys`. 3. Within 10 s, verify: the new key on `GET /v1/models` returns 200. 4. Move clients to the new key. 5. Remove the old line. 6. Verify: the removed key now returns 401 and `vkllm_gateway_auth_failures_total{reason="unknown_key"}` increments.
+1. `make keygen` → new key. 2. Append it as a new line in `client-keys`. 3. Within 10 s after the kubelet projects the new Secret into the volume (up to the kubelet sync period, 60 s by default; measured on kind, see Evidence), verify: the new key on `GET /v1/models` returns 200. 4. Move clients to the new key. 5. Remove the old line. 6. Verify: the removed key now returns 401 and `vkllm_gateway_auth_failures_total{reason="unknown_key"}` increments.
 
 Zero downtime (ADR 0009 §4).
 
 **B. Management token**
 
-1. `make keygen` → new token (same command, same shape). 2. Append it as a new line in `management-tokens` — the CLI's token and the GitHub Actions token can be two different lines, rotated independently without invalidating each other (R19). 3. Within 10 s, verify: the new token on `GET /api/v1/gpu/status` returns 200. 4. Move the CLI config's `VK_LLM_TOKEN` or the GitHub repository secret to it. 5. Remove the old line. 6. Verify: the removed token now returns 401 on `GET /api/v1/gpu/status`.
+1. `make keygen` → new token (same command, same shape). 2. Append it as a new line in `management-tokens` — the CLI's token and the GitHub Actions token can be two different lines, rotated independently without invalidating each other (R19). 3. Within 10 s after the kubelet projects the new Secret (up to 60 s), verify: the new token on `GET /api/v1/gpu/status` returns 200. 4. Move the CLI config's `VK_LLM_TOKEN` or the `gpu-control` Environment secret (ADR 0015) to it. 5. Remove the old line. 6. Verify: the removed token now returns 401 on `GET /api/v1/gpu/status`.
 
 Zero downtime: a management token never seeds the worker key, so rotating
 one never forces a destroy (ADR 0006 §4, amended; ADR 0012 §3).
 
 **C. Worker seed**
 
-1. Rotate only while `desired` and state are both `STOPPED` — see Worker API key below for why a running instance cannot survive this rotation. 2. Generate a new 32-byte value (`openssl rand -base64 32`, no prefix-stripping) and replace `worker-seed`. 3. Within 10 s reload. Verify: `GET /api/v1/gpu/status` still reports `STOPPED`. 4. `POST /api/v1/gpu/start`. Verify: the new instance reaches `READY` normally — both the gateway and the onstart script derive its key from the already-rotated seed.
+1. Rotate only while `desired` and state are both `STOPPED` — see Worker API key below for why a running instance cannot survive this rotation. 2. Generate a new 32-byte value (`openssl rand -base64 32`, no prefix-stripping) and replace `worker-seed`. 3. Within 10 s after the kubelet projects the new Secret (up to 60 s) the seed reloads. Verify: `GET /api/v1/gpu/status` still reports `STOPPED`. 4. `POST /api/v1/gpu/start`. Verify: the new instance reaches `READY` normally — both the gateway and the onstart script derive its key from the already-rotated seed.
 
 **D. Vast API key**
 
-1. Issue a new key in the Vast console. 2. Replace `VAST_API_KEY`. 3. Within 10 s reload, plus up to one `controller.reconcileInterval` (60 s) for the next provider call to use it. Verify: `GET /api/v1/gpu/status` after one reconcile interval shows no new provider-error alert. 4. Revoke the old key in the Vast console.
+1. Issue a new key in the Vast console. 2. Replace `VAST_API_KEY`. 3. The key is read from the file on every provider call, so the change applies once the kubelet projects the new Secret (up to 60 s), plus up to one `controller.reconcileInterval` (60 s) for the next provider call to use it. Verify: `GET /api/v1/gpu/status` after one reconcile interval shows no new provider-error alert. 4. Revoke the old key in the Vast console.
 
 A call still in flight on the old key is surfaced as a provider alert, not a crash (ADR 0009 §4).
 
@@ -234,11 +236,11 @@ True, because the Store's two HTTP verbs against the in-cluster API server are t
 
 ### NetworkPolicy as defence in depth
 
-CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `false`): egress to DNS, the kube-apiserver, Vast API, and a configurable SSH port range; ingress from the gateway's namespace only. It is defence in depth, not a substitute for C-18's SSRF boundary or C-16's auth check — both must hold with it disabled, the default on a cluster without a NetworkPolicy-enforcing CNI (C-23). Recommended on; the operator's choice, not a requirement this spec adds.
+CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `false`). Every rule carries a peer (R21): egress to the kube-dns pods in `kube-system` on 53; to the kube-apiserver CIDRs on 443; to the Vast API CIDRs, or to `0.0.0.0/0` except the private ranges, on 443; to `0.0.0.0/0` except the private ranges on the SSH port range. Ingress on `http` from the gateway's namespace and on `metrics` from `networkPolicy.monitoringNamespace` only. The private-range exclusion is what makes the SSH rule a real fence: Vast hosts are public addresses, and nothing in the cluster is. It is defence in depth, not a substitute for C-18's SSRF boundary or C-16's auth check — both must hold with it disabled, the default on a cluster without a NetworkPolicy-enforcing CNI (C-23). Recommended on; the operator's choice, not a requirement this spec adds.
 
 ## Requirements
 
-- R1. A client key or management token MUST match `^sk-vkllm-[A-Za-z0-9_-]{43}$`; `worker-seed` MUST NOT be required to match it. (source: ADR 0009 §1, §2)
+- R1. A client key or management token MUST match `^sk-vkllm-[A-Za-z0-9_-]{43}$`; `worker-seed` MUST NOT be required to match it. (source: ADR 0009 §1, §2) The loader (`internal/auth/keys.go`) checks the prefix and at least 8 trailing characters only; the regex is enforced on `make keygen` output (AC1), not at load time. A shorter key is the operator's own choice and gives an attacker nothing. Decided 2026-11-21.
 - R2. The gateway and the management API MUST compare every presented credential with `crypto/subtle.ConstantTimeCompare` and MUST log at most the first 8 characters after the prefix. (source: ADR 0009 §2, §5; C-16)
 - R3. `internal/auth` MUST reload `client-keys` and `management-tokens` by polling each mounted file's mtime with `os.Stat` at an interval of 10 s or less, and MUST NOT add an fsnotify-class dependency to do it. (source: C-25; ADR 0009 §2)
 - R4. A client key presented on any `/api/v1/*` route MUST receive 403; a management token presented on any `/v1/*` route MUST receive 403; a missing or invalid credential on either surface MUST receive 401; `internal/auth.Verify` MUST be the single place both surfaces decide this. (source: NFR-8.1, FR-7.2)
@@ -258,6 +260,11 @@ CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `
 - R18. Any Envoy route timeout applied to this service in explicit mode MUST be disabled or at least `model.generationTimeout + 60s` (660 s); the 1,080 s figure (`onDemand.maxWait + model.generationTimeout`) applies only if on-demand mode is ever enabled. (source: ADR 0010 Consequences; ADR 0007 §4)
 - R19. Rotating one entry in `management-tokens` MUST NOT invalidate any other entry in the list, identically to `client-keys`. (source: ADR 0009 §4, FR-7.2)
 - R20. No file this spec adds or edits MUST contain a real domain, key or token value. (source: C-14, common brief)
+- R21. When `networkPolicy.enabled` is true, every egress rule MUST carry a `to:` peer and every ingress rule a `from:` peer: DNS to kube-dns pods in `kube-system`; 443 and the SSH port range to `0.0.0.0/0` except 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 and 100.64.0.0/10 (or the configured CIDR lists); metrics from `networkPolicy.monitoringNamespace`. (source: security review 2026-11-21)
+- R22. `values.schema.json` MUST reject `image.tag` equal to `latest` and MUST reject a `config.worker.image` with no tag or digest or with tag `latest`. (source: ADR 0008 §3; security review 2026-11-21)
+- R23. The Ingress template MUST fail to render when `ingress.tls.enabled` is false unless `ingress.insecurePlaintext` is true. (source: security review 2026-11-21)
+- R24. The gateway MUST read at most `gateway.maxBodyBytes` of an upstream 4xx response body. (source: C-19; security review 2026-11-21)
+- R25. The worker-seed file MUST be accepted as 32 raw bytes or as the standard base64 encoding of 32 bytes, with or without one trailing newline; `Loaded()` MUST report 32 bytes for either. (source: ADR 0009 §1)
 
 ## Implementation steps
 
@@ -322,6 +329,7 @@ CORE-080 renders an optional `NetworkPolicy` (`networkPolicy.enabled`, default `
 | Real Vast account availability to execute runbook D (Vast key) and runbook E's console steps | AC12 covers only A, B, and the dry runs of C and E | implementer, at execution time | record as not yet executed until available |
 | Whether a Kubernetes Secret volume update is an atomic symlink swap, and its exact inotify behaviour, is not in research.md | affects nothing here (polling needs no event), but matters if a future spec adds a watcher | implementer, on kind | assume kubelet's documented atomic-update behaviour; keep polling regardless |
 | Whether Vast.ai offers any scoped or limited API token, beyond the one account-wide Bearer key research §1.1 documents | changes the blast radius of a Vast key leak | CORE-020, if it checks the Vast account UI | assume none exists; treat any leak as a full account compromise |
+| Whether Vast.ai's create-instance `image` field accepts a reference by digest (`repo@sha256:…`) | R22 could require a digest, making "what we tested" equal "what runs" on the GPU | one real `start` with a digest reference | the schema requires a tag or a digest and rejects `latest`; tighten to digest-only once confirmed |
 
 ## Evidence
 
