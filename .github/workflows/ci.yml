@@ -149,13 +149,14 @@ jobs:
 
       - run: make helm-rbac-check
 
+      # The CRD catalog is pinned to a commit (main as of 2026-11-21).
       - name: Render and validate the chart
         run: |
           set -euo pipefail
           make -s helm-template > rendered.yaml
           kubeconform -summary -strict \
             -schema-location default \
-            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/784ec895547a36e548e6810b41f27baade3a0890/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             rendered.yaml
 
       # Packaging at the pull request's own version is what proves the version
@@ -194,7 +195,9 @@ jobs:
       - name: Mint a token and export cluster connection details
         run: |
           set -euo pipefail
-          echo "KIND_TOKEN=$(kubectl create token vkllm-state-test --duration=10m)" >> "$GITHUB_ENV"
+          token=$(kubectl create token vkllm-state-test --duration=10m)
+          echo "::add-mask::$token"
+          echo "KIND_TOKEN=$token" >> "$GITHUB_ENV"
           echo "KIND_API_SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')" >> "$GITHUB_ENV"
           kubectl config view --minify --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > ca.crt
           echo "KIND_CA_PATH=$PWD/ca.crt" >> "$GITHUB_ENV"
@@ -288,8 +291,9 @@ jobs:
       - name: Install the PrometheusRule CRD
         run: |
           set -euo pipefail
+          # 22741007 is tag v0.95.1
           kubectl apply --server-side -f \
-            "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.95.1/example/prometheus-operator-crd/monitoring.coreos.com_prometheusrules.yaml"
+            "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/22741007a4cabc700427bb3f6664b92fdfded624/example/prometheus-operator-crd/monitoring.coreos.com_prometheusrules.yaml"
 
       - name: helm install
         run: |
