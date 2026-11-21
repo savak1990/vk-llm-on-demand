@@ -4,6 +4,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"log/slog"
 	"net/http"
@@ -164,4 +165,33 @@ func TestWorkerSeedAndDerivedKeyNeverLogged(t *testing.T) {
 	}
 	derivedKey := worker.WorkerKey(d.Seed.Bytes(), d.InstallationID, 1)
 	obstest.AssertNoSecret(t, buf.Bytes(), derivedKey)
+}
+
+func TestWorkerSeedAcceptsBase64AndTrailingNewline(t *testing.T) {
+	raw := bytes.Repeat([]byte{0xAB}, 32)
+	b64 := base64.StdEncoding.EncodeToString(raw)
+	cases := map[string][]byte{
+		"raw32":          raw,
+		"raw32-newline":  append(append([]byte{}, raw...), '\n'),
+		"base64":         []byte(b64),
+		"base64-newline": []byte(b64 + "\n"),
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := t.TempDir() + "/worker-seed"
+			if err := os.WriteFile(path, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s, err := LoadWorkerSeed(path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.Loaded(); err != nil {
+				t.Fatalf("Loaded() = %v", err)
+			}
+			if !bytes.Equal(s.Bytes(), raw) {
+				t.Fatalf("Bytes() = %x, want 32 x AB", s.Bytes())
+			}
+		})
+	}
 }
