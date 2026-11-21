@@ -95,7 +95,7 @@ func TestBudgetChangeIsLogged(t *testing.T) {
 		t.Fatalf("code = %d, want 200", rec.Code)
 	}
 	line := buf.String()
-	for _, want := range []string{"mgmt: budget changed", "keyID=mgmt-key-1", "oldUSD=30", "newUSD=40"} {
+	for _, want := range []string{"mgmt: budget changed", "key_id=mgmt-key-1", "oldUSD=30", "newUSD=40"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("log %q does not contain %q", line, want)
 		}

@@ -110,7 +110,7 @@ func (s *server) handleBudget(w http.ResponseWriter, r *http.Request) {
 			keyID = *sink
 		}
 		if s.d.Log != nil {
-			s.d.Log.Info("mgmt: budget changed", "keyID", keyID, "oldUSD", before.BudgetMonthUSD, "newUSD", snap.BudgetMonthUSD)
+			s.d.Log.Info("mgmt: budget changed", "key_id", keyID, "oldUSD", before.BudgetMonthUSD, "newUSD", snap.BudgetMonthUSD)
 		}
 		writeJSON(w, http.StatusOK, buildStatusDocument(snap, s.d.Config, s.d.Clock.Now()))
 	case errors.Is(err, controller.ErrBudgetInvalid):

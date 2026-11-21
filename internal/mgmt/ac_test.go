@@ -187,6 +187,7 @@ func TestAC12_RedactionAcrossAllRoutes(t *testing.T) {
 	}
 	fc.statusSnap = fc.startSnap
 	fc.stopSnap = controller.Snapshot{Public: "DRAINING"}
+	fc.budgetSnap = controller.Snapshot{BudgetMonthUSD: 40, BudgetCeilingUSD: 100}
 	logs, log := captureLogs()
 	reg := prometheus.NewRegistry()
 	h := New(Deps{Controller: fc, Keys: keys, Limiter: auth.NewLimiter(10000, clk), Clock: clk, Reg: reg, Log: log})
@@ -199,6 +200,7 @@ func TestAC12_RedactionAcrossAllRoutes(t *testing.T) {
 	for _, rt := range []struct{ method, path, body string }{
 		{"POST", "/api/v1/gpu/start", ""}, {"GET", "/api/v1/gpu/status", ""},
 		{"POST", "/api/v1/gpu/stop", `{"force":false}`}, {"GET", "/api/v1/gpu/cost", ""},
+		{"POST", "/api/v1/gpu/budget", `{"monthlyUSD":40}`},
 	} {
 		run(rt.method, rt.path, rt.body, "sk-vkllm-mgmttoken1")
 		run(rt.method, rt.path, rt.body, "sk-vkllm-clientkey1") // wrong surface -> 403
@@ -218,7 +220,7 @@ func TestAC12_RedactionAcrossAllRoutes(t *testing.T) {
 
 	obstest.AssertNoSecret(t, logs.Bytes(), "sk-vkllm-mgmttoken1", "sk-vkllm-clientkey1", "sk-vkllm-REPLACE_ME")
 	text := logs.String()
-	for _, leak := range []string{"Bearer ", "Estimates only", `{"force"`} {
+	for _, leak := range []string{"Bearer ", "Estimates only", `{"force"`, "monthlyUSD"} {
 		if strings.Contains(text, leak) {
 			t.Fatalf("log output contains a body/header value %q", leak)
 		}
