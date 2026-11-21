@@ -1,4 +1,7 @@
 {{- if .Values.ingress.enabled }}
+{{- if and (not .Values.ingress.tls.enabled) (not .Values.ingress.insecurePlaintext) }}
+{{- fail "ingress.tls.enabled must be true: management tokens travel in the Authorization header. Set ingress.insecurePlaintext=true only when TLS terminates in front of this Ingress." }}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
