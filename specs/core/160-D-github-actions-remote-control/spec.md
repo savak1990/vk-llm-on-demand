@@ -1,9 +1,9 @@
 ---
 id: "CORE-160"
 status: "DONE"
-updated: "2026-11-15"
+updated: "2026-11-21"
 depends_on: ["CORE-055"]
-adrs: ["0012", "0011", "0013"]
+adrs: ["0012", "0011", "0013", "0015"]
 ---
 
 # 160 — GitHub Actions remote control
@@ -117,6 +117,18 @@ connection failure (e.g. "Could not resolve host") never prints the
 installation's hostname into a public run log (NFR-8.6, architecture §6).
 The only thing before the mask line is the scheme check (next section),
 whose error message does not print `ENDPOINT`.
+
+2026-11-21: the as-built job additionally declares `environment:
+gpu-control` and `id-token: write` (so it only mints an OIDC token — it is
+not a write scope on repository contents) and adds an
+`aws-actions/configure-aws-credentials` step and an SSM-read step before
+`scripts/gpu-control.sh` runs (ADR 0015). `VK_LLM_TOKEN` is no longer
+`secrets.VK_LLM_TOKEN` in job `env:`; it is exported through
+`$GITHUB_ENV` by the SSM-read step after an explicit `::add-mask::`, so
+the auto-masking reasoning above no longer applies to it — the mask is
+now explicit, the same protection a GitHub secret gets automatically.
+`.github/workflows/gpu-control.yml` is authoritative over the YAML block
+above, which shows this spec's original as-built shape.
 
 ### `scripts/gpu-control.sh` contract
 

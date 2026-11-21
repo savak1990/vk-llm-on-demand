@@ -63,7 +63,7 @@ Excludes: the gateway's and the management API's auth *middleware* wiring (CORE-
 |---|---|---|---|
 | Client (inference) key | Leaked via misconfiguration, a pasted log, or phishing | Mounted file, `crypto/subtle.ConstantTimeCompare`, never logged (ADR 0009 §2, §5; C-16); per-key rate limit `gateway.rateLimitPerKeyRPM` 60; cannot start or stop anything — explicit mode never lets the inference path provision (ADR 0010 §2); runbook A | Can exhaust an already-READY instance's rate limit and budget until rotated; bounded by `budget.monthlyUSD` (FR-6.3) and the rate limit, not eliminated |
 | Management token | Leaked, or abused by repeated calls, to start/stop/cost on `/api/v1/*` | Separate `management-tokens` list, same compare/log controls; 403 on `/v1/*` (NFR-8.1); `lifecycle.safety.maxProvisionAttemptsPerHour` 3 (FR-6.5) bounds repeated starts; budget cap; runbook B | Up to 3 starts/hour are still purchasable before the attempt cap stops new creates; the budget cap is the floor |
-| GitHub Actions secret exposure | `VK_LLM_TOKEN` echoed in a workflow log, or the workflow re-dispatched to abuse start/stop | `permissions: {}`; the `action` input passed via `env:`, never interpolated into shell (ADR 0012 §5); concurrency group `gpu-control` without cancel; 25-minute timeout; the API never returns a token in any response (ADR 0012 §5, §6); the secret lives in Environment `gpu-control`, deployable from `main` only, so a branch workflow cannot read it (ADR 0015) | A compromised account dispatching the workflow from `main` is bounded by the same attempt cap and budget as any other management-token use |
+| GitHub Actions secret exposure | `VK_LLM_TOKEN` echoed in a workflow log, or the workflow re-dispatched to abuse start/stop | `permissions: {}`; the `action` input passed via `env:`, never interpolated into shell (ADR 0012 §5); concurrency group `gpu-control` without cancel; 25-minute timeout; the API never returns a token in any response (ADR 0012 §5, §6); no GitHub secret holds the token at all — it is read at run time from AWS SSM via an OIDC-federated role trusted only to the `gpu-control` Environment's `sub` claim (ADR 0015, 2026-11-21) | A compromised account dispatching the workflow from `main` still obtains a valid token, bounded by the same attempt cap and budget as any other management-token use |
 | Public-repo leak via fixtures/examples | A committed example config or test fixture contains a real-shaped secret | Placeholders only (`sk-vkllm-REPLACE_ME`, `<fqdn>`); R20 binds every file this spec adds; CORE-170's `gitleaks` runs on every PR and weekly over full history (ADR 0013 §1) | A secret committed before scanning existed, or encoded to evade the pattern, surfaces only on the next scheduled full-history run |
 | CLI config file on a laptop | A stolen or synced laptop exposes `~/.config/vk-llm/config.yaml` | The file holds only `api.endpoint` and `api.tokenEnv`; it never holds the token itself (ADR 0012 §4; FR-7.6) | The token still lives wherever the user's shell environment puts it; outside this file and this spec's control |
 | Cross-surface key use | An inference key is tried against `/api/v1/*`, or a management token against `/v1/*` | `internal/auth.Verify` tags every match with its surface before either handler decides 200 vs 403 (NFR-8.1, FR-7.2); path-level 403 tests (AC4) | A defect in the one shared `Verify` call is the single point that could grant cross-surface access — narrower than two independently written checks |
@@ -145,10 +145,15 @@ Zero downtime (ADR 0009 §4).
 
 **B. Management token**
 
-1. `make keygen` → new token (same command, same shape). 2. Append it as a new line in `management-tokens` — the CLI's token and the GitHub Actions token can be two different lines, rotated independently without invalidating each other (R19). 3. Within 10 s after the kubelet projects the new Secret (up to 60 s), verify: the new token on `GET /api/v1/gpu/status` returns 200. 4. Move the CLI config's `VK_LLM_TOKEN` or the `gpu-control` Environment secret (ADR 0015) to it. 5. Remove the old line. 6. Verify: the removed token now returns 401 on `GET /api/v1/gpu/status`.
+1. `make keygen` → new token (same command, same shape). 2. Append it as a new line in `management-tokens` — the CLI's token and the GitHub Actions token can be two different lines, rotated independently without invalidating each other (R19). 3. Within 10 s after the kubelet projects the new Secret (up to 60 s), verify: the new token on `GET /api/v1/gpu/status` returns 200. 4. Move the CLI config's `VK_LLM_TOKEN` to it. 5. Remove the old line. 6. Verify: the removed token now returns 401 on `GET /api/v1/gpu/status`.
 
 Zero downtime: a management token never seeds the worker key, so rotating
 one never forces a destroy (ADR 0006 §4, amended; ADR 0012 §3).
+
+The GitHub Actions copy needs no step here: re-encrypt
+`secrets/llm-on-demand-api-token.enc` in `vk-lab-platform` and re-apply;
+`gpu-control.yml` reads the new value on its next run (ADR 0015,
+2026-11-21).
 
 **C. Worker seed**
 

@@ -41,6 +41,9 @@ Against `vk-lab-platform` (designed here, not committed here — C-24):
 - **PR-C**: the Envoy traffic policy that disables (or raises to 660 s,
   explicit mode's bound) the `llm` `HTTPRoute`'s request timeout and sets a
   120 s stream idle timeout (ADR 0010 Consequences).
+- **2026-11-21** (`feature/vk-llm-ci-role`, ADR 0015): adds IAM role
+  `vk-llm-ci-role`, trusted via GitHub OIDC only to the `gpu-control`
+  Environment, reading `/*/persistent/llm/api_token`.
 
 Plus: ordering and verification for the three pull requests, a Vast.ai
 account checklist for the operator, and rollback.
@@ -316,7 +319,7 @@ the chart name) is confirmed only once CORE-080 is written.
    to take effect (not to apply without error).
 7. Here: bump `chartVersion`/`tag` only after CORE-120 publishes that
    version to GHCR.
-8. The repository secret `VK_LLM_TOKEN` (one `management-tokens` line) and variable `VK_LLM_API_ENDPOINT` are GitHub repository configuration for `gpu-control.yml`, not a platform pull request — CORE-160 owns that setup, not repeated here.
+8. `VK_LLM_API_ENDPOINT` and `AWS_ROLE_ARN` (both repository variables, the latter set by the `vk-llm-ci-role` pull request above) are GitHub repository configuration for `gpu-control.yml`, not repeated here — CORE-160 owns that setup. `VK_LLM_TOKEN` is never stored in GitHub at all; `gpu-control.yml` reads it from AWS SSM (ADR 0015).
 
 ### Rollback
 

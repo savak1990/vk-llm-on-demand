@@ -55,9 +55,13 @@ from the monitoring namespace.
 
 ## GitHub Actions credentials
 
-`VK_LLM_TOKEN` lives in the GitHub Environment `gpu-control`, deployable
-from `main` only (ADR 0015). A workflow on any other branch cannot read it.
-`make repo-settings` creates the Environment with that policy.
+`VK_LLM_TOKEN` is never stored in GitHub. `gpu-control.yml` assumes IAM
+role `vk-llm-ci-role` via GitHub OIDC, trusted only to the `gpu-control`
+Environment's `sub` claim (deployable from `main` only), and reads the
+token at run time from AWS SSM Parameter Store (`SecureString`, KMS
+decrypt scoped to that one parameter). `make repo-settings` creates the
+Environment; the separate `vk-lab-platform` repository's `make account-up`
+creates the role (ADR 0015).
 
 ## Review policy
 

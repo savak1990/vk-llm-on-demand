@@ -66,7 +66,7 @@ updated.
 | R10 | Qwen3.6 tool calls malformed through llama.cpp | medium | coding assistants degrade | spike verifies; `--reasoning-format` and template flags adjustable | 030 |
 | R11 | A client streams without end and holds the GPU | low | spend up to `maxLifetime` | `model.generationTimeout` ends any single request; `maxLifetime` ends the instance; idle rule counts only finished requests | 050, 060 |
 | R12 | A leaked management token starts GPUs from anywhere | low | budget drained | per-list rotation, rate limit on `/api/v1`, budget caps, gitleaks on every PR | 110, 170 |
-| R13 | The public GitHub Actions workflow is dispatched by someone with repository write access by mistake, or a repository writer pushes a branch whose workflow reads the token | low | one cold start, idles out in 30 min; up to 3 starts/hour and the monthly budget if the token is read | `workflow_dispatch` only; concurrency group; the idle rule applies regardless of who started it; `VK_LLM_TOKEN` lives in Environment `gpu-control`, deployable from `main` only (ADR 0015) | 160 |
+| R13 | The public GitHub Actions workflow is dispatched by someone with repository write access by mistake, or a repository writer pushes a branch whose workflow reads the token | low | one cold start, idles out in 30 min; up to 3 starts/hour and the monthly budget if the token is read | `workflow_dispatch` only; concurrency group; the idle rule applies regardless of who started it; no GitHub secret holds `VK_LLM_TOKEN` — it is read at run time from AWS SSM via a role trusted only to Environment `gpu-control`'s OIDC claim (ADR 0015) | 160 |
 
 ## 3. Decisions deliberately deferred
 
