@@ -1,0 +1,49 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  # Name, namespace and the default release name together fix the HTTPRoute
+  # name (gpu-on-demand), the state ConfigMap name and the installationId
+  # CORE-140 recomputes. Never set helm.releaseName, never rename this.
+  name: gpu-on-demand
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: vk-llm-on-demand
+  source:
+    repoURL: {{ .Values.charts.registry | quote }}
+    chart: gpu-on-demand
+    targetRevision: {{ .Values.chartVersion | quote }}
+    helm:
+      valuesObject:
+        image:
+          tag: {{ .Values.tag | quote }}
+        host: {{ printf "%s.%s" .Values.hostPrefix .Values.fqdn | quote }}
+        existingSecrets:
+          provider: {{ .Values.secrets.provider | quote }}
+          apiKeys: {{ .Values.secrets.apiKeys | quote }}
+          ssh: {{ .Values.secrets.ssh | quote }}
+        config:
+          model:
+            url: {{ .Values.model.url | quote }}
+            sha256: {{ .Values.model.sha256 | quote }}
+          worker:
+            image: {{ .Values.worker.image | quote }}
+        httpRoute:
+          enabled: true
+        serviceMonitor:
+          enabled: true
+        prometheusRule:
+          enabled: true
+        dashboard:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: {{ .Values.namespace }}
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

@@ -14,7 +14,7 @@ VERSION ?= $(shell ./scripts/version.sh base)
 IMAGE_TAG ?= $(shell git rev-parse HEAD)
 IMAGE ?= ghcr.io/savak1990/vk-llm-on-demand/$(SVC):$(IMAGE_TAG)
 
-.PHONY: go-build go-test go-lint lint-worker-script lint-gpu-control-script test-worker-script test-worker-image require-svc image-build image-push helm-lint helm-template helm-rbac-check helm-package helm-push version release buildx-init keygen repo-settings
+.PHONY: go-build go-test go-lint lint-worker-script lint-gpu-control-script test-worker-script test-worker-image require-svc image-build image-push helm-lint helm-template gitops-check helm-rbac-check helm-package helm-push version release buildx-init keygen repo-settings
 
 go-build: ## Build every cmd/ binary into bin/
 	go build -o bin/ ./cmd/...
@@ -59,6 +59,9 @@ helm-lint: ## Lint the deploy/helm/<CHART> chart
 
 helm-template: ## Render the deploy/helm/<CHART> chart
 	helm template deploy/helm/$(CHART) $(HELM_TEST_SET)
+
+gitops-check: ## Lint, render and validate gitops/, then render the pinned inner chart
+	./scripts/gitops-check.sh
 
 helm-rbac-check: ## Assert the RBAC Role never widens past get/update, on the real chart and a rejected fixture (AC8)
 	$(MAKE) -s helm-template | ./scripts/check-rbac.sh
