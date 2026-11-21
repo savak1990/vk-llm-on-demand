@@ -32,8 +32,8 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 	fs.String("force", "", "")
 
 	// Global flags are accepted before or after the subcommand name, so
-	// keep re-parsing the same flag set until nothing but the (single)
-	// subcommand positional is left.
+	// keep re-parsing the same flag set until nothing but the subcommand
+	// and its own positional arguments are left.
 	var subArgs []string
 	sub, rest := "", args
 	for {
