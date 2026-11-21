@@ -18,12 +18,27 @@ jobs:
     environment: gpu-control
     permissions:
       contents: read
+      id-token: write
     env:
       ACTION: ${{ inputs.action }}
-      VK_LLM_TOKEN: ${{ secrets.VK_LLM_TOKEN }}
       ENDPOINT: ${{ vars.VK_LLM_API_ENDPOINT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: eu-west-1
+
+      - name: Read the management token from SSM
+        run: |
+          set -euo pipefail
+          value="$(aws ssm get-parameter --with-decryption \
+            --name /vk-hetzner-lab/persistent/llm/api_token \
+            --query Parameter.Value --output text)"
+          echo "::add-mask::$value"
+          echo "VK_LLM_TOKEN=$value" >> "$GITHUB_ENV"
+
       - run: scripts/gpu-control.sh
