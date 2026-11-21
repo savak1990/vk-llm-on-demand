@@ -23,6 +23,8 @@ var (
 	ErrBackendUnavailable = errors.New("controller: backend unavailable")
 	ErrDraining           = errors.New("controller: not admitting")
 	ErrForceNotEnabled    = errors.New("controller: force not enabled")
+	ErrBudgetInvalid      = errors.New("controller: budget must be a positive number")
+	ErrBudgetAboveCeiling = errors.New("controller: budget above ceiling")
 )
 
 // Deps are every external dependency the controller calls. Provider,
@@ -75,6 +77,8 @@ type Snapshot struct {
 
 	SpendInstanceUSD   float64
 	SpendMTDUSD        float64
+	BudgetMonthUSD     float64
+	BudgetCeilingUSD   float64
 	ProviderBalanceUSD *float64
 
 	Stages           map[string]time.Duration

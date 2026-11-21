@@ -19,4 +19,6 @@ type Budget interface {
 	RefreshOpenEntry(doc *store.Document, now time.Time)
 	UsedRatio(doc store.Document) float64
 	EstimatedMTD(doc store.Document) float64
+	CapUSD(doc store.Document) float64
+	CeilingUSD() float64
 }

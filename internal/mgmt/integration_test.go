@@ -33,6 +33,8 @@ func (allowAllBudget) Rollover(*store.Document, time.Time)                  {}
 func (allowAllBudget) RefreshOpenEntry(*store.Document, time.Time)          {}
 func (allowAllBudget) UsedRatio(store.Document) float64                     { return 0 }
 func (allowAllBudget) EstimatedMTD(store.Document) float64                  { return 0 }
+func (allowAllBudget) CapUSD(store.Document) float64                        { return 0 }
+func (allowAllBudget) CeilingUSD() float64                                  { return 0 }
 
 var _ controller.Budget = allowAllBudget{}
 
