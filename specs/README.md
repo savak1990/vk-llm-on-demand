@@ -85,6 +85,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [240](core/240-P-voice-input-output/spec.md) | Requirements: speech to text and text to speech in the chat front end (no design yet) | 060, 230 |
 | [250](core/250-P-code-execution/spec.md) | Requirements: sandboxed code execution in the chat front end (no design yet) | 060, 230 |
 | [260](core/260-P-image-generation/spec.md) | Requirements: image generation and image understanding (no design yet) | 050, 060, 230 |
+| [270](core/270-P-google-sign-in/spec.md) | Requirements: "Sign in with Google" for the chat front end, household accounts only (no design yet) | 230 |
 
 ## Order of work
 
