@@ -27,6 +27,7 @@ spec:
           ssh: {{ .Values.secrets.ssh | quote }}
         config:
           model:
+            alias: {{ .Values.model.alias | quote }}
             url: {{ .Values.model.url | quote }}
             sha256: {{ .Values.model.sha256 | quote }}
           worker:

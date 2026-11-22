@@ -18,10 +18,11 @@ secrets:
   apiKeys: vk-llm-api-token
   ssh: vk-llm-ssh-key
 
-# Pinned from the model/image values already verified elsewhere; the chart
-# has no default on purpose.
+# Pinned from the official ggml-org GGUF repository; the chart has no
+# default on purpose. Q8_0 is the largest quantization that fits a 48 GB GPU.
 model:
-  url: https://huggingface.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen_Qwen3.6-35B-A3B-Q5_K_M.gguf
-  sha256: ec438d1326eb11d8bb94785c54739cd4b60b01ae32bd8532e232a046b19d296d
+  alias: qwen3.8-27b
+  url: https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q8_0.gguf
+  sha256: 6bc9e7220d8400574fd62df25f04a961cb5cbb0d766cf0118c21c36c0059c35a
 worker:
   image: ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:0a9f6c7cfe5a6b90b6c048b7a86865bf55a88af34bada927482eab2ef5f25b4a

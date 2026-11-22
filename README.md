@@ -52,7 +52,7 @@ Requests reach it through an existing Envoy gateway.
 
 The management API, at `/api/v1/gpu/*`, uses a management token. It
 starts and stops one NVIDIA L40S GPU on Vast.ai. The GPU runs
-`llama-server` with the `Qwen3.6-35B-A3B` model (Q5_K_M GGUF).
+`llama-server` with the `Qwen3.8-27B` model (Q8_0 GGUF, 28.6 GB).
 
 The inference API, at `/v1/*`, uses an inference key. It proxies
 OpenAI-compatible chat completions, streaming, and tool calls to the
@@ -166,7 +166,7 @@ curl -sv "$H/v1/models" -H "Authorization: Bearer $INF" 2>&1 | grep -E 'issuer|^
 ```
 
 Expected: `HTTP/2 200`, an issuer line that names Let's Encrypt, and
-`"id": "qwen3.6-35b-a3b"`.
+`"id": "qwen3.8-27b"`.
 
 Read the GPU state and the running cost:
 
@@ -183,7 +183,7 @@ Send a chat request while the GPU is stopped:
 ```bash
 curl -s -X POST "$H/v1/chat/completions" \
   -H "Authorization: Bearer $INF" -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"Say hello."}]}'
+  -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"Say hello."}]}'
 ```
 
 Expected: HTTP 503 with `"code": "backend_unavailable"`. This is the normal
@@ -272,7 +272,7 @@ schedule — the workflow does not reset it.
     "vk-llm": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {"baseURL": "https://llm.example.com/v1", "apiKey": "{env:VK_LLM_INFERENCE_KEY}"},
-      "models": {"qwen3.6-35b-a3b": {"name": "Qwen3.6 35B-A3B (on-demand L40S)"}}
+      "models": {"qwen3.8-27b": {"name": "Qwen3.8 27B (on-demand L40S)"}}
     }
   }
 }
