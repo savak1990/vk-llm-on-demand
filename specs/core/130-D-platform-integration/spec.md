@@ -83,7 +83,7 @@ Argo `Application` with no `Repository`/`enableOCI` registration already
 runs on the platform —
 `vk-lab-platform/gitops/templates/platform/shared/postgres/barman-plugin-application.yaml`
 (`repoURL: ghcr.io/cloudnative-pg/charts`, `chart: plugin-barman-cloud`, no
-credential) — and this spec's inner `Application` copies that exact
+credential) — and this spec's child `Application` copies that exact
 `source` shape.
 
 ### `gitops/values.yaml` (this repository)
@@ -95,7 +95,7 @@ credential) — and this spec's inner `Application` copies that exact
 | `namespace` | `llm` | fixed |
 | `charts.registry` | `ghcr.io/savak1990/vk-llm-on-demand/charts` | no `oci://` scheme (ADR 0008 §4) |
 | `chartVersion` | pinned (`0.1.1-main.0ab826b`) | required; non-empty; the one place this value is pinned |
-| `tag` | pinned (40-hex image digest) | required; non-empty; becomes `image.tag` |
+| `tag` | pinned (40-hex commit SHA used as the image tag) | required; non-empty; becomes `image.tag` |
 | `secrets.provider` / `secrets.apiKeys` / `secrets.ssh` | `vast-ai-api-key` / `vk-llm-api-token` / `vk-llm-ssh-key` | the three Secret names the platform renders into `llm`; passed through to `existingSecrets.*` |
 | `model.url` / `model.sha256` | pinned | required; non-empty; the pinned model artifact |
 | `worker.image` | pinned (by digest) | required; non-empty; the pinned worker image |
@@ -193,12 +193,12 @@ of the three is unset — same mechanism ADR 0008 §4 uses for the
 
 | Step | Check | Why |
 |---|---|---|
-| 1 | `helm lint`/`helm template` the outer chart (`--set fqdn=lab.example.com`), then kubeconform the render | the outer `Application` is well-formed before anything else runs |
+| 1 | `helm lint`/`helm template` the outer chart (`--set fqdn=lab.example.com`), then kubeconform the render | the child `Application` is well-formed before anything else runs |
 | 2 | `helm template` with no `--set` MUST fail | proves `templates/validate.yaml` is wired |
 | 3 | `grep -q '^fqdn: ""$' gitops/values.yaml` | no real `fqdn` is ever committed (C-14; NFR-7.6) |
 | 4 | render the pinned **inner** chart (`chartVersion`, the exact `helm.valuesObject`) from the OCI registry, then kubeconform that render | the exact manifests Argo will render on the platform, validated here first |
 | 5 | assert the inner render's `HTTPRoute` name is `gpu-on-demand` | the platform's `BackendTrafficPolicy` `targetRefs` that name |
-| 6 | assert the outer `Application`'s `metadata.namespace` is `llm` | R13; an `Application` in `argocd` may name any `AppProject` |
+| 6 | assert the child `Application`'s `metadata.namespace` is `llm` | R13; an `Application` in `argocd` may name any `AppProject` |
 
 ### PR-A: pointer `AppProject` and `Application`
 
@@ -332,20 +332,25 @@ vk-lab-platform #109.
    `llm-on-demand-worker-seed`. Encrypt each at global scope and commit the
    `.enc` files.
 
-   GitHub Actions reads the management token from
-   `/<project>/persistent/llm/management_tokens` at run time (ADR 0016).
-4. Apply **PR-1**'s Terraform (the secrets module, live) and merge **app
-   PR #1** (this repository's `gitops/` chart) — order between these two
-   does not matter, but both MUST land before step 6: secrets avoid the
-   `ExternalSecret`-never-resolves failure mode (ADR 0009 Risks), and the
-   platform's pointer tracks `main`, so the chart must exist there before
-   **PR-2** can sync it.
-5. Merge **PR-1** to `vk-lab-platform`.
-6. Merge **PR-2** last (`vk-lab-platform`'s `AppProject`, pointer
-   `Application`, and `BackendTrafficPolicy` together) — creates the
-   workload, its `HTTPRoute`, and the traffic policy that targets it in one
-   pull request. A follow-up PR (management token split into its own SSM
-   parameter) landed after PR-2, as a fix — see Evidence.
+   The `gpu-control` workflow still reads
+   `/<project>/persistent/llm/api_token` (ADR 0016). Since #112 that
+   parameter holds the inference key, so the workflow cannot call the
+   management API until the workflow, the `vk-llm-ci-role` policy and ADR
+   0016 move to `/<project>/persistent/llm/management_tokens`. This is a
+   follow-up, not part of this spec.
+4. Apply **#107**'s Terraform (the secrets module, live) and merge
+   vk-llm-on-demand **#32** (this repository's `gitops/` chart) — order
+   between these two does not matter, but both MUST land before step 6:
+   secrets avoid the `ExternalSecret`-never-resolves failure mode (ADR
+   0009 Risks), and the platform's pointer tracks `main`, so the chart
+   must exist there before **#109** can sync it.
+5. Merge **#107** (PR-B) to `vk-lab-platform`.
+6. Merge **#109** last (`vk-lab-platform`'s `AppProject`, pointer
+   `Application`, and `BackendTrafficPolicy` together — PR-A and PR-C) —
+   creates the workload, its `HTTPRoute`, and the traffic policy that
+   targets it in one pull request. **#112** (splitting the management
+   token into its own SSM parameter) landed after #109, as a fix — see
+   Evidence.
 7. Here: bump `chartVersion`/`tag` only after CORE-120 publishes that
    version to GHCR.
 8. `VK_LLM_API_ENDPOINT` and `AWS_ROLE_ARN` (both repository variables, the latter set by `vk-lab-platform`'s `make account-up` after the `vk-llm-ci-role` pull request merges) are GitHub repository configuration for `gpu-control.yml`, not repeated here — CORE-160 owns that setup. `VK_LLM_TOKEN` is never stored in GitHub at all; `gpu-control.yml` reads it from AWS SSM (ADR 0016).
@@ -353,7 +358,7 @@ vk-lab-platform #109.
 ### Rollback
 
 0. `POST /api/v1/gpu/stop` (management token; ADR 0012 §1, superseding `/admin/v1/scale`); wait for `state: STOPPED` and an empty provider instance list for the installation's label prefix — a GPU must not keep billing through a rollback (C-1; FR-4.1 never destroys on shutdown, so this step cannot be skipped).
-1. `kubectl -n argocd delete application vk-llm-on-demand` (cascade, via the finalizer) prunes the inner `Application` and every resource it owns — the fast path. Whether cascade also removes namespace `llm` itself is an Argo CD behavior not stated in `docs/research.md` (open question below).
+1. `kubectl -n argocd delete application vk-llm-on-demand` (cascade, via the finalizer) prunes the child `Application` and every resource it owns — the fast path. Whether cascade also removes namespace `llm` itself is an Argo CD behavior not stated in `docs/research.md` (open question below).
 2. The durable rollback is `git revert` of PR-A (`#109`, which also carries
    PR-C's traffic policy) in `vk-lab-platform`; both are removed together.
    PR-B's secrets/SSM/IAM are left in place (unused, they cost nothing), so
@@ -378,12 +383,12 @@ vk-lab-platform #109.
 
 1. Write `gitops/Chart.yaml`/`values.yaml`. Test: `helm lint gitops/ --set fqdn=lab.example.com --set chartVersion=0.1.0 --set tag=deadbee` exits 0.
 2. Write `templates/validate.yaml`. Test: `helm template gitops/` with no `--set` exits nonzero, stderr contains `fqdn is required`.
-3. Write `templates/application.yaml`. Test: the same `--set` render piped through `yq '.spec.source.chart'` prints `gpu-on-demand`; `yq '.spec.source.helm.parameters[].value'` contains no empty string.
-4. Write `scripts/gitops-check.sh` (the five steps in Design). Test: exits 0 on repo HEAD; exits nonzero at the grep step against a copy with a literal domain hard-coded into `values.yaml`.
+3. Write `templates/application.yaml`. Test: the same `--set` render piped through `yq '.spec.source.chart'` prints `gpu-on-demand`; `yq '.spec.source.helm.valuesObject.image.tag'` prints the pinned 40-hex commit SHA.
+4. Write `scripts/gitops-check.sh` (the six steps in Design). Test: exits 0 on repo HEAD; exits nonzero at the grep step against a copy with a literal domain hard-coded into `values.yaml`.
 5. Draft PR-A's three files plus the `gitops-render-check.sh` list addition in a `vk-lab-platform` checkout. Test: `./scripts/gitops-render-check.sh update` then (check mode) exits 0; `git diff --stat` shows only the two new objects and the golden directory.
-6. Draft PR-B's Terraform module, live unit, and `rolesanywhere` diff. Test: `terragrunt plan` in the new live unit shows exactly five resources to add; `terraform plan` in `rolesanywhere` shows the `eso` policy gaining exactly five ARNs in both statements, nothing else.
+6. Draft PR-B's Terraform module, live unit, and `rolesanywhere` diff. Test: `terragrunt plan` in the live unit shows the expected resources to add; `terraform plan` in `rolesanywhere` shows the `eso` policy gaining ARNs in both statements until the total reaches exactly seven ARNs, nothing else.
 7. Draft PR-C's traffic-policy file. Test: `helm template vk-lab-platform/gitops --set target=hetzner --set envoyGateway.fqdn=lab.example.com ... | yq 'select(.kind=="BackendTrafficPolicy") | .spec.timeout.http.requestTimeout'` prints `660s`.
-8. Run the Vast.ai checklist and the five `make secret-encrypt` calls. Test: `secret-decrypt.sh vk-llm-on-demand-vast-api-key` prints a nonempty value, no error.
+8. Run the Vast.ai checklist and the `make secret-encrypt` calls. Test: `make secret-decrypt SCOPE=global NAME=vast-ai-api-key` prints a nonempty value, no error.
 
 ## Tests / acceptance criteria
 
@@ -403,7 +408,7 @@ vk-lab-platform #109.
 - [x] `gitops/`, `scripts/gitops-check.sh` committed here; `make gitops-check` wired into this repository's CI (CORE-010's `ci.yml`).
 - [x] `make specs-check` passes.
 - [x] Status flipped to DONE in the same pull request; folder renamed `130-D-platform-integration`.
-- [x] Evidence section filled with the three PR links and the first successful `curl` transcript (`<fqdn>` redacted back to the placeholder — C-14 applies to evidence too).
+- [x] Evidence section filled with the PR links and the first successful `curl` transcript (`<fqdn>` redacted back to the placeholder — C-14 applies to evidence too).
 
 ## Open questions
 
@@ -415,6 +420,7 @@ vk-lab-platform #109.
 | Does `local`/kind ever enable `httpRoute` with a real `fqdn`? (settled) | whether `local` needs a carve-out | the shipped `{{- if ne .Values.target "local" }}` guard | no: the pointer `Application`, `AppProject`, and `BackendTrafficPolicy` are all guarded off `local` |
 | Wire the new secrets live unit into `persistent-up` eventually? | convenience vs. blast radius (R6) | a later platform decision | no; stays a manual/CI-specific apply |
 | Does cascade-deleting the pointer `Application` (Rollback step 1) actually prune namespace `llm`, or only the objects Argo tracks within it? | correctness of Rollback | the first real rollback exercise | assume cascade prunes the namespace too (`CreateNamespace=true` implies Argo owns it) |
+| Move `gpu-control` and `vk-llm-ci-role` from `api_token` to `management_tokens` | CI cannot authenticate since #112 | a follow-up PR pair (vk-llm-on-demand workflow + ADR 0016; vk-lab-platform IAM) | open |
 
 ## Evidence
 
@@ -457,6 +463,11 @@ $ kubectl -n llm get pods                                    → gpu-on-demand-6
 $ kubectl -n llm get httproute gpu-on-demand                 → hostnames ["llm.<fqdn>"]
 $ kubectl -n llm get backendtrafficpolicy                    → gpu-on-demand-traffic-policy
 ```
+
+Secret keys: `vast-ai-api-key{VAST_API_KEY}`; `vk-llm-api-token{client-keys,
+management-tokens, worker-seed}`; `vk-llm-ssh-key{id_ed25519}`.
+`worker-seed`: 32 bytes. `client-keys` != `management-tokens` (sha256
+prefixes `db93fff2…` / `d6a07d22…`).
 
 The first pod crash-looped (`auth: a key is present in both client-keys and
 management-tokens`) while both keys read `api_token`; fixed by PR #112 plus
