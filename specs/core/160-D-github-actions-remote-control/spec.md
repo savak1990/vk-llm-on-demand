@@ -1,9 +1,9 @@
 ---
 id: "CORE-160"
 status: "DONE"
-updated: "2026-11-21"
+updated: "2026-11-22"
 depends_on: ["CORE-055"]
-adrs: ["0012", "0011", "0013", "0016"]
+adrs: ["0012", "0011", "0013", "0016", "0017"]
 ---
 
 # 160 — GitHub Actions remote control
@@ -118,6 +118,13 @@ installation's hostname into a public run log (NFR-8.6, architecture §6).
 The only thing before the mask line is the scheme check (next section),
 whose error message does not print `ENDPOINT`.
 
+2026-11-22 (ADR 0017): `ENDPOINT` is no longer a variable or a job `env:`
+entry. GitHub prints a job's `env:` block in every step header, so the
+host would reach the public log before this mask runs. The SSM step reads
+`/vk-hetzner-lab/bootstrap/route53/fqdn`, masks it, and exports
+`ENDPOINT=https://llm.<fqdn>`; the script's own mask stays as a second
+layer.
+
 2026-11-21: the as-built job additionally declares `environment:
 gpu-control` and `id-token: write` (so it only mints an OIDC token — it is
 not a write scope on repository contents) and adds an
@@ -221,7 +228,7 @@ secondsUntilIdleShutdown=n/a`.
 |---|---|---|
 | `VK_LLM_TOKEN` | never stored in GitHub (2026-11-21, ADR 0016) | read at run time from AWS SSM `/vk-hetzner-lab/persistent/llm/management_tokens` (2026-11-22; was `api_token`, which now holds the inference keys) via OIDC-federated role `vk-llm-ci-role` (`vk-lab-platform`), trusted only to the `gpu-control` Environment's OIDC `sub` claim; the workflow refuses a value with more than one line |
 | `AWS_ROLE_ARN` | repository variable | `vk-llm-ci-role`'s ARN; not sensitive — a role ARN is configuration. Set by `vk-lab-platform`'s `make account-up` |
-| `VK_LLM_API_ENDPOINT` | repository variable | `https://llm.<fqdn>` (placeholder; never the real domain in Git, ADR 0013 §1) |
+| `ENDPOINT` | never stored in GitHub (2026-11-22, ADR 0017; was the repository variable `VK_LLM_API_ENDPOINT`) | built at run time as `https://llm.<fqdn>` from SSM `/vk-hetzner-lab/bootstrap/route53/fqdn` (plain `String`) via `vk-llm-ci-role`, masked before export |
 
 Access options, documented, not all defaults:
 

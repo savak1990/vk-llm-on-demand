@@ -356,7 +356,7 @@ vk-lab-platform #109.
    Evidence.
 7. Here: bump `chartVersion`/`tag` only after CORE-120 publishes that
    version to GHCR.
-8. `VK_LLM_API_ENDPOINT` and `AWS_ROLE_ARN` (both repository variables, the latter set by `vk-lab-platform`'s `make account-up` after the `vk-llm-ci-role` pull request merges) are GitHub repository configuration for `gpu-control.yml`, not repeated here — CORE-160 owns that setup. `VK_LLM_TOKEN` is never stored in GitHub at all; `gpu-control.yml` reads it from AWS SSM (ADR 0016).
+8. `AWS_ROLE_ARN` (a repository variable set by `vk-lab-platform`'s `make account-up` after the `vk-llm-ci-role` pull request merges) is GitHub repository configuration for `gpu-control.yml`, not repeated here — CORE-160 owns that setup. `VK_LLM_TOKEN` is never stored in GitHub at all; `gpu-control.yml` reads it from AWS SSM (ADR 0016). 2026-11-22: the endpoint is no longer the repository variable `VK_LLM_API_ENDPOINT`; the workflow builds `https://llm.<fqdn>` from `/<project>/bootstrap/route53/fqdn` (ADR 0017, vk-lab-platform #115).
 
 ### Rollback
 

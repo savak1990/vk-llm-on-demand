@@ -36,6 +36,7 @@ type workflowDoc struct {
 		TimeoutMinutes int               `yaml:"timeout-minutes"`
 		Environment    string            `yaml:"environment"`
 		Permissions    map[string]string `yaml:"permissions"`
+		Env            map[string]string `yaml:"env"`
 		Steps          []struct {
 			Uses string         `yaml:"uses"`
 			With map[string]any `yaml:"with"`
@@ -144,6 +145,20 @@ func TestWorkflowShape(t *testing.T) {
 		guardIdx := strings.Index(run, "more than one line")
 		if guardIdx < 0 || (maskIdx >= 0 && guardIdx >= maskIdx) {
 			t.Errorf("SSM step must reject a multi-line value before ::add-mask:: (guard index %d, mask index %d)", guardIdx, maskIdx)
+		}
+
+		// GitHub prints a job's env block in every step header of a public
+		// run log, so the endpoint host must never sit there.
+		if v, ok := job.Env["ENDPOINT"]; ok {
+			t.Errorf("job env sets ENDPOINT = %q; it must come from the SSM step, masked", v)
+		}
+		if !strings.Contains(run, "/vk-hetzner-lab/bootstrap/route53/fqdn") {
+			t.Errorf("SSM step must read the endpoint host from /vk-hetzner-lab/bootstrap/route53/fqdn")
+		}
+		fqdnMaskIdx := strings.Index(run, `::add-mask::$fqdn`)
+		endpointIdx := strings.Index(run, "ENDPOINT=https://llm.")
+		if fqdnMaskIdx < 0 || endpointIdx < 0 || fqdnMaskIdx >= endpointIdx {
+			t.Errorf("SSM step must mask $fqdn (index %d) before exporting ENDPOINT=https://llm.<fqdn> (index %d)", fqdnMaskIdx, endpointIdx)
 		}
 	}
 }

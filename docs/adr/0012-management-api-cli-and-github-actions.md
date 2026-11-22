@@ -4,7 +4,8 @@
 
 Accepted (2026-11-01). Replaces the `/admin/v1` endpoints of ADR 0007 §3.
 Edits ADR 0009 (Proposed) in place for the token names. §5's secret
-storage is amended by [ADR 0016](0016-github-actions-token-from-ssm.md).
+storage is amended by [ADR 0016](0016-github-actions-token-from-ssm.md),
+and §5's endpoint source by [ADR 0017](0017-gpu-control-endpoint-from-ssm-fqdn.md).
 
 ## Context
 

@@ -61,7 +61,9 @@ Environment's `sub` claim (deployable from `main` only), and reads the
 token at run time from AWS SSM Parameter Store (`SecureString`, KMS
 decrypt scoped to that one parameter). `make repo-settings` creates the
 Environment; the separate `vk-lab-platform` repository's `make account-up`
-creates the role (ADR 0016).
+creates the role (ADR 0016). The API URL is not stored in GitHub either:
+the workflow reads the lab domain from SSM, masks it, and builds the URL
+at run time, so the host never appears in a public run log (ADR 0017).
 
 ## Review policy
 
