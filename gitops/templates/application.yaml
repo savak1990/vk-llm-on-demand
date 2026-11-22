@@ -1,11 +1,13 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  # Name, namespace and the default release name together fix the HTTPRoute
-  # name (gpu-on-demand), the state ConfigMap name and the installationId a
-  # later consumer recomputes. Never set helm.releaseName, never rename this.
+  # Name, release name and the chart namespace together fix the HTTPRoute
+  # name (gpu-on-demand), the state ConfigMap name and the installationId
+  # a later consumer recomputes. Never set helm.releaseName, never rename this.
+  # The object lives in the app's own namespace, never in argocd: an
+  # Application in the control-plane namespace may name any project.
   name: gpu-on-demand
-  namespace: argocd
+  namespace: {{ .Values.namespace }}
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
