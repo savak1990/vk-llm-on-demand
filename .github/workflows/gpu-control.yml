@@ -26,7 +26,6 @@ jobs:
     env:
       ACTION: ${{ inputs.action }}
       MONTHLY_USD: ${{ inputs.monthly_usd }}
-      ENDPOINT: ${{ vars.VK_LLM_API_ENDPOINT }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,18 +36,24 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: eu-west-1
 
-      - name: Read the management token from SSM
+      - name: Read the management token and the API host from SSM
         run: |
           set -euo pipefail
           value="$(aws ssm get-parameter --with-decryption \
             --name /vk-hetzner-lab/persistent/llm/management_tokens \
+            --query Parameter.Value --output text)"
+          fqdn="$(aws ssm get-parameter \
+            --name /vk-hetzner-lab/bootstrap/route53/fqdn \
             --query Parameter.Value --output text)"
           # Masking covers one line only, and the env file would read a second
           # line as a new variable, so a multi-token value is refused.
           case "$value" in
             *$'\n'*) echo "::error::management_tokens holds more than one line; gpu-control needs exactly one token" >&2; exit 1 ;;
           esac
+          test -n "$fqdn"
+          echo "::add-mask::$fqdn"
           echo "::add-mask::$value"
           echo "VK_LLM_TOKEN=$value" >> "$GITHUB_ENV"
+          echo "ENDPOINT=https://llm.$fqdn" >> "$GITHUB_ENV"
 
       - run: scripts/gpu-control.sh

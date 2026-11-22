@@ -350,6 +350,7 @@ workflow lives in this repository and needs one secret and one variable
 | [0014](adr/0014-persistent-volume-cache-and-preferred-host.md) | P2 persistent-volume cache, preferred host | Proposed, P2 |
 | [0015](adr/0015-runtime-mutable-budget-cap.md) | Runtime-mutable budget cap behind a Helm-only ceiling | Accepted |
 | [0016](adr/0016-github-actions-token-from-ssm.md) | `gpu-control` reads its token from AWS SSM via OIDC | Accepted |
+| [0017](adr/0017-gpu-control-endpoint-from-ssm-fqdn.md) | `gpu-control` builds its endpoint from the lab fqdn in SSM | Accepted |
 
 ## 13. Unresolved
 

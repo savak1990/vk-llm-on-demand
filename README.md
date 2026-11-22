@@ -227,17 +227,15 @@ Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
    environment named `gpu-control`. Under Deployment branches and tags,
    select "Protected branches only". `make repo-settings` does this
    step for you.
-2. Nothing else to add here: the management token is never stored in
-   GitHub. If you run this project's own `vk-lab-platform` deployment,
-   its `make account-up` creates the AWS role this workflow assumes and
-   sets this repository's `vars.AWS_ROLE_ARN` for you. If you deploy
-   against a different secrets backend, point `gpu-control.yml`'s token
-   step at it instead.
-3. Go to Settings, then Secrets and variables, then Actions. Add a
-   repository variable named `VK_LLM_API_ENDPOINT`. Set it to your
-   installation's management API URL, for example
-   `https://llm.<your-domain>`.
-4. Go to the Actions tab, select `gpu-control`, and run it with the
+2. Nothing else to add here. Neither the management token nor the API
+   URL is stored in GitHub: the workflow reads the token and the lab's
+   domain from AWS SSM and builds `https://llm.<domain>` itself, masked
+   in the log. If you run this project's own `vk-lab-platform`
+   deployment, its `make account-up` creates the AWS role this workflow
+   assumes and sets this repository's `vars.AWS_ROLE_ARN` for you. If you
+   deploy against a different backend, point `gpu-control.yml`'s SSM step
+   at it instead.
+3. Go to the Actions tab, select `gpu-control`, and run it with the
    `action` input set to `start`, `status`, `stop`, or `budget`.
 
 To change the budget from the Actions tab, set `action` to `budget` and
@@ -251,7 +249,7 @@ that matches your setup:
 |---|---|---|
 | HTTPS (default) | Your installation accepts connections from the internet. | The token is the only gate. The same rate limit and budget cap apply as for any other client. |
 | VPN | You keep your installation off the public internet. | The workflow needs a self-hosted runner with access to the VPN. |
-| Self-hosted runner | `VK_LLM_API_ENDPOINT` is not reachable from the internet. | Change `runs-on` in `gpu-control.yml` to point at your runner. The role and variable setup does not change. |
+| Self-hosted runner | Your API host is not reachable from the internet. | Change `runs-on` in `gpu-control.yml` to point at your runner. The role and SSM setup does not change. |
 
 Run one dispatch at a time. A second dispatch does not start until the
 first run is complete. A `stop` can wait up to 20 minutes behind a
