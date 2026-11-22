@@ -41,4 +41,11 @@ route="$(yq 'select(.kind == "HTTPRoute") | .metadata.name' "$tmp/inner.yaml")"
   echo "gitops-check: HTTPRoute is '$route', the platform traffic policy targets 'gpu-on-demand'" >&2
   exit 1
 }
+
+appns="$(yq 'select(.kind == "Application") | .metadata.namespace' "$tmp/outer.yaml")"
+[ "$appns" = "llm" ] || {
+  echo "gitops-check: child Application must live in namespace llm, not '$appns' (an Application in argocd may name any project)" >&2
+  exit 1
+}
+
 echo "gitops-check: ok (chart $version)"
