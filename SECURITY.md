@@ -30,21 +30,43 @@ configuration files are ignored by `.gitignore`.
 
 | Control | Tool | When |
 |---|---|---|
-| Secret scanning | gitleaks (pinned binary, sha256-verified) | every PR over the diff; weekly over the full history |
-| Go vulnerabilities | govulncheck | every PR |
+| Secret scanning | gitleaks (pinned binary, sha256-verified) | planned (spec 170): the `security` job is a stub until it lands |
+| Go vulnerabilities | govulncheck | planned (spec 170) |
 | Static analysis | golangci-lint with gosec | every PR |
-| Image vulnerabilities | trivy (pinned binary, sha256-verified) | every PR on the built image |
+| Image vulnerabilities | trivy (pinned binary, sha256-verified) | planned (spec 170) |
 | Actions supply chain | SHA-pinned actions, `permissions: {}`, actionlint, dependabot | every PR, weekly updates |
-| Chart | helm lint, kubeconform | every PR |
+| Chart | helm lint, kubeconform, RBAC shape check | every PR |
 
 ## Runtime posture
 
 Non-root distroless image, read-only root filesystem, no capabilities,
 one ConfigMap of RBAC, TLS at the platform gateway, separate inference and
 management credentials, constant-time comparison, no credentials in URLs,
-flags, logs or metrics, request size and rate limits, the inference
-runtime bound to loopback on the GPU host and reached only through an SSH
-tunnel.
+flags, logs or metrics, request size and rate limits on both surfaces and
+on upstream error bodies, the inference runtime bound to loopback on the
+GPU host and reached only through an SSH tunnel, `/readyz` never echoes an
+internal error.
+
+The chart rejects `image.tag: latest`, a worker image with no tag or with
+tag `latest`, and an Ingress without TLS unless `ingress.insecurePlaintext`
+is set. The optional NetworkPolicy, when enabled, allows DNS only to
+kube-dns, HTTPS and SSH only to public addresses, and metrics ingress only
+from the monitoring namespace.
+
+## GitHub Actions credentials
+
+`VK_LLM_TOKEN` is never stored in GitHub. `gpu-control.yml` assumes IAM
+role `vk-llm-ci-role` via GitHub OIDC, trusted only to the `gpu-control`
+Environment's `sub` claim (deployable from `main` only), and reads the
+token at run time from AWS SSM Parameter Store (`SecureString`, KMS
+decrypt scoped to that one parameter). `make repo-settings` creates the
+Environment; the separate `vk-lab-platform` repository's `make account-up`
+creates the role (ADR 0016).
+
+## Review policy
+
+One maintainer. Branch protection with `enforce_admins` on; no required
+reviewer. Every change passes the full PR gate (`ci-ok`) before merge.
 
 ## Release checklist
 

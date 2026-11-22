@@ -315,6 +315,33 @@ func TestUpstream4xxMapping(t *testing.T) {
 	}
 }
 
+func TestUpstream4xxBodyIsCapped(t *testing.T) {
+	d := testDeps(t)
+	limit := d.Config.MaxBodyBytes
+	huge := `{"error":{"message":"` + strings.Repeat("x", 2*int(limit)) + `","type":"t","code":"c"}}`
+	rt := fakeRoundTripper(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(huge))}, nil
+	})
+	d.Controller = &fakeController{admitRT: rt, status: controller.Snapshot{Generation: 1}}
+	g, err := New(d)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if int64(rec.Body.Len()) > limit {
+		t.Fatalf("body = %d bytes, want <= %d", rec.Body.Len(), limit)
+	}
+	if !strings.Contains(rec.Body.String(), "upstream_rejected") {
+		t.Fatalf("truncated body must be normalized, got %q", rec.Body.String()[:80])
+	}
+}
+
 // TestUpstream3xxReportedAsError guards against a 3xx upstream response
 // falling through to the stream/default cases, which would otherwise
 // get copied as if it were a confirmed 2xx.

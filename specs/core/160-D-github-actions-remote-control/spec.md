@@ -1,9 +1,9 @@
 ---
 id: "CORE-160"
 status: "DONE"
-updated: "2026-11-15"
+updated: "2026-11-21"
 depends_on: ["CORE-055"]
-adrs: ["0012", "0011", "0013"]
+adrs: ["0012", "0011", "0013", "0016"]
 ---
 
 # 160 — GitHub Actions remote control
@@ -118,6 +118,18 @@ installation's hostname into a public run log (NFR-8.6, architecture §6).
 The only thing before the mask line is the scheme check (next section),
 whose error message does not print `ENDPOINT`.
 
+2026-11-21: the as-built job additionally declares `environment:
+gpu-control` and `id-token: write` (so it only mints an OIDC token — it is
+not a write scope on repository contents) and adds an
+`aws-actions/configure-aws-credentials` step and an SSM-read step before
+`scripts/gpu-control.sh` runs (ADR 0016). `VK_LLM_TOKEN` is no longer
+`secrets.VK_LLM_TOKEN` in job `env:`; it is exported through
+`$GITHUB_ENV` by the SSM-read step after an explicit `::add-mask::`, so
+the auto-masking reasoning above no longer applies to it — the mask is
+now explicit, the same protection a GitHub secret gets automatically.
+`.github/workflows/gpu-control.yml` is authoritative over the YAML block
+above, which shows this spec's original as-built shape.
+
 ### `scripts/gpu-control.sh` contract
 
 ```
@@ -207,7 +219,8 @@ secondsUntilIdleShutdown=n/a`.
 
 | Item | Kind | Set by |
 |---|---|---|
-| `VK_LLM_TOKEN` | repository secret | a `management-tokens` entry (ADR 0012 §3) issued for this workflow, distinct from the one a human puts in `~/.config/vk-llm/config.yaml`, so leaking one does not force rotating the other |
+| `VK_LLM_TOKEN` | never stored in GitHub (2026-11-21, ADR 0016) | read at run time from AWS SSM `/vk-hetzner-lab/persistent/llm/api_token` via OIDC-federated role `vk-llm-ci-role` (`vk-lab-platform`), trusted only to the `gpu-control` Environment's OIDC `sub` claim |
+| `AWS_ROLE_ARN` | repository variable | `vk-llm-ci-role`'s ARN; not sensitive — a role ARN is configuration. Set by `vk-lab-platform`'s `make account-up` |
 | `VK_LLM_API_ENDPOINT` | repository variable | `https://llm.<fqdn>` (placeholder; never the real domain in Git, ADR 0013 §1) |
 
 Access options, documented, not all defaults:
@@ -232,6 +245,10 @@ repo-wide).
 ## Requirements
 
 - R1. `gpu-control.yml` MUST declare `permissions: {}` at workflow level; the job's `permissions` MUST be exactly `contents: read` and no other scope. (source: NFR-8.8, ADR 0013 §4)
+
+  2026-11-21: the job's `permissions` additionally carries `id-token: write`,
+  required to assume an AWS role via OIDC (ADR 0016); `contents: read` and
+  `id-token: write` are the only two scopes, still no other.
 - R2. The `action` input MUST be `type: choice` with options exactly `start`, `status`, `stop` and default `status`, and MUST reach the script only through `env:`, never string-interpolated into a `run:` block. (source: ADR 0012 §5, NFR-8.8)
 - R3. The job MUST declare `concurrency: {group: gpu-control, cancel-in-progress: false}` and `timeout-minutes: 25`. (source: ADR 0012 §5, FR-7.9)
 - R4. `scripts/gpu-control.sh` MUST pass `shellcheck -s bash` with zero findings and MUST quote every variable expansion. (source: task brief; ADR 0013 §1 pattern)
@@ -242,6 +259,11 @@ repo-wide).
 - R9. No call this script makes MUST write `lastInferenceFinishedAt`, `readyAt`, or `idleDeadline`; the GPU's `idleDeadline` MUST be unchanged across any number of `status` or `stop`-on-already-stopped runs. (source: ADR 0011 §2, FR-3.5, FR-7.9)
 - R10. The job summary MUST contain a line with the final `state` and `secondsUntilIdleShutdown` (or `n/a`) for every action. (source: task brief)
 - R11. The workflow MUST use exactly one GitHub Action, `actions/checkout`, SHA-pinned with a version comment and `persist-credentials: false`; every other step MUST be `run:`. (source: ADR 0013 §1, ADR 0012 §5 "Alternatives considered")
+
+  2026-11-21: the workflow additionally uses
+  `aws-actions/configure-aws-credentials`, SHA-pinned, the same action and
+  pin already used by `vk-ahorro`'s CI jobs for the same OIDC pattern
+  (ADR 0016). Exactly these two Actions; every other step stays `run:`.
 - R12. The script MUST mask `ENDPOINT`'s hostname via `::add-mask::` before making any call, so a `curl` failure message cannot print the installation's domain into the run log. (source: NFR-8.6, architecture §6)
 
 ## Implementation steps
@@ -260,7 +282,7 @@ Tier 1/2 use the shared fake management server (`docs/testing-strategy.md`,
 also used by CORE-150); no real provider or network beyond `httptest`.
 
 - AC1. Lint (R4, NFR-8.8). `actionlint .github/workflows/gpu-control.yml` exits 0; `shellcheck -s bash scripts/gpu-control.sh` exits 0, 0 findings.
-- AC2. Static shape (R1, R2, R3, R11). Parse the workflow YAML: top-level `permissions` equals `{}`; job `permissions` equals `{contents: read}`; `concurrency` equals `{group: gpu-control, cancel-in-progress: false}`; `timeout-minutes` equals 25; the `action` input has `type: choice`, `options: [start, status, stop]`, `default: status`; exactly one `uses:` key, matching `actions/checkout@[0-9a-f]{40}`, with `persist-credentials: false`.
+- AC2. Static shape (R1, R2, R3, R11). Parse the workflow YAML: top-level `permissions` equals `{}`; job `environment` equals `gpu-control`; job `permissions` equals `{contents: read, id-token: write}`; `concurrency` equals `{group: gpu-control, cancel-in-progress: false}`; `timeout-minutes` equals 25; the `action` input has `type: choice`, `options: [start, status, stop]`, `default: status`; exactly two `uses:` steps — `actions/checkout@[0-9a-f]{40}` with `persist-credentials: false`, and `aws-actions/configure-aws-credentials@[0-9a-f]{40}` with `role-to-assume: ${{ vars.AWS_ROLE_ARN }}` and `aws-region: eu-west-1`.
 - AC3. `status` (FR-7.8). Fake server returns a fixed READY document (`price 0.71`, `uptime 1830`, `idleDeadline` = now+1440s). Action: `ACTION=status scripts/gpu-control.sh`. Expected: exit 0; stdout contains all ten fields of the status row with the fixture's values; `secondsUntilIdleShutdown=1440` in the job summary; fake server call count: 1.
 - AC4. `start` polling (FR-7.8, FR-3.5, ADR 0011 §2). Fake server's `GET status` returns `ALLOCATING`, `STARTING`, `LOADING_MODEL`, `READY` on its 1st–4th call respectively (state fixed to `READY` thereafter), each with a fixed `idleDeadline`. Action: `ACTION=start POLL_INTERVAL=1 scripts/gpu-control.sh`. Expected: exit 0; stdout shows exactly those four states, each once, in order; wall time ≤ 10 s at `POLL_INTERVAL=1`; `idleDeadline` byte-identical across all 4 `GET` calls recorded by the fake server.
 - AC5. `stop` polling (R8). Fake server's `GET status` returns `DRAINING`, `DELETING`, `STOPPED` on its 1st–3rd call. Action: `ACTION=stop POLL_INTERVAL=1 scripts/gpu-control.sh`. Expected: exit 0; three state lines; summary line `state=STOPPED secondsUntilIdleShutdown=n/a`.

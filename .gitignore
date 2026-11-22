@@ -13,9 +13,15 @@ coverage.out
 dist/
 *.tgz
 
-# Local kubeconfigs never land in the tree.
+# Local kubeconfigs and key material never land in the tree.
 .kube/
+kubeconfig*
 *.kubeconfig
+*.pem
+*.key
+id_ed25519*
+id_rsa*
+.env.*
 
 # Claude Code. Only the permission policy is tracked.
 .claude/*

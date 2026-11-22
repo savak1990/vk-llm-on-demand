@@ -208,7 +208,7 @@ func main() {
 		WriteTimeout: 0,
 	}
 
-	health := obs.NewServer(reg, readinessChecks, obs.Config{Addr: ":9090"})
+	health := obs.NewServer(reg, readinessChecks, obs.Config{Addr: ":9090", Log: slog.Default()})
 
 	if err := run(ctx, api, health, gw); err != nil {
 		slog.Error("server error", "err", err)

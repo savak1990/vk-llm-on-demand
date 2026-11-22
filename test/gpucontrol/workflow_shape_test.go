@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -33,10 +34,12 @@ type workflowDoc struct {
 	} `yaml:"on"`
 	Jobs map[string]struct {
 		TimeoutMinutes int               `yaml:"timeout-minutes"`
+		Environment    string            `yaml:"environment"`
 		Permissions    map[string]string `yaml:"permissions"`
 		Steps          []struct {
 			Uses string         `yaml:"uses"`
 			With map[string]any `yaml:"with"`
+			Run  string         `yaml:"run"`
 		} `yaml:"steps"`
 	} `yaml:"jobs"`
 }
@@ -80,25 +83,61 @@ func TestWorkflowShape(t *testing.T) {
 		if job.TimeoutMinutes != 25 {
 			t.Errorf("timeout-minutes = %d, want 25", job.TimeoutMinutes)
 		}
-		if job.Permissions["contents"] != "read" || len(job.Permissions) != 1 {
-			t.Errorf("job permissions = %v, want {contents: read}", job.Permissions)
+		if job.Environment != "gpu-control" {
+			t.Errorf("environment = %q, want gpu-control", job.Environment)
 		}
-		var usesSteps int
+		if job.Permissions["contents"] != "read" || job.Permissions["id-token"] != "write" || len(job.Permissions) != 2 {
+			t.Errorf("job permissions = %v, want {contents: read, id-token: write}", job.Permissions)
+		}
+
+		var usesSteps []string
 		checkoutSHA := regexp.MustCompile(`^actions/checkout@[0-9a-f]{40}$`)
+		awsCredsSHA := regexp.MustCompile(`^aws-actions/configure-aws-credentials@[0-9a-f]{40}$`)
 		for _, step := range job.Steps {
 			if step.Uses == "" {
 				continue
 			}
-			usesSteps++
-			if !checkoutSHA.MatchString(step.Uses) {
-				t.Errorf("uses = %q, want actions/checkout@<40-hex-sha>", step.Uses)
-			}
-			if pc, ok := step.With["persist-credentials"]; !ok || pc != false {
-				t.Errorf("checkout step persist-credentials = %v, want false", pc)
+			usesSteps = append(usesSteps, step.Uses)
+			switch {
+			case checkoutSHA.MatchString(step.Uses):
+				if pc, ok := step.With["persist-credentials"]; !ok || pc != false {
+					t.Errorf("checkout step persist-credentials = %v, want false", pc)
+				}
+			case awsCredsSHA.MatchString(step.Uses):
+				if step.With["role-to-assume"] != "${{ vars.AWS_ROLE_ARN }}" {
+					t.Errorf("configure-aws-credentials role-to-assume = %v, want ${{ vars.AWS_ROLE_ARN }}", step.With["role-to-assume"])
+				}
+				if step.With["aws-region"] != "eu-west-1" {
+					t.Errorf("configure-aws-credentials aws-region = %v, want eu-west-1", step.With["aws-region"])
+				}
+			default:
+				t.Errorf("uses = %q, want actions/checkout@<sha> or aws-actions/configure-aws-credentials@<sha>", step.Uses)
 			}
 		}
-		if usesSteps != 1 {
-			t.Errorf("uses: steps = %d, want exactly 1", usesSteps)
+		if len(usesSteps) != 2 {
+			t.Errorf("uses: steps = %v, want exactly 2 (checkout, configure-aws-credentials)", usesSteps)
+		}
+
+		var ssmSteps []string
+		for _, step := range job.Steps {
+			if strings.Contains(step.Run, "--with-decryption") && strings.Contains(step.Run, "/vk-hetzner-lab/persistent/llm/api_token") {
+				ssmSteps = append(ssmSteps, step.Run)
+			}
+		}
+		if len(ssmSteps) != 1 {
+			t.Fatalf("SSM-reading run: steps = %d, want exactly 1", len(ssmSteps))
+		}
+		run := ssmSteps[0]
+		maskIdx := strings.Index(run, "::add-mask::")
+		envIdx := strings.Index(run, "GITHUB_ENV")
+		if maskIdx < 0 {
+			t.Errorf("SSM step run missing ::add-mask::")
+		}
+		if envIdx < 0 {
+			t.Errorf("SSM step run missing GITHUB_ENV")
+		}
+		if maskIdx >= 0 && envIdx >= 0 && maskIdx >= envIdx {
+			t.Errorf("::add-mask:: (index %d) must come before GITHUB_ENV (index %d)", maskIdx, envIdx)
 		}
 	}
 }

@@ -264,7 +264,7 @@ func isJSONString(raw json.RawMessage) bool {
 // already has all three fields as non-empty strings; anything else is
 // normalized, keeping the upstream message where there is one.
 func (g *Gateway) copyUpstream4xx(w http.ResponseWriter, resp *http.Response) {
-	raw, _ := io.ReadAll(resp.Body)
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, g.deps.Config.MaxBodyBytes))
 	var probe upstream4xxProbe
 	if json.Unmarshal(raw, &probe) == nil && probe.Error.Message != "" &&
 		isJSONString(probe.Error.Type) && isJSONString(probe.Error.Code) {

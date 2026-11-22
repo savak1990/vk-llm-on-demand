@@ -348,6 +348,8 @@ workflow lives in this repository and needs one secret and one variable
 | [0012](adr/0012-management-api-cli-and-github-actions.md) | Management API, `vk-llm`, GitHub Actions thin clients | Accepted |
 | [0013](adr/0013-public-repo-security-and-cli-release.md) | Scanning in CI, SECURITY.md, GoReleaser CLI release | Accepted |
 | [0014](adr/0014-persistent-volume-cache-and-preferred-host.md) | P2 persistent-volume cache, preferred host | Proposed, P2 |
+| [0015](adr/0015-runtime-mutable-budget-cap.md) | Runtime-mutable budget cap behind a Helm-only ceiling | Accepted |
+| [0016](adr/0016-github-actions-token-from-ssm.md) | `gpu-control` reads its token from AWS SSM via OIDC | Accepted |
 
 ## 13. Unresolved
 

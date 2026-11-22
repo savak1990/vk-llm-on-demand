@@ -85,6 +85,7 @@ ingress:
   tls:
     enabled: false
     secretName: ""
+  insecurePlaintext: false
 
 service:
   type: ClusterIP
@@ -104,6 +105,7 @@ dashboard:
 networkPolicy:
   enabled: false
   gatewayNamespace: envoy
+  monitoringNamespace: monitoring
   vastApiCidrs: []
   apiServerCidrs: []
   sshPorts:

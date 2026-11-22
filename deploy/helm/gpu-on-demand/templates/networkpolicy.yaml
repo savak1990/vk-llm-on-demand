@@ -1,4 +1,5 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- $private := list "10.0.0.0/8" "172.16.0.0/12" "192.168.0.0/16" "169.254.0.0/16" "100.64.0.0/10" }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -13,7 +14,14 @@ spec:
     - Ingress
     - Egress
   egress:
-    - ports:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
         - port: 53
           protocol: TCP
         - port: 53
@@ -46,11 +54,18 @@ spec:
         {{- else }}
         - ipBlock:
             cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $private | nindent 14 }}
         {{- end }}
       ports:
         - port: 443
           protocol: TCP
-    - ports:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml $private | nindent 14 }}
+      ports:
         - port: {{ .Values.networkPolicy.sshPorts.from }}
           endPort: {{ .Values.networkPolicy.sshPorts.to }}
           protocol: TCP
@@ -61,6 +76,10 @@ spec:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.gatewayNamespace }}
       ports:
         - port: http
-    - ports:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }}
+      ports:
         - port: metrics
 {{- end }}

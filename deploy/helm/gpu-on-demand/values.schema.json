@@ -8,7 +8,7 @@
       "required": ["tag"],
       "properties": {
         "repository": { "type": "string" },
-        "tag": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1, "not": { "const": "latest" } },
         "pullPolicy": { "type": "string" }
       }
     },
@@ -53,7 +53,11 @@
           "type": "object",
           "required": ["image"],
           "properties": {
-            "image": { "type": "string", "minLength": 1 },
+            "image": {
+              "type": "string",
+              "pattern": "(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$|@sha256:[0-9a-f]{64}$)",
+              "not": { "pattern": ":latest$" }
+            },
             "deadManTimeout": { "type": "string" }
           }
         },
@@ -93,6 +97,37 @@
               }
             },
             "required": ["safety"]
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "gatewayNamespace": { "type": "string", "minLength": 1 },
+        "monitoringNamespace": { "type": "string", "minLength": 1 },
+        "vastApiCidrs": { "type": "array", "items": { "type": "string" } },
+        "apiServerCidrs": { "type": "array", "items": { "type": "string" } },
+        "sshPorts": {
+          "type": "object",
+          "properties": {
+            "from": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "to": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "insecurePlaintext": { "type": "boolean" },
+        "tls": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "secretName": { "type": "string" }
           }
         }
       }
