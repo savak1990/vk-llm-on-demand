@@ -219,7 +219,7 @@ secondsUntilIdleShutdown=n/a`.
 
 | Item | Kind | Set by |
 |---|---|---|
-| `VK_LLM_TOKEN` | never stored in GitHub (2026-11-21, ADR 0016) | read at run time from AWS SSM `/vk-hetzner-lab/persistent/llm/api_token` via OIDC-federated role `vk-llm-ci-role` (`vk-lab-platform`), trusted only to the `gpu-control` Environment's OIDC `sub` claim |
+| `VK_LLM_TOKEN` | never stored in GitHub (2026-11-21, ADR 0016) | read at run time from AWS SSM `/vk-hetzner-lab/persistent/llm/management_tokens` (2026-11-22; was `api_token`, which now holds the inference keys) via OIDC-federated role `vk-llm-ci-role` (`vk-lab-platform`), trusted only to the `gpu-control` Environment's OIDC `sub` claim; the workflow refuses a value with more than one line |
 | `AWS_ROLE_ARN` | repository variable | `vk-llm-ci-role`'s ARN; not sensitive — a role ARN is configuration. Set by `vk-lab-platform`'s `make account-up` |
 | `VK_LLM_API_ENDPOINT` | repository variable | `https://llm.<fqdn>` (placeholder; never the real domain in Git, ADR 0013 §1) |
 

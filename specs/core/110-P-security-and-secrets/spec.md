@@ -152,9 +152,10 @@ Zero downtime: a management token never seeds the worker key, so rotating
 one never forces a destroy (ADR 0006 §4, amended; ADR 0012 §3).
 
 The GitHub Actions copy needs no step here: re-encrypt
-`secrets/llm-on-demand-api-token.enc` in `vk-lab-platform` and re-apply;
-`gpu-control.yml` reads the new value on its next run (ADR 0016,
-2026-11-21).
+`secrets/llm-on-demand-management-tokens.enc` in `vk-lab-platform` and
+re-apply; `gpu-control.yml` reads the new value on its next run (ADR 0016,
+amended 2026-11-22). That parameter must hold exactly one token: the
+workflow refuses a multi-line value.
 
 2026-11-22: the re-encrypted value MUST also be (or replace) the matching
 line in `management-tokens`, in the same change — otherwise `gpu-control`

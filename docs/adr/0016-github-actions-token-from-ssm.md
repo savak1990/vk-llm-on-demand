@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (2026-11-21). Adds to [ADR 0012](0012-management-api-cli-and-github-actions.md) §5;
-ADR 0012's Status carries a pointer here.
+ADR 0012's Status carries a pointer here. Amended 2026-11-22: the parameter
+is `management_tokens`, not `api_token` (see [Amendment](#amendment-2026-11-22)).
 
 ## Context
 
@@ -76,3 +77,24 @@ value and updating `management-tokens` in the same change, otherwise
 token for now, so the earlier property that the GitHub Actions token is a
 line distinct from the CLI's (spec 110 R19) no longer holds for this
 deployment — both read the same line.
+
+## Amendment (2026-11-22)
+
+vk-lab-platform #112 gave each key list its own SSM parameter:
+`/<project>/persistent/llm/api_token` now holds the inference client keys,
+and `/<project>/persistent/llm/management_tokens` (from
+`secrets/llm-on-demand-management-tokens.enc`) holds the management tokens.
+The decision stands; only the parameter changes:
+
+- `gpu-control.yml` reads `/vk-hetzner-lab/persistent/llm/management_tokens`,
+  and `vk-llm-ci-role` may read and decrypt only that parameter
+  (vk-lab-platform #114). This replaces `api_token` in Decision 1 and in the
+  rotation paragraph above: rotate by re-encrypting
+  `llm-on-demand-management-tokens.enc` and re-applying.
+- The previous paragraph's rule, that `api_token` must also be a line of
+  `management-tokens`, no longer applies: the workflow reads the management
+  list itself.
+- `gpu-control.yml` refuses a value with more than one line. A second line
+  would not be masked and would be read as a new variable in the step's env
+  file. So the CLI and GitHub Actions share one management token; separate
+  tokens would need a dedicated parameter, not a line position.
