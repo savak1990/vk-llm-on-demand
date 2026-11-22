@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -34,6 +35,7 @@ type workflowDoc struct {
 		Steps          []struct {
 			Uses string         `yaml:"uses"`
 			With map[string]any `yaml:"with"`
+			Run  string         `yaml:"run"`
 		} `yaml:"steps"`
 	} `yaml:"jobs"`
 }
@@ -107,6 +109,28 @@ func TestWorkflowShape(t *testing.T) {
 		}
 		if len(usesSteps) != 2 {
 			t.Errorf("uses: steps = %v, want exactly 2 (checkout, configure-aws-credentials)", usesSteps)
+		}
+
+		var ssmSteps []string
+		for _, step := range job.Steps {
+			if strings.Contains(step.Run, "--with-decryption") && strings.Contains(step.Run, "/vk-hetzner-lab/persistent/llm/api_token") {
+				ssmSteps = append(ssmSteps, step.Run)
+			}
+		}
+		if len(ssmSteps) != 1 {
+			t.Fatalf("SSM-reading run: steps = %d, want exactly 1", len(ssmSteps))
+		}
+		run := ssmSteps[0]
+		maskIdx := strings.Index(run, "::add-mask::")
+		envIdx := strings.Index(run, "GITHUB_ENV")
+		if maskIdx < 0 {
+			t.Errorf("SSM step run missing ::add-mask::")
+		}
+		if envIdx < 0 {
+			t.Errorf("SSM step run missing GITHUB_ENV")
+		}
+		if maskIdx >= 0 && envIdx >= 0 && maskIdx >= envIdx {
+			t.Errorf("::add-mask:: (index %d) must come before GITHUB_ENV (index %d)", maskIdx, envIdx)
 		}
 	}
 }
