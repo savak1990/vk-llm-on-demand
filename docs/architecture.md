@@ -299,10 +299,10 @@ and are set by the chart under `config.*`.
 | `gateway.rateLimitPerKeyRPM` | 60 | inference keys and management tokens alike |
 | `onDemand.maxWait` / `onDemand.maxPending` / `onDemand.heartbeatInterval` | 480s / 32 / 15s | on-demand mode only (ADR 0007), not rendered by the MVP chart |
 | `model.alias` | `qwen3.6-35b-a3b` | |
-| `model.url` / `model.sha256` | pinned in chart | |
+| `model.url` / `model.sha256` | pinned in `gitops/values.yaml` | |
 | `model.contextSize` / `model.parallel` | 32768 / 1 | |
 | `model.generationTimeout` | 10m | upstream deadline per request |
-| `worker.image` | `ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:…` | pinned |
+| `worker.image` | `ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:…` | pinned in `gitops/values.yaml` |
 | `worker.deadManTimeout` | idleShutdown.timeout + 10m | |
 | `tunnel.dialer` | `ssh` | `direct` only for the kind job with the fake worker |
 | `tunnel.directAddr` | `""` | host:port of the fake worker when `direct` |
