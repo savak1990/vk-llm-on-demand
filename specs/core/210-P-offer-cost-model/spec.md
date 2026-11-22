@@ -143,6 +143,8 @@ type Inputs struct {
 
 type Breakdown struct {
     DiskGB          int
+    ModelBytes      int64
+    HorizonSeconds  int64
     DownloadSeconds int64
     GPUHourly       provider.Money // dph_base
     StorageHourly   provider.Money // dph_total − dph_base
