@@ -25,6 +25,10 @@ type workflowDoc struct {
 					Options []string `yaml:"options"`
 					Default string   `yaml:"default"`
 				} `yaml:"action"`
+				MonthlyUSD struct {
+					Type     string `yaml:"type"`
+					Required bool   `yaml:"required"`
+				} `yaml:"monthly_usd"`
 			} `yaml:"inputs"`
 		} `yaml:"workflow_dispatch"`
 	} `yaml:"on"`
@@ -65,8 +69,11 @@ func TestWorkflowShape(t *testing.T) {
 	if action.Type != "choice" || action.Default != "status" {
 		t.Errorf("action input = %+v, want type=choice default=status", action)
 	}
-	if want := []string{"start", "status", "stop"}; !slices.Equal(action.Options, want) {
+	if want := []string{"start", "status", "stop", "budget"}; !slices.Equal(action.Options, want) {
 		t.Errorf("action options = %v, want %v", action.Options, want)
+	}
+	if m := doc.On.WorkflowDispatch.Inputs.MonthlyUSD; m.Type != "string" || m.Required {
+		t.Errorf("monthly_usd input = %+v, want an optional string", m)
 	}
 
 	if len(doc.Jobs) != 1 {

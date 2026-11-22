@@ -66,6 +66,13 @@ func renderStatus(w io.Writer, doc statusDoc) {
 	}
 }
 
+func renderBudget(w io.Writer, doc statusDoc) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	defer func() { _ = tw.Flush() }()
+	_, _ = fmt.Fprintf(tw, "Budget\t$%.2f / month\n", doc.Cost.BudgetMonthUSD)
+	_, _ = fmt.Fprintf(tw, "Spent\t$%.2f this month (estimate)\n", doc.Cost.EstimatedMonthUSD)
+}
+
 func renderJSON(w io.Writer, raw []byte) {
 	_, _ = w.Write(raw)
 }

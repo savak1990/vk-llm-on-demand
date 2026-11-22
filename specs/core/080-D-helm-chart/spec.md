@@ -95,6 +95,7 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.lifecycle.safety.maxInstanceSpendUSD` | `0` | `VKLLM_LIFECYCLE_SAFETY_MAX_INSTANCE_SPEND_USD` — `0` = off; otherwise bounds one instance's estimated spend |
 | `config.lifecycle.safety.maxProvisionAttemptsPerHour` | `3` | `VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR` |
 | `config.budget.monthlyUSD` | `30` | `VKLLM_BUDGET_MONTH_USD` |
+| `config.budget.maxMonthlyUSD` | `100` | `VKLLM_BUDGET_MAX_MONTHLY_USD` |
 | `config.budget.warnFraction` | `0.8` | `VKLLM_BUDGET_WARN_FRACTION` |
 | `config.controller.reconcileInterval` | `60s` | `VKLLM_CONTROLLER_RECONCILE_INTERVAL` |
 | `config.gateway.maxBodyBytes` | `1048576` | `VKLLM_GATEWAY_MAX_BODY_BYTES` |
@@ -118,9 +119,9 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 
 `config.model.url`, `config.model.sha256` and `config.worker.image` have no default: no production value exists anywhere in this repository yet; each is set at install time, the same category as `image.tag`.
 
-`config.mgmt.budgetMonthUSD`/`VKLLM_MGMT_BUDGET_MONTH_USD` is deliberately not a chart value — `cmd/gpu-on-demand/wire.go` always overrides it from `config.budget.monthlyUSD`, so rendering it would let an operator set a value with no effect.
+The management API reads the monthly budget from the controller snapshot, not from its own config; there is no separate management-side budget value (CORE-190).
 
-43 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
+44 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
 
 | Env var | Value | Why it is not a `config.*` row |
 |---|---|---|
@@ -326,7 +327,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 - R10. `strategy.type` MUST be `Recreate`; the chart MUST fail its render when `replicaCount` is not exactly `1`. (source: ADR 0003 §1)
 - R11. Probes MUST target `/healthz` and `/readyz` on container port 9090, matching CORE-010 R6/R7, and MUST NOT depend on a GPU instance existing. (source: CORE-010 R6, R7, FR-1.7)
 - R12. Each `existingSecrets.*` Secret MUST be mounted as files — `provider` and `ssh` under `/etc/vkllm/secrets/{provider,ssh}`, `apiKeys` under `/etc/vkllm/api-keys/` — and MUST NOT be exposed through `env` or `envFrom`. (source: ADR 0009 §1)
-- R13. The rendered application `ConfigMap` MUST contain exactly the 43 `VKLLM_*` keys listed in this spec's `config.*` table plus the two fixed keys `VKLLM_STATE_CONFIGMAP` and `VKLLM_INSTALLATION_ID`, 45 total, with no other key. (source: architecture §9)
+- R13. The rendered application `ConfigMap` MUST contain exactly the 44 `VKLLM_*` keys listed in this spec's `config.*` table plus the two fixed keys `VKLLM_STATE_CONFIGMAP` and `VKLLM_INSTALLATION_ID`, 46 total, with no other key. (source: architecture §9)
 - R14. `values.yaml` MUST NOT contain a hostname, a domain, an `fqdn` value or a secret value anywhere in its defaults. (source: C-14, NFR-8.6)
 - R15. The chart MUST render without error, and without any `HTTPRoute` or `Ingress` object, when both `httpRoute.enabled` and `ingress.enabled` are `false`, and MUST install on any Kubernetes cluster with no ingress controller present. (source: NFR-9.2, C-23)
 - R16. `helm uninstall` MUST leave no `ConfigMap` behind, including the state document's `ConfigMap`; `helm upgrade` MUST leave the state document's content untouched. (source: NFR-9.1, ADR 0004 §1)
@@ -346,7 +347,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 
 1. `Chart.yaml`, `values.yaml` with every key and default from this spec, `values.schema.json` enforcing types, the `provisioningMode` enum, and the `idleShutdown`/`maxLifetime` `if`/`then` guard — other required fields are guarded in the templates (`required "message" .Values.x`) so every missing-value error comes from one place with one message. Test: `helm lint deploy/helm/gpu-on-demand` exits 0.
 2. `_helpers.tpl` copied and extended from `vk-ahorro`'s (`svc.name`, `svc.fullname`, `svc.labels`, `svc.selectorLabels`, `svc.host`, `svc.image`, `svc.pullPolicy`) plus `svc.configEnv`. Test: `helm template` with minimal `--set` values renders a `Deployment` with a resolved image reference.
-3. `deployment.yaml`, `service.yaml`, `configmap.yaml`, `serviceaccount.yaml`. Test: `helm template` output contains the `checksum/config` annotation and exactly the 43 `VKLLM_*` keys from the `config.*` table, plus the 2 fixed keys.
+3. `deployment.yaml`, `service.yaml`, `configmap.yaml`, `serviceaccount.yaml`. Test: `helm template` output contains the `checksum/config` annotation and exactly the 44 `VKLLM_*` keys from the `config.*` table, plus the 2 fixed keys.
 4. `role.yaml`, `rolebinding.yaml`. Test: `helm template --set rbac.create=true` output's `Role` has exactly one rule block matching the RBAC section verbatim; `grep -cE 'create|patch'` on its verbs is `0`.
 5. `httproute.yaml`, `ingress.yaml`. Test: three `helm template` invocations (no route / httpRoute / ingress) each produce exactly the expected object set; the `httpRoute` render's `HTTPRoute` has exactly 2 rules, paths `/v1` and `/api/v1`.
 6. `servicemonitor.yaml`, `networkpolicy.yaml`, `externalsecrets.yaml`. Test: enabling each in isolation renders the right object set — `externalsecrets.yaml` renders exactly 3 `ExternalSecret` objects, the one targeting `existingSecrets.apiKeys` carrying exactly 3 `data` entries; the `networkpolicy.yaml` render adds `--set networkPolicy.apiServerCidrs={10.0.0.1/32}`, since `helm template` cannot resolve `lookup` and would otherwise hit the `fail` guard.

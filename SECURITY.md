@@ -61,7 +61,7 @@ Environment's `sub` claim (deployable from `main` only), and reads the
 token at run time from AWS SSM Parameter Store (`SecureString`, KMS
 decrypt scoped to that one parameter). `make repo-settings` creates the
 Environment; the separate `vk-lab-platform` repository's `make account-up`
-creates the role (ADR 0015).
+creates the role (ADR 0016).
 
 ## Review policy
 

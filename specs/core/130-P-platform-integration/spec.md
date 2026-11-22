@@ -41,7 +41,7 @@ Against `vk-lab-platform` (designed here, not committed here — C-24):
 - **PR-C**: the Envoy traffic policy that disables (or raises to 660 s,
   explicit mode's bound) the `llm` `HTTPRoute`'s request timeout and sets a
   120 s stream idle timeout (ADR 0010 Consequences).
-- **2026-11-21** (`feature/vk-llm-ci-role`, ADR 0015): adds IAM role
+- **2026-11-21** (`feature/vk-llm-ci-role`, ADR 0016): adds IAM role
   `vk-llm-ci-role`, trusted via GitHub OIDC only to the `gpu-control`
   Environment, reading `/*/persistent/llm/api_token`.
 
@@ -313,7 +313,7 @@ the chart name) is confirmed only once CORE-080 is written.
 3. Generate inference client keys with `make keygen` (ADR 0009 §2, `sk-vkllm-` prefix) → `vk-llm-on-demand-client-keys`. **Create a management token for the CLI and a separate one for GitHub Actions**, same command (ADR 0012 §3–§5) → both lines in `vk-llm-on-demand-management-tokens`. Generate the worker seed (`openssl rand -base64 32`, ADR 0009 §1) → `vk-llm-on-demand-worker-seed`. Run the five `make secret-encrypt` calls and commit the `.enc` files.
 
    2026-11-22: GitHub Actions reads this token from
-   `/<project>/persistent/llm/api_token` at run time (ADR 0015), which
+   `/<project>/persistent/llm/api_token` at run time (ADR 0016), which
    MUST be one of the lines in `management-tokens`.
 4. Merge **PR-B** first — PR-A's pointer would otherwise sync a chart whose
    `ExternalSecret`s never resolve (ADR 0009 Risks allows hand-created
@@ -323,7 +323,7 @@ the chart name) is confirmed only once CORE-080 is written.
    to take effect (not to apply without error).
 7. Here: bump `chartVersion`/`tag` only after CORE-120 publishes that
    version to GHCR.
-8. `VK_LLM_API_ENDPOINT` and `AWS_ROLE_ARN` (both repository variables, the latter set by `vk-lab-platform`'s `make account-up` after the `vk-llm-ci-role` pull request merges) are GitHub repository configuration for `gpu-control.yml`, not repeated here — CORE-160 owns that setup. `VK_LLM_TOKEN` is never stored in GitHub at all; `gpu-control.yml` reads it from AWS SSM (ADR 0015).
+8. `VK_LLM_API_ENDPOINT` and `AWS_ROLE_ARN` (both repository variables, the latter set by `vk-lab-platform`'s `make account-up` after the `vk-llm-ci-role` pull request merges) are GitHub repository configuration for `gpu-control.yml`, not repeated here — CORE-160 owns that setup. `VK_LLM_TOKEN` is never stored in GitHub at all; `gpu-control.yml` reads it from AWS SSM (ADR 0016).
 
 ### Rollback
 

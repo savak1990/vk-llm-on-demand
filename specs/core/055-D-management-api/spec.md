@@ -62,6 +62,8 @@ Port 9090 never serves it (ADR 0012 §6).
 | `GET /api/v1/gpu/cost` | none | 200 cost document | 401; 403; 429; 500 |
 | any other path or method under `/api/v1/` | — | — | 404 `not_found` / 405 `method_not_allowed`, after auth |
 
+CORE-190 adds `POST /api/v1/gpu/budget`; see that spec.
+
 The `result` field (in start/stop responses) and HTTP status are equivalent and redundant by design: both carry `already_running`/`already_stopped` (200) versus `accepted` (202); no 409 is ever returned (plan R-O). `503 gpu_unavailable` carries no `Retry-After`.
 
 ### Status document (ADR 0012 §1, verbatim field set)

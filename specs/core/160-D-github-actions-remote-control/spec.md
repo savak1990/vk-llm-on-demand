@@ -3,7 +3,7 @@ id: "CORE-160"
 status: "DONE"
 updated: "2026-11-21"
 depends_on: ["CORE-055"]
-adrs: ["0012", "0011", "0013", "0015"]
+adrs: ["0012", "0011", "0013", "0016"]
 ---
 
 # 160 — GitHub Actions remote control
@@ -122,7 +122,7 @@ whose error message does not print `ENDPOINT`.
 gpu-control` and `id-token: write` (so it only mints an OIDC token — it is
 not a write scope on repository contents) and adds an
 `aws-actions/configure-aws-credentials` step and an SSM-read step before
-`scripts/gpu-control.sh` runs (ADR 0015). `VK_LLM_TOKEN` is no longer
+`scripts/gpu-control.sh` runs (ADR 0016). `VK_LLM_TOKEN` is no longer
 `secrets.VK_LLM_TOKEN` in job `env:`; it is exported through
 `$GITHUB_ENV` by the SSM-read step after an explicit `::add-mask::`, so
 the auto-masking reasoning above no longer applies to it — the mask is
@@ -219,7 +219,7 @@ secondsUntilIdleShutdown=n/a`.
 
 | Item | Kind | Set by |
 |---|---|---|
-| `VK_LLM_TOKEN` | never stored in GitHub (2026-11-21, ADR 0015) | read at run time from AWS SSM `/vk-hetzner-lab/persistent/llm/api_token` via OIDC-federated role `vk-llm-ci-role` (`vk-lab-platform`), trusted only to the `gpu-control` Environment's OIDC `sub` claim |
+| `VK_LLM_TOKEN` | never stored in GitHub (2026-11-21, ADR 0016) | read at run time from AWS SSM `/vk-hetzner-lab/persistent/llm/api_token` via OIDC-federated role `vk-llm-ci-role` (`vk-lab-platform`), trusted only to the `gpu-control` Environment's OIDC `sub` claim |
 | `AWS_ROLE_ARN` | repository variable | `vk-llm-ci-role`'s ARN; not sensitive — a role ARN is configuration. Set by `vk-lab-platform`'s `make account-up` |
 | `VK_LLM_API_ENDPOINT` | repository variable | `https://llm.<fqdn>` (placeholder; never the real domain in Git, ADR 0013 §1) |
 
@@ -247,7 +247,7 @@ repo-wide).
 - R1. `gpu-control.yml` MUST declare `permissions: {}` at workflow level; the job's `permissions` MUST be exactly `contents: read` and no other scope. (source: NFR-8.8, ADR 0013 §4)
 
   2026-11-21: the job's `permissions` additionally carries `id-token: write`,
-  required to assume an AWS role via OIDC (ADR 0015); `contents: read` and
+  required to assume an AWS role via OIDC (ADR 0016); `contents: read` and
   `id-token: write` are the only two scopes, still no other.
 - R2. The `action` input MUST be `type: choice` with options exactly `start`, `status`, `stop` and default `status`, and MUST reach the script only through `env:`, never string-interpolated into a `run:` block. (source: ADR 0012 §5, NFR-8.8)
 - R3. The job MUST declare `concurrency: {group: gpu-control, cancel-in-progress: false}` and `timeout-minutes: 25`. (source: ADR 0012 §5, FR-7.9)
@@ -263,7 +263,7 @@ repo-wide).
   2026-11-21: the workflow additionally uses
   `aws-actions/configure-aws-credentials`, SHA-pinned, the same action and
   pin already used by `vk-ahorro`'s CI jobs for the same OIDC pattern
-  (ADR 0015). Exactly these two Actions; every other step stays `run:`.
+  (ADR 0016). Exactly these two Actions; every other step stays `run:`.
 - R12. The script MUST mask `ENDPOINT`'s hostname via `::add-mask::` before making any call, so a `curl` failure message cannot print the installation's domain into the run log. (source: NFR-8.6, architecture §6)
 
 ## Implementation steps

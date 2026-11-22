@@ -93,6 +93,7 @@ VKLLM_LIFECYCLE_SAFETY_MAX_LIFETIME: {{ .Values.config.lifecycle.safety.maxLifet
 VKLLM_LIFECYCLE_SAFETY_MAX_INSTANCE_SPEND_USD: {{ .Values.config.lifecycle.safety.maxInstanceSpendUSD | quote }}
 VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR: {{ .Values.config.lifecycle.safety.maxProvisionAttemptsPerHour | int64 | quote }}
 VKLLM_BUDGET_MONTH_USD: {{ .Values.config.budget.monthlyUSD | quote }}
+VKLLM_BUDGET_MAX_MONTHLY_USD: {{ .Values.config.budget.maxMonthlyUSD | quote }}
 VKLLM_BUDGET_WARN_FRACTION: {{ .Values.config.budget.warnFraction | quote }}
 VKLLM_CONTROLLER_RECONCILE_INTERVAL: {{ .Values.config.controller.reconcileInterval | quote }}
 VKLLM_GATEWAY_MAX_BODY_BYTES: {{ .Values.config.gateway.maxBodyBytes | int64 | quote }}

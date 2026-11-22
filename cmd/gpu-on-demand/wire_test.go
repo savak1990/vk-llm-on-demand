@@ -73,7 +73,7 @@ func TestWireServesInferenceAndManagementThroughOneMux(t *testing.T) {
 		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3},
 		Budget:     config.Budget{MonthlyUSD: 30, WarnFraction: 0.8, MaxHourlyPriceUSD: 0.80},
 		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
-		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, BudgetMonthUSD: 30, RateLimitPerKeyRPM: 60},
+		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, RateLimitPerKeyRPM: 60},
 		Worker:     testWorkerCfg(),
 		Reg:        obs.NewRegistry(), Log: noopTestLogger(),
 	}
@@ -145,10 +145,8 @@ func TestWireServesInferenceAndManagementThroughOneMux(t *testing.T) {
 	}
 }
 
-// TestWireBudgetOverridesMgmtBudgetMonthUSD proves wire() makes
-// Budget.MonthlyUSD the one source of truth for the cost document, not
-// whatever Mgmt.BudgetMonthUSD happened to carry in.
-func TestWireBudgetOverridesMgmtBudgetMonthUSD(t *testing.T) {
+// TestWireCostShowsBudgetMonthlyUSD proves the cost document reports the configured budget through the controller snapshot.
+func TestWireCostShowsBudgetMonthlyUSD(t *testing.T) {
 	clk := fakeclock.New(time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC))
 	prov := fakeprovider.NewSeeded(clk)
 	st := fakestore.New("test-iid")
@@ -175,7 +173,7 @@ func TestWireBudgetOverridesMgmtBudgetMonthUSD(t *testing.T) {
 		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3},
 		Budget:     config.Budget{MonthlyUSD: 42, WarnFraction: 0.8, MaxHourlyPriceUSD: 0.80},
 		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
-		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, BudgetMonthUSD: 99, RateLimitPerKeyRPM: 60},
+		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, RateLimitPerKeyRPM: 60},
 		Worker:     testWorkerCfg(),
 		Reg:        obs.NewRegistry(), Log: noopTestLogger(),
 	}
@@ -202,7 +200,7 @@ func TestWireBudgetOverridesMgmtBudgetMonthUSD(t *testing.T) {
 		t.Fatalf("decode cost response: %v", err)
 	}
 	if cost.BudgetMonthUSD != 42 {
-		t.Fatalf("budgetMonthUSD = %v, want 42 (Budget.MonthlyUSD, not Mgmt.BudgetMonthUSD=99)", cost.BudgetMonthUSD)
+		t.Fatalf("budgetMonthUSD = %v, want 42 (Budget.MonthlyUSD)", cost.BudgetMonthUSD)
 	}
 }
 
@@ -238,7 +236,7 @@ func TestWireMetricsCatalogComplete(t *testing.T) {
 		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3},
 		Budget:     config.Budget{MonthlyUSD: 30, WarnFraction: 0.8, MaxHourlyPriceUSD: 0.80},
 		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
-		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, BudgetMonthUSD: 30, RateLimitPerKeyRPM: 60},
+		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, RateLimitPerKeyRPM: 60},
 		Worker:     testWorkerCfg(),
 		Reg:        reg, Log: noopTestLogger(),
 	}

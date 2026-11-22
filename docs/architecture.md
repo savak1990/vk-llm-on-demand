@@ -60,7 +60,7 @@ A, SSH), with an amended G5 latency threshold).
 
 | Component | Package | Responsibility | Depends on |
 |---|---|---|---|
-| Management API | `internal/mgmt` | `/api/v1/gpu/{start,status,stop,cost}`; management-token auth; idempotent start/stop; status document (ADR 0012 §1) | controller (`Start`, `Stop`, `Status`), budget |
+| Management API | `internal/mgmt` | `/api/v1/gpu/{start,status,stop,cost,budget}`; management-token auth; idempotent start/stop; status document (ADR 0012 §1) | controller (`Start`, `Stop`, `Status`), budget |
 | Inference gateway | `internal/gateway` | OpenAI-compatible `/v1/chat/completions` and `/v1/models`; inference-key auth; body, token and rate limits; SSE pass-through with cancellation; `backend_unavailable` in explicit mode (ADR 0010 §2) | controller (`Admit`, `RequestEnd`, `ObserveFirstToken`, `ReportUpstreamFailure`) |
 | Controller | `internal/controller` | desired-state reconciliation, GPU state machine, provisioning saga, rolling idle deadline and immediate stop (ADR 0011), reconcile loop, orphan sweep, restart recovery, tunnel session owner (ADR 0003, 0006) | provider, store, tunnel, budget, clock |
 | Provider | `internal/provider` (`vastai`, `fake`) | the six-method `Provider` interface (ADR 0001); offer filter; 429 backoff | HTTP, config |
@@ -254,7 +254,7 @@ flowchart TB
 | Control plane gone for long | worker dead-man timer | worker exits; billing stops; reconcile destroys on return |
 | Stop during provisioning | desired=STOPPED | destroy as soon as an id exists; status DELETING then STOPPED |
 | Start during draining | desired=RUNNING recorded | new generation after the destroy confirms |
-| Budget reached | ledger ≥ `budget.monthlyUSD` | no new provisioning; running instance drained and destroyed |
+| Budget reached | ledger ≥ the effective cap (the value set through the API, else `budget.monthlyUSD`, never above `budget.maxMonthlyUSD`) | no new provisioning; running instance drained and destroyed |
 | Store conflict | 409 | re-read, re-apply, bounded retries |
 | Orphan instance | label unknown to store | destroy, metric, alert |
 | Lost provider response on create | op recorded before the call | list by exact label; adopt or retry (spec 020) |
@@ -291,6 +291,7 @@ and are set by the chart under `config.*`.
 | `lifecycle.safety.maxInstanceSpendUSD` | 0 | 0 = off |
 | `lifecycle.safety.maxProvisionAttemptsPerHour` | 3 | |
 | `budget.monthlyUSD` | 30 | |
+| `budget.maxMonthlyUSD` | 100 | Helm-only ceiling on the runtime-mutable cap (ADR 0015) |
 | `budget.warnFraction` | 0.8 | |
 | `controller.reconcileInterval` | 60s | |
 | `gateway.maxBodyBytes` | 1048576 | |
@@ -347,6 +348,8 @@ workflow lives in this repository and needs one secret and one variable
 | [0012](adr/0012-management-api-cli-and-github-actions.md) | Management API, `vk-llm`, GitHub Actions thin clients | Accepted |
 | [0013](adr/0013-public-repo-security-and-cli-release.md) | Scanning in CI, SECURITY.md, GoReleaser CLI release | Accepted |
 | [0014](adr/0014-persistent-volume-cache-and-preferred-host.md) | P2 persistent-volume cache, preferred host | Proposed, P2 |
+| [0015](adr/0015-runtime-mutable-budget-cap.md) | Runtime-mutable budget cap behind a Helm-only ceiling | Accepted |
+| [0016](adr/0016-github-actions-token-from-ssm.md) | `gpu-control` reads its token from AWS SSM via OIDC | Accepted |
 
 ## 13. Unresolved
 

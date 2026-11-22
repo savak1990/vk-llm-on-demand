@@ -133,6 +133,8 @@ func opForPath(p string) string {
 		return "stop"
 	case "/api/v1/gpu/cost":
 		return "cost"
+	case "/api/v1/gpu/budget":
+		return "budget"
 	default:
 		return "other"
 	}

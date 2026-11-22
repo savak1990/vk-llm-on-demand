@@ -1,4 +1,4 @@
-# ADR 0015: The GitHub Actions management token is read from AWS SSM via OIDC
+# ADR 0016: The GitHub Actions management token is read from AWS SSM via OIDC
 
 ## Status
 

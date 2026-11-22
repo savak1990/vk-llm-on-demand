@@ -106,3 +106,49 @@ func TestWorkedArithmeticMonthlyHoursAtCap(t *testing.T) {
 		t.Fatal("30/0.80 != 37.5 — shipped defaults no longer match the spec's worked figure")
 	}
 }
+
+func usd(v float64) *float64 { return &v }
+
+func TestCapUSDDefaultsToConfig(t *testing.T) {
+	c := New(cfg())
+	if got := c.CapUSD(store.Document{}); got != 30 {
+		t.Fatalf("CapUSD(no document cap) = %v, want 30 (the configured default)", got)
+	}
+}
+
+func TestCapUSDUsesDocument(t *testing.T) {
+	c := New(cfg())
+	if got := c.CapUSD(store.Document{BudgetMonthUSD: usd(40)}); got != 40 {
+		t.Fatalf("CapUSD = %v, want 40", got)
+	}
+}
+
+func TestCapUSDClampsToCeiling(t *testing.T) {
+	c := New(Config{MonthlyUSD: 30, MaxMonthlyUSD: 100, MaxHourlyPriceUSD: 0.80})
+	if got := c.CapUSD(store.Document{BudgetMonthUSD: usd(150)}); got != 100 {
+		t.Fatalf("CapUSD = %v, want 100 (clamped to the ceiling)", got)
+	}
+	if got := c.CeilingUSD(); got != 100 {
+		t.Fatalf("CeilingUSD = %v, want 100", got)
+	}
+}
+
+func TestAllowUsesDocumentCap(t *testing.T) {
+	c := New(cfg())
+	doc := store.Document{Ledger: store.Ledger{TotalUSD: 30}}
+	if reason := c.Allow(doc, provider.Money(100_000_000), true); reason != "budget_exhausted" {
+		t.Fatalf("Allow at the default cap = %q, want budget_exhausted", reason)
+	}
+	doc.BudgetMonthUSD = usd(40)
+	if reason := c.Allow(doc, provider.Money(100_000_000), true); reason != "" {
+		t.Fatalf("Allow after raising the cap to 40 = %q, want \"\"", reason)
+	}
+}
+
+func TestUsedRatioUsesDocumentCap(t *testing.T) {
+	c := New(cfg())
+	doc := store.Document{Ledger: store.Ledger{TotalUSD: 20}, BudgetMonthUSD: usd(40)}
+	if got := c.UsedRatio(doc); got != 0.5 {
+		t.Fatalf("UsedRatio = %v, want 0.5", got)
+	}
+}

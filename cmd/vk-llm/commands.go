@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
+	"strconv"
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
@@ -30,8 +32,9 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 	fs.String("force", "", "")
 
 	// Global flags are accepted before or after the subcommand name, so
-	// keep re-parsing the same flag set until nothing but the (single)
-	// subcommand positional is left.
+	// keep re-parsing the same flag set until nothing but the subcommand
+	// and its own positional arguments are left.
+	var subArgs []string
 	sub, rest := "", args
 	for {
 		if err := fs.Parse(rest); err != nil {
@@ -42,21 +45,26 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 		if len(positional) == 0 {
 			break
 		}
-		if sub != "" {
-			_, _ = fmt.Fprintf(stderr, "unexpected argument: %s\n", positional[0])
-			return 2
+		if sub == "" {
+			sub = positional[0]
+		} else {
+			subArgs = append(subArgs, positional[0])
 		}
-		sub, rest = positional[0], positional[1:]
+		rest = positional[1:]
+	}
+	if sub != "budget" && len(subArgs) > 0 {
+		_, _ = fmt.Fprintf(stderr, "unexpected argument: %s\n", subArgs[0])
+		return 2
 	}
 	if sub == "" {
-		_, _ = fmt.Fprintln(stderr, "usage: vk-llm <start|status|stop|version> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: vk-llm <start|status|stop|budget|version> [flags]")
 		return 2
 	}
 	if sub == "version" {
 		return cmdVersion(stdout)
 	}
 	switch sub {
-	case "start", "status", "stop":
+	case "start", "status", "stop", "budget":
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", sub)
 		return 2
@@ -87,6 +95,8 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 		return cmdStatus(cl, stdout, stderr, *jsonFlag)
 	case "stop":
 		return cmdStop(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag)
+	case "budget":
+		return cmdBudget(cl, stdout, stderr, subArgs, *jsonFlag)
 	default:
 		return 2
 	}
@@ -94,6 +104,36 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 
 func cmdVersion(stdout io.Writer) int {
 	_, _ = fmt.Fprintf(stdout, "vk-llm %s\n", version)
+	return 0
+}
+
+func cmdBudget(c *client, stdout, stderr io.Writer, args []string, jsonOut bool) int {
+	var res apiResult
+	var code int
+	var err error
+	switch {
+	case len(args) == 0:
+		res, code, err = c.status(context.Background())
+	case len(args) == 2 && args[0] == "set":
+		usd, perr := strconv.ParseFloat(args[1], 64)
+		if perr != nil || math.IsNaN(usd) || math.IsInf(usd, 0) || usd <= 0 {
+			_, _ = fmt.Fprintf(stderr, "bad amount: %s (want a positive number)\n", args[1])
+			return 2
+		}
+		res, code, err = c.setBudget(context.Background(), usd)
+	default:
+		_, _ = fmt.Fprintln(stderr, "usage: vk-llm budget [set <amount>]")
+		return 2
+	}
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return code
+	}
+	if jsonOut {
+		renderJSON(stdout, res.raw)
+	} else {
+		renderBudget(stdout, res.doc)
+	}
 	return 0
 }
 

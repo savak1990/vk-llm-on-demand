@@ -76,9 +76,9 @@ func TestBuildCostDocument(t *testing.T) {
 	balance := 12.5
 	snap := controller.Snapshot{
 		Hourly: provider.Money(710000), CreatedAt: createdAt,
-		SpendInstanceUSD: 0.36, SpendMTDUSD: 3.42, ProviderBalanceUSD: &balance,
+		SpendInstanceUSD: 0.36, SpendMTDUSD: 3.42, ProviderBalanceUSD: &balance, BudgetMonthUSD: 30,
 	}
-	doc := buildCostDocument(snap, config.Mgmt{BudgetMonthUSD: 30}, now)
+	doc := buildCostDocument(snap, config.Mgmt{}, now)
 	if !doc.Estimates || doc.PriceUSDPerHour != 0.71 || doc.UptimeSeconds != 1800 {
 		t.Fatalf("doc = %+v", doc)
 	}
@@ -94,7 +94,7 @@ func TestBuildCostDocument(t *testing.T) {
 }
 
 func TestBuildCostDocumentNoInstance(t *testing.T) {
-	doc := buildCostDocument(controller.Snapshot{}, config.Mgmt{BudgetMonthUSD: 30}, time.Now())
+	doc := buildCostDocument(controller.Snapshot{BudgetMonthUSD: 30}, config.Mgmt{}, time.Now())
 	if doc.PriceUSDPerHour != 0 || doc.EstimatedInstanceUSD != 0 || doc.ProviderBalanceUSD != nil {
 		t.Fatalf("doc = %+v", doc)
 	}
@@ -114,5 +114,12 @@ func TestResultFor(t *testing.T) {
 		if got := resultFor(c.op, controller.Snapshot{Public: c.public}); got != c.want {
 			t.Errorf("resultFor(%q, %q) = %q, want %q", c.op, c.public, got, c.want)
 		}
+	}
+}
+
+func TestStatusDocumentBudgetFromSnapshot(t *testing.T) {
+	doc := buildStatusDocument(controller.Snapshot{BudgetMonthUSD: 40}, config.Mgmt{}, time.Now())
+	if doc.Cost.BudgetMonthUSD != 40 {
+		t.Fatalf("Cost.BudgetMonthUSD = %v, want 40 (from the snapshot)", doc.Cost.BudgetMonthUSD)
 	}
 }

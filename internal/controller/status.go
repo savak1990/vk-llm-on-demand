@@ -23,6 +23,7 @@ func (c *Controller) Status() Snapshot {
 		Provider:       "vastai",
 		Unavailable:    unavailable,
 	}
+	snap.BudgetCeilingUSD = c.deps.Budget.CeilingUSD()
 
 	doc, _, err := c.deps.Store.Load(c.effCtx())
 	if err != nil {
@@ -32,6 +33,7 @@ func (c *Controller) Status() Snapshot {
 	snap.Desired = doc.Desired
 	snap.AttemptsThisHour = doc.AttemptsThisHour.Count
 	snap.SpendMTDUSD = c.deps.Budget.EstimatedMTD(doc)
+	snap.BudgetMonthUSD = c.deps.Budget.CapUSD(doc)
 	c.balanceMu.Lock()
 	if c.lastBalanceKnown {
 		usd := c.lastBalance.USD()

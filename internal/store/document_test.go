@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestIsFresh(t *testing.T) {
 	d, err := NewDocument("4f2c1a9b0e77")
@@ -24,5 +27,28 @@ func TestNewDocumentRejectsBadID(t *testing.T) {
 	}
 	if _, err := NewDocument("4f2c1a9b0e77"); err != nil {
 		t.Errorf("NewDocument(valid): %v", err)
+	}
+}
+
+func TestBudgetMonthUSDRoundTrip(t *testing.T) {
+	var legacy Document
+	if err := json.Unmarshal([]byte(`{"schemaVersion":2,"installationId":"iid","desired":"STOPPED"}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+	if legacy.BudgetMonthUSD != nil {
+		t.Fatalf("legacy BudgetMonthUSD = %v, want nil", *legacy.BudgetMonthUSD)
+	}
+
+	v := 40.0
+	b, err := json.Marshal(Document{BudgetMonthUSD: &v})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var back Document
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back.BudgetMonthUSD == nil || *back.BudgetMonthUSD != 40 {
+		t.Fatalf("round trip = %v, want 40", back.BudgetMonthUSD)
 	}
 }
