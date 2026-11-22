@@ -311,6 +311,10 @@ the chart name) is confirmed only once CORE-080 is written.
    account's "Manage Keys" page (every new instance gets it automatically,
    research §1.3); the **private** half → `vk-llm-on-demand-ssh-private-key`.
 3. Generate inference client keys with `make keygen` (ADR 0009 §2, `sk-vkllm-` prefix) → `vk-llm-on-demand-client-keys`. **Create a management token for the CLI and a separate one for GitHub Actions**, same command (ADR 0012 §3–§5) → both lines in `vk-llm-on-demand-management-tokens`. Generate the worker seed (`openssl rand -base64 32`, ADR 0009 §1) → `vk-llm-on-demand-worker-seed`. Run the five `make secret-encrypt` calls and commit the `.enc` files.
+
+   2026-11-22: GitHub Actions reads this token from
+   `/<project>/persistent/llm/api_token` at run time (ADR 0015), which
+   MUST be one of the lines in `management-tokens`.
 4. Merge **PR-B** first — PR-A's pointer would otherwise sync a chart whose
    `ExternalSecret`s never resolve (ADR 0009 Risks allows hand-created
    Secrets as a stopgap meanwhile).
@@ -319,7 +323,7 @@ the chart name) is confirmed only once CORE-080 is written.
    to take effect (not to apply without error).
 7. Here: bump `chartVersion`/`tag` only after CORE-120 publishes that
    version to GHCR.
-8. `VK_LLM_API_ENDPOINT` and `AWS_ROLE_ARN` (both repository variables, the latter set by the `vk-llm-ci-role` pull request above) are GitHub repository configuration for `gpu-control.yml`, not repeated here — CORE-160 owns that setup. `VK_LLM_TOKEN` is never stored in GitHub at all; `gpu-control.yml` reads it from AWS SSM (ADR 0015).
+8. `VK_LLM_API_ENDPOINT` and `AWS_ROLE_ARN` (both repository variables, the latter set by `vk-lab-platform`'s `make account-up` after the `vk-llm-ci-role` pull request merges) are GitHub repository configuration for `gpu-control.yml`, not repeated here — CORE-160 owns that setup. `VK_LLM_TOKEN` is never stored in GitHub at all; `gpu-control.yml` reads it from AWS SSM (ADR 0015).
 
 ### Rollback
 

@@ -155,6 +155,10 @@ The GitHub Actions copy needs no step here: re-encrypt
 `gpu-control.yml` reads the new value on its next run (ADR 0015,
 2026-11-21).
 
+2026-11-22: the re-encrypted value MUST also be (or replace) the matching
+line in `management-tokens`, in the same change — otherwise `gpu-control`
+gets 401 after rotation (ADR 0015).
+
 **C. Worker seed**
 
 1. Rotate only while `desired` and state are both `STOPPED` — see Worker API key below for why a running instance cannot survive this rotation. 2. Generate a new 32-byte value (`openssl rand -base64 32`, no prefix-stripping) and replace `worker-seed`. 3. Within 10 s after the kubelet projects the new Secret (up to 60 s) the seed reloads. Verify: `GET /api/v1/gpu/status` still reports `STOPPED`. 4. `POST /api/v1/gpu/start`. Verify: the new instance reaches `READY` normally — both the gateway and the onstart script derive its key from the already-rotated seed.

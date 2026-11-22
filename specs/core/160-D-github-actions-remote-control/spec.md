@@ -262,7 +262,7 @@ repo-wide).
 
   2026-11-21: the workflow additionally uses
   `aws-actions/configure-aws-credentials`, SHA-pinned, the same action and
-  pin already used by six `vk-ahorro` CI jobs for the same OIDC pattern
+  pin already used by `vk-ahorro`'s CI jobs for the same OIDC pattern
   (ADR 0015). Exactly these two Actions; every other step stays `run:`.
 - R12. The script MUST mask `ENDPOINT`'s hostname via `::add-mask::` before making any call, so a `curl` failure message cannot print the installation's domain into the run log. (source: NFR-8.6, architecture §6)
 

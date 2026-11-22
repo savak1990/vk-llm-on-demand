@@ -20,8 +20,8 @@ managed as the source of truth in `vk-lab-platform`'s
 `vk-lab-platform` already has an established, audited pattern for exactly
 this: a per-repository IAM role, trusted via GitHub OIDC
 (`AssumeRoleWithWebIdentity`), that a workflow assumes at run time to read
-one SSM `SecureString` parameter — used today by six `vk-ahorro` workflow
-jobs via `aws-actions/configure-aws-credentials`. There is no reason for
+one SSM `SecureString` parameter — already used by `vk-ahorro`'s CI jobs
+via `aws-actions/configure-aws-credentials`. There is no reason for
 `vk-llm-on-demand` to invent a second mechanism.
 
 ## Decision
@@ -46,6 +46,12 @@ jobs via `aws-actions/configure-aws-credentials`. There is no reason for
    variable `AWS_ROLE_ARN` (not a secret — a role ARN is configuration, the
    same reasoning `vk-lab-platform`'s own docs give for every other
    consuming repository), set once by that repository's `make account-up`.
+   `aws-actions/configure-aws-credentials` echoes `role-to-assume` in the
+   step's log header, so the AWS account ID embedded in the ARN appears in
+   this public repository's run logs; accepted, because an account ID is
+   not a credential and the same ARN pattern is already public in
+   `vk-ahorro`'s run logs. Storing the ARN as a GitHub secret instead was
+   rejected — that would put a secret back into GitHub.
 5. The value read from SSM is masked (`::add-mask::`) before it is exported,
    the same protection a GitHub secret gets automatically.
 
@@ -62,3 +68,11 @@ a cached value), which is the intended behavior for a credential this
 sensitive. `make repo-settings` (this repo) still creates the `gpu-control`
 Environment and its branch policy; `vk-lab-platform`'s `make account-up`
 creates `vk-llm-ci-role` and sets this repository's `vars.AWS_ROLE_ARN`.
+
+The `api_token` value this parameter holds must also be one line of the
+deployed `management-tokens` list; rotating it means re-encrypting the SSM
+value and updating `management-tokens` in the same change, otherwise
+`gpu-control` gets 401 on its next run. The owner has chosen one shared
+token for now, so the earlier property that the GitHub Actions token is a
+line distinct from the CLI's (spec 110 R19) no longer holds for this
+deployment — both read the same line.
