@@ -146,7 +146,6 @@ it. If `config.budget.monthlyUSD` is above `config.budget.maxMonthlyUSD`
 (default $100), the controller refuses to start. Raise `maxMonthlyUSD` in
 the same `helm upgrade`.
 
-
 ## Call the API directly
 
 Every route below is served on one host, `https://llm.<your-domain>`. The
