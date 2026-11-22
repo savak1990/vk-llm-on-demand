@@ -7,7 +7,7 @@ start the GPU, use any OpenAI-compatible client, and the GPU is destroyed
 control plane is one small Go service in an existing cluster.
 
 ```bash
-vk-llm start      # rent one L40S on Vast.ai, load the model, wait for READY
+vk-llm start      # rent one RTX 6000 Ada GPU on Vast.ai, load the model, wait for READY
 opencode          # or any client with base URL https://llm.<fqdn>/v1
 vk-llm stop       # release the GPU now (otherwise: 30 min after the last inference)
 ```
@@ -51,8 +51,8 @@ A Go binary, `gpu-on-demand`, runs as one Deployment in a k3s cluster.
 Requests reach it through an existing Envoy gateway.
 
 The management API, at `/api/v1/gpu/*`, uses a management token. It
-starts and stops one NVIDIA L40S GPU on Vast.ai. The GPU runs
-`llama-server` with the `Qwen3.6-35B-A3B` model (Q5_K_M GGUF).
+starts and stops one NVIDIA RTX 6000 Ada GPU (48 GB) on Vast.ai. The GPU runs
+`llama-server` with the `Qwen3.8-27B` model (Q8_0 GGUF, 28.6 GB).
 
 The inference API, at `/v1/*`, uses an inference key. It proxies
 OpenAI-compatible chat completions, streaming, and tool calls to the
@@ -166,7 +166,7 @@ curl -sv "$H/v1/models" -H "Authorization: Bearer $INF" 2>&1 | grep -E 'issuer|^
 ```
 
 Expected: `HTTP/2 200`, an issuer line that names Let's Encrypt, and
-`"id": "qwen3.6-35b-a3b"`.
+`"id": "qwen3.8-27b"`.
 
 Read the GPU state and the running cost:
 
@@ -183,13 +183,13 @@ Send a chat request while the GPU is stopped:
 ```bash
 curl -s -X POST "$H/v1/chat/completions" \
   -H "Authorization: Bearer $INF" -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"Say hello."}]}'
+  -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"Say hello."}]}'
 ```
 
 Expected: HTTP 503 with `"code": "backend_unavailable"`. This is the normal
 answer while the GPU is off; it costs nothing.
 
-Start the GPU. This rents an L40S on Vast.ai and costs money until you stop
+Start the GPU. This rents an RTX 6000 Ada GPU on Vast.ai and costs money until you stop
 it or the 30-minute idle timeout stops it:
 
 ```bash
@@ -272,7 +272,7 @@ schedule — the workflow does not reset it.
     "vk-llm": {
       "npm": "@ai-sdk/openai-compatible",
       "options": {"baseURL": "https://llm.example.com/v1", "apiKey": "{env:VK_LLM_INFERENCE_KEY}"},
-      "models": {"qwen3.6-35b-a3b": {"name": "Qwen3.6 35B-A3B (on-demand L40S)"}}
+      "models": {"qwen3.8-27b": {"name": "Qwen3.8 27B (on-demand RTX 6000 Ada)"}}
     }
   }
 }
