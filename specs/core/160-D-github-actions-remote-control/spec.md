@@ -273,6 +273,8 @@ repo-wide).
   (ADR 0016). Exactly these two Actions; every other step stays `run:`.
 - R12. The script MUST mask `ENDPOINT`'s hostname via `::add-mask::` before making any call, so a `curl` failure message cannot print the installation's domain into the run log. (source: NFR-8.6, architecture §6)
 
+2026-11-22: the workflow's `run-name` is `gpu-control: <action> <monthly_usd>`, so each run in the Actions list names what it did. It is display text only and never reaches a shell; the shape test asserts it uses `inputs.action`.
+
 ## Implementation steps
 
 1. Write `.github/workflows/gpu-control.yml` per the Workflow shape. Check: `actionlint` exits 0.

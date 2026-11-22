@@ -12,6 +12,7 @@ import (
 )
 
 type workflowDoc struct {
+	RunName     string            `yaml:"run-name"`
 	Permissions map[string]string `yaml:"permissions"`
 	Concurrency struct {
 		Group            string `yaml:"group"`
@@ -72,6 +73,9 @@ func TestWorkflowShape(t *testing.T) {
 	}
 	if want := []string{"start", "status", "stop", "budget"}; !slices.Equal(action.Options, want) {
 		t.Errorf("action options = %v, want %v", action.Options, want)
+	}
+	if !strings.Contains(doc.RunName, "inputs.action") {
+		t.Errorf("run-name = %q, want it to show inputs.action so each run in the list names its action", doc.RunName)
 	}
 	if m := doc.On.WorkflowDispatch.Inputs.MonthlyUSD; m.Type != "string" || m.Required {
 		t.Errorf("monthly_usd input = %+v, want an optional string", m)

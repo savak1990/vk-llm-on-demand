@@ -1,4 +1,5 @@
 name: gpu-control
+run-name: "gpu-control: ${{ inputs.action }} ${{ inputs.monthly_usd }}"
 on:
   workflow_dispatch:
     inputs:
