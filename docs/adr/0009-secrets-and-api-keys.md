@@ -50,13 +50,14 @@ plaintext keys in the Secret; storing only hashes is the recorded upgrade.
 ### 3. Delivery on the platform
 
 Source of truth for the platform installation is SSM Parameter Store under
-`/<project>/apps/vk-llm-on-demand/{vast-api-key,client-keys,management-tokens,worker-seed,ssh-private-key}`,
-populated from committed ciphertext files
-`secrets/<project>/vk-llm-on-demand-<name>.enc`, one file per value, exactly
-as the platform does for its own secrets. The platform pull request in spec
-130 widens the External Secrets IAM policy to `ssm:GetParameter` on that
-prefix, and this repository's `gitops/` renders the three `ExternalSecret`
-objects (`externalSecrets.enabled: true` on the platform target).
+`/<project>/persistent/llm/{vast_ai_api_key,api_token,worker_seed,ssh_private_key,management_tokens}`,
+populated from committed ciphertext files `secrets/llm-on-demand-<name>.enc`
+(global scope, not per-project), exactly as the platform does for its own
+secrets. The platform pull request in spec 130 widens the External Secrets
+IAM policy to `ssm:GetParameter` on those five parameters; the platform
+renders the three `ExternalSecret` objects itself. The chart's own
+`ExternalSecret`s are for other installations and stay disabled here
+(`externalSecrets.enabled: false`, the chart default).
 
 GitHub repository secrets are **not** used for runtime secrets: this
 repository's CI never deploys the runtime (Argo CD does), a GitHub secret
