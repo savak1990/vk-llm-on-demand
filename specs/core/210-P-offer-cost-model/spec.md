@@ -86,7 +86,7 @@ and the monthly budget counts the download from the moment of create.
 In this repository:
 
 - `internal/offercost/` (new, pure) — `Inputs`, `Breakdown`, `Estimate`,
-  `Rank`, `CheckCaps`, `DiskGB`.
+  `Rank`, `DiskGB`.
 - `internal/modelsize/` (new) — `Resolver` interface, HTTP implementation,
   in-memory cache.
 - `internal/provider/provider.go`, `select.go` — new `Offer` and
@@ -141,13 +141,6 @@ type Inputs struct {
     DiskGB     int
 }
 
-type Caps struct {
-    MaxHourly            provider.Money // dph_total, storage included
-    MaxDownloadPerGB     provider.Money
-    MaxStoragePerGBMonth provider.Money
-    MaxDiskGB            int
-}
-
 type Breakdown struct {
     DiskGB          int
     DownloadSeconds int64
@@ -174,17 +167,16 @@ DiskGB(modelBytes, minDiskGB) = max(minDiskGB, ceil(modelBytes ÷ 1e9 × 1.15) +
 
 The 15 GB covers the worker image and logs. The factors are constants, not
 chart values. For Qwen3.8-27B (28.6 GB) the formula gives 48, so the floor
-of 60 applies. If `DiskGB > MaxDiskGB`, no search runs and the attempt ends
-`model_too_large`.
+of 60 applies. If `DiskGB > MaxDiskGB`, no search runs (see Search and
+create).
 
-`Rank(offers, in, caps) []Ranked` (`Ranked{Offer, Breakdown}`):
+`Rank(offers, in) []Ranked` (`Ranked{Offer, Breakdown}`):
 
-1. Drop an offer above any price cap, with less disk than `in.DiskGB`, or
-   with `inet_down ≤ 0` (no estimate is possible).
+1. Drop an offer with `inet_down ≤ 0` (no estimate is possible).
 2. Sort by `SessionUSD`, then `Hourly`, then `ID`. The order is total.
 
-`CheckCaps(offer, caps) error` is the same price and disk test, used again
-just before create.
+The caps and the disk are not checked here: `provider.Filter` already
+removed every offer that `provider.Admit` refuses (see Provider).
 
 Known limits, stated and accepted:
 
@@ -213,7 +205,7 @@ life. A missing or non-positive size is an error.
 
 Network policy: the default egress rule already allows public 443. An
 operator who pins `networkPolicy.vastApiCidrs` blocks Hugging Face; every
-start then ends `model_size_unknown` and nothing is created. The values
+start then logs `model_size_unknown`, retries each tick, and creates nothing. The values
 comment says so.
 
 ### Provider
@@ -227,26 +219,32 @@ comment says so.
   `storage_cost lte`; `disk_space gte` uses the computed disk.
 - The DTO decodes `dph_base`, `inet_down_cost`, `inet_up_cost`,
   `storage_cost`, `disk_space`.
-- `provider.Select` becomes `provider.Filter`: caps, disk and deny list
-  applied locally as a second check; no sort. The fake uses it.
+- `provider.Select` becomes `provider.Filter`: it keeps each offer for
+  which `provider.Admit(offer, filter)` is true (price caps, disk, deny
+  list), as a second check after the server; no sort. The fake uses it.
 
 ### Search and create (`internal/controller/saga.go`, the only I/O)
 
 `dispatchSearch`:
 
-1. `bytes, err := ModelSize.Bytes(ctx, modelURL)`; on error post
-   `EvNoOffer{model_size_unknown}`.
-2. `disk := offercost.DiskGB(bytes, minDiskGB)`; above `MaxDiskGB` post
-   `EvNoOffer{model_too_large}`.
+1. `bytes, err := ModelSize.Bytes(ctx, modelURL)`. On error, log
+   `reason=model_size_unknown` and post `EvNoOffer{Err, Reason:
+   "provider_error"}`: the existing retry path (Idle, desired stays
+   RUNNING, the next tick searches again).
+2. `disk := offercost.DiskGB(bytes, minDiskGB)`. Above `MaxDiskGB`, log
+   `reason=model_too_large` and post `EvNoOffer{Reason: "no_offer"}`: the
+   existing stop path (desired becomes STOPPED). No search runs.
 3. `SearchOffers` with the filter for `disk`; then `offercost.Rank`.
    Empty: `EvNoOffer{no_offer}`.
-4. Post `EvOfferChosen{Offer, Breakdown}` for the first.
+4. Post `EvOfferChosen{Offer, Breakdown, Filter}` for the first.
 
-Each `EvNoOffer` counts against the attempt budget as today.
+No new reason values: the metrics outcome and `Snapshot.Unavailable` enums
+are unchanged.
 
-`dispatchCreate` runs `offercost.CheckCaps` next to `AssertPrice` before
-`BuildCreate`, and `BuildCreate` takes `Breakdown.DiskGB`. `decide.go`
-stays pure: T5 copies the breakdown into `Instance.Offer`.
+`dispatchCreate` refuses the offer (`EvCreateFailed`, `Fatal`) when
+`provider.Admit(offer, filter)` is false, next to `AssertPrice`, before
+`BuildCreate`; `BuildCreate` takes `Breakdown.DiskGB`. `decide.go` stays
+pure: T5 copies the breakdown into `Instance.Offer`.
 
 ### Configuration
 
@@ -344,10 +342,12 @@ counted." The CLI prints the lines in Outcome.
   estimate; the status and cost documents MUST expose them as structured
   JSON. (source: ADR 0004; user decision)
 - R7. The model size MUST be resolved at runtime from the model URL; if it
-  cannot be resolved, an instance MUST NOT be created and the attempt MUST end
-  `model_size_unknown`. (source: user decision)
+  cannot be resolved, an instance MUST NOT be created, the controller MUST
+  log `reason=model_size_unknown`, and the next tick MUST retry. (source:
+  user decision)
 - R8. The created disk MUST be `DiskGB` from the model size; above
-  `maxDiskGB` the attempt MUST end `model_too_large`. (source: user)
+  `maxDiskGB` no search MUST run, the controller MUST log
+  `reason=model_too_large`, and desired MUST become STOPPED. (source: user)
 - R9. The worker MUST NOT re-download a model file already on disk with the
   right checksum, and the curl fallback MUST NOT need twice the model size
   on disk. (source: ADR 0014; worker script read)
@@ -360,7 +360,7 @@ counted." The CLI prints the lines in Outcome.
 
 ## Implementation steps
 
-1. `internal/offercost`: types, `Estimate`, `DiskGB`, `Rank`, `CheckCaps`.
+1. `internal/offercost`: types, `Estimate`, `DiskGB`, `Rank`.
    Check: table tests with the probe offers and the two billed runs.
 2. `internal/modelsize`: resolver and cache. Check: `httptest` cases.
 3. Provider: `Offer`/`OfferFilter` fields, `Filter`, filter body, DTO,
@@ -386,16 +386,17 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
 - AC2. Each cap excludes an offer just above it and keeps one at it.
 - AC3. An offer with `inet_down = 0` or `disk_space < DiskGB` is dropped.
 - AC4. `DiskGB(28.6e9, 60) = 60`; `DiskGB(70e9, 60) = 96`; above
-  `maxDiskGB` the saga posts `EvNoOffer{model_too_large}` and calls no
-  search.
+  `maxDiskGB` the saga posts `EvNoOffer{Reason: "no_offer"}` with no `Err`,
+  logs `model_too_large`, and calls no search.
 - AC5. Resolver: 302 with `x-linked-size` → size; 200 with
   `Content-Length` → size; no size → error; a failure is not cached.
-- AC6. Saga: resolver error → `EvNoOffer{model_size_unknown}` and no
+- AC6. Saga: resolver error → `EvNoOffer{Err, Reason: "provider_error"}`, a
+  `model_size_unknown` log line, and no
   `SearchOffers` call.
 - AC7. `filter_default.json` contains `allocated_storage`,
   `inet_down_cost`, `storage_cost`; the fixture decodes all new fields.
 - AC8. `dispatchCreate` refuses an offer that passes `AssertPrice` but
-  fails `CheckCaps`.
+  fails `provider.Admit`.
 - AC9. Ledger: `OpenEntry` with a fixed $1.14 makes `EstimatedMTD` rise by
   $1.14 at once; rollover keeps it in the closed month.
 - AC10. Config: each new cap rejects `0`, `-1`, and accepts the default.
