@@ -120,7 +120,7 @@ func TestWorkflowShape(t *testing.T) {
 
 		var ssmSteps []string
 		for _, step := range job.Steps {
-			if strings.Contains(step.Run, "--with-decryption") && strings.Contains(step.Run, "/vk-hetzner-lab/persistent/llm/api_token") {
+			if strings.Contains(step.Run, "--with-decryption") && strings.Contains(step.Run, "/vk-hetzner-lab/persistent/llm/management_tokens") {
 				ssmSteps = append(ssmSteps, step.Run)
 			}
 		}
@@ -138,6 +138,12 @@ func TestWorkflowShape(t *testing.T) {
 		}
 		if maskIdx >= 0 && envIdx >= 0 && maskIdx >= envIdx {
 			t.Errorf("::add-mask:: (index %d) must come before GITHUB_ENV (index %d)", maskIdx, envIdx)
+		}
+		// A second line would be written to GITHUB_ENV unmasked, so the step
+		// must refuse a multi-line value before it masks or exports anything.
+		guardIdx := strings.Index(run, "more than one line")
+		if guardIdx < 0 || (maskIdx >= 0 && guardIdx >= maskIdx) {
+			t.Errorf("SSM step must reject a multi-line value before ::add-mask:: (guard index %d, mask index %d)", guardIdx, maskIdx)
 		}
 	}
 }

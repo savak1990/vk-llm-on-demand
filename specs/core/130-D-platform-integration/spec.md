@@ -40,7 +40,9 @@ Against `vk-lab-platform` (designed here, not committed here — C-24):
 - **vk-llm-on-demand [#34](https://github.com/savak1990/vk-llm-on-demand/pull/34) + vk-lab-platform [#109](https://github.com/savak1990/vk-lab-platform/pull/109)**: moves the child `Application` from namespace `argocd` to `llm`, per vk-lab-platform ADR 0046 (landed mid-plan; see "Child Application namespace" below).
 - **2026-11-21** (`feature/vk-llm-ci-role`, ADR 0016): adds IAM role
   `vk-llm-ci-role`, trusted via GitHub OIDC only to the `gpu-control`
-  Environment, reading `/*/persistent/llm/api_token`.
+  Environment, reading `/*/persistent/llm/api_token`; moved to
+  `/*/persistent/llm/management_tokens` by vk-lab-platform #114
+  (2026-11-22).
 
 Plus: ordering and verification for the three pull requests, a Vast.ai
 account checklist for the operator, and rollback.
@@ -337,7 +339,8 @@ vk-lab-platform #109.
    parameter holds the inference key, so the workflow cannot call the
    management API until the workflow, the `vk-llm-ci-role` policy and ADR
    0016 move to `/<project>/persistent/llm/management_tokens`. This is a
-   follow-up, not part of this spec.
+   follow-up, not part of this spec. 2026-11-22: done by vk-lab-platform
+   #114 (IAM) and the vk-llm-on-demand workflow + ADR 0016 amendment.
 4. Apply **#107**'s Terraform (the secrets module, live) and merge
    vk-llm-on-demand **#32** (this repository's `gitops/` chart) — order
    between these two does not matter, but both MUST land before step 6:
@@ -420,7 +423,7 @@ vk-lab-platform #109.
 | Does `local`/kind ever enable `httpRoute` with a real `fqdn`? (settled) | whether `local` needs a carve-out | the shipped `{{- if ne .Values.target "local" }}` guard | no: the pointer `Application`, `AppProject`, and `BackendTrafficPolicy` are all guarded off `local` |
 | Wire the new secrets live unit into `persistent-up` eventually? | convenience vs. blast radius (R6) | a later platform decision | no; stays a manual/CI-specific apply |
 | Does cascade-deleting the pointer `Application` (Rollback step 1) actually prune namespace `llm`, or only the objects Argo tracks within it? | correctness of Rollback | the first real rollback exercise | assume cascade prunes the namespace too (`CreateNamespace=true` implies Argo owns it) |
-| Move `gpu-control` and `vk-llm-ci-role` from `api_token` to `management_tokens` | CI cannot authenticate since #112 | a follow-up PR pair (vk-llm-on-demand workflow + ADR 0016; vk-lab-platform IAM) | open |
+| Move `gpu-control` and `vk-llm-ci-role` from `api_token` to `management_tokens` | CI cannot authenticate since #112 | a follow-up PR pair (vk-llm-on-demand workflow + ADR 0016; vk-lab-platform IAM) | settled 2026-11-22: vk-lab-platform #114 + the vk-llm-on-demand workflow PR; live once #114 is applied with `make account-up` |
 
 ## Evidence
 

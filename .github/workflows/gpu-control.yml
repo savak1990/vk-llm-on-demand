@@ -41,8 +41,13 @@ jobs:
         run: |
           set -euo pipefail
           value="$(aws ssm get-parameter --with-decryption \
-            --name /vk-hetzner-lab/persistent/llm/api_token \
+            --name /vk-hetzner-lab/persistent/llm/management_tokens \
             --query Parameter.Value --output text)"
+          # Masking covers one line only, and the env file would read a second
+          # line as a new variable, so a multi-token value is refused.
+          case "$value" in
+            *$'\n'*) echo "::error::management_tokens holds more than one line; gpu-control needs exactly one token" >&2; exit 1 ;;
+          esac
           echo "::add-mask::$value"
           echo "VK_LLM_TOKEN=$value" >> "$GITHUB_ENV"
 
