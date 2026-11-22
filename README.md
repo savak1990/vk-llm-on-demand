@@ -146,6 +146,80 @@ it. If `config.budget.monthlyUSD` is above `config.budget.maxMonthlyUSD`
 (default $100), the controller refuses to start. Raise `maxMonthlyUSD` in
 the same `helm upgrade`.
 
+
+## Call the API directly
+
+Every route below is served on one host, `https://llm.<your-domain>`. The
+inference routes under `/v1` take the inference key. The management routes
+under `/api/v1/gpu` take the management token. The two values are different
+keys; the server refuses to start if one value appears in both lists.
+
+```bash
+export H=https://llm.lab.example.com
+export INF=<your inference key>          # sk-vkllm-…, the key OpenCode sends
+export MGMT=<your management token>      # sk-vkllm-…, the key vk-llm sends
+```
+
+Check the route and the certificate. The model list needs no GPU:
+
+```bash
+curl -sv "$H/v1/models" -H "Authorization: Bearer $INF" 2>&1 | grep -E 'issuer|^< HTTP|"id"'
+```
+
+Expected: `HTTP/2 200`, an issuer line that names Let's Encrypt, and
+`"id": "qwen3.6-35b-a3b"`.
+
+Read the GPU state and the running cost:
+
+```bash
+curl -s "$H/api/v1/gpu/status" -H "Authorization: Bearer $MGMT" | jq '{state, ready, secondsUntilIdleShutdown, installationId}'
+curl -s "$H/api/v1/gpu/cost"   -H "Authorization: Bearer $MGMT" | jq
+```
+
+Expected while no GPU runs: `"state": "STOPPED"`, `"ready": false`,
+`"secondsUntilIdleShutdown": null`.
+
+Send a chat request while the GPU is stopped:
+
+```bash
+curl -s -X POST "$H/v1/chat/completions" \
+  -H "Authorization: Bearer $INF" -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"Say hello."}]}'
+```
+
+Expected: HTTP 503 with `"code": "backend_unavailable"`. This is the normal
+answer while the GPU is off; it costs nothing.
+
+Start the GPU. This rents an L40S on Vast.ai and costs money until you stop
+it or the 30-minute idle timeout stops it:
+
+```bash
+curl -s -X POST "$H/api/v1/gpu/start" -H "Authorization: Bearer $MGMT" | jq '{result, state}'
+```
+
+Expected: HTTP 202 with `"result": "accepted"`, then the state moves through
+`ALLOCATING`, `STARTING`, `LOADING_MODEL` to `READY` over 5 to 15 minutes.
+Poll `/api/v1/gpu/status` until `"ready": true`, or run `vk-llm start`,
+which polls for you.
+
+Send the same chat request again. Expected: HTTP 200 with a `choices`
+array. Add `"stream": true` to the body to receive server-sent events.
+
+Stop the GPU:
+
+```bash
+curl -s -X POST "$H/api/v1/gpu/stop" -H "Authorization: Bearer $MGMT" | jq '{result, state}'
+```
+
+Expected: HTTP 202 with `"result": "accepted"` and `"state": "DRAINING"`,
+or HTTP 200 with `"result": "already_stopped"`. Poll `/api/v1/gpu/status`
+until `"state": "STOPPED"`.
+
+Common errors: `401` means the key is missing or wrong for that route.
+`429` means the per-key rate limit (60 requests per minute). `503` with
+`"code": "gpu_unavailable"` on `start` means the provider had no matching
+offer or a safety limit blocked the start; the `reason` field says which.
+
 ## Remote control from GitHub Actions
 
 Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
