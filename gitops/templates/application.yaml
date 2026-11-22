@@ -26,6 +26,9 @@ spec:
           apiKeys: {{ .Values.secrets.apiKeys | quote }}
           ssh: {{ .Values.secrets.ssh | quote }}
         config:
+          provider:
+            filter:
+              gpuName: {{ .Values.gpu | quote }}
           model:
             alias: {{ .Values.model.alias | quote }}
             url: {{ .Values.model.url | quote }}
