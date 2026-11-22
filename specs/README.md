@@ -80,6 +80,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [180](core/180-P-persistent-volume-cache/spec.md) | P2: persistent-volume cache and preferred host (not in the initial release) | 020, 050 |
 | [190](core/190-D-runtime-budget-reconfiguration/spec.md) | Runtime-mutable budget cap, with a fixed ceiling | 055, 100, 150, 160 |
 | [200](core/200-P-per-start-parameters/spec.md) | Problem statement: model, quantization, GPU, idle timeout and price cap as per-start parameters (no design yet) | 055, 130, 150, 190 |
+| [210](core/210-P-offer-cost-model/spec.md) | Requirements: offer selection and cost estimates count bandwidth and storage, not GPU time alone (no design yet) | 020, 050, 100 |
 
 ## Order of work
 
