@@ -28,6 +28,23 @@ func stubAWS(t *testing.T, stderr string) string {
 	return dir
 }
 
+// stubAWSOK puts an `aws` on PATH that succeeds, printing a dummy value for any get-parameter call.
+func stubAWSOK(t *testing.T) string {
+	dir := t.TempDir()
+	body := "#!/usr/bin/env bash\necho 'dummy'\n"
+	if err := os.WriteFile(filepath.Join(dir, "aws"), []byte(body), 0o755); err != nil {
+		t.Fatalf("writing aws stub: %v", err)
+	}
+	return dir
+}
+
+// addStub writes an executable script named `name` into dir, alongside any stub already there.
+func addStub(t *testing.T, dir, name, body string) {
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+		t.Fatalf("writing %s stub: %v", name, err)
+	}
+}
+
 func run(t *testing.T, pathDir string, args ...string) (int, string) {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = []string{
@@ -78,6 +95,28 @@ func TestKubeconfigOtherAWSErrorFails(t *testing.T) {
 	code, _ := run(t, dir, repoScript(t, "kubeconfig.sh"))
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
+	}
+}
+
+func TestKubeconfigRejectsUnauthorizedKubectl(t *testing.T) {
+	dir := stubAWSOK(t)
+	addStub(t, dir, "kubectl", "#!/usr/bin/env bash\necho 'error: You must be logged in to the server (Unauthorized)' >&2\nexit 1\n")
+	code, _ := run(t, dir, repoScript(t, "kubeconfig.sh"))
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+}
+
+func TestKubeconfigTimeoutStaysUnreachable(t *testing.T) {
+	dir := stubAWSOK(t)
+	addStub(t, dir, "kubectl", "#!/usr/bin/env bash\necho 'Unable to connect to the server: dial tcp: i/o timeout' >&2\nexit 1\n")
+	target := filepath.Join(t.TempDir(), "kc.yaml")
+	code, _ := run(t, dir, repoScript(t, "kubeconfig.sh"), target)
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2", code)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target file should not exist after a timeout, stat err = %v", err)
 	}
 }
 

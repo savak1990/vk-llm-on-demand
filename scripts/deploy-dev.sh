@@ -42,14 +42,16 @@ if [ -n "${GITHUB_ACTIONS:-}" ]; then
 fi
 
 values="$TMP/llm-dev-values.yaml"
-"$REPO_ROOT/scripts/dev-values.sh" "$VERSION" "$SHA" "$fqdn" > "$values"
+# Past this point the cluster already answered, so a failure is real, not
+# absence; force exit 1 so CI never mistakes it for the known-unreachable case.
+"$REPO_ROOT/scripts/dev-values.sh" "$VERSION" "$SHA" "$fqdn" > "$values" || exit 1
 
 echo "deploy-dev: upgrading $NAMESPACE to $VERSION"
 helm upgrade --install gpu-on-demand "$CHART" \
   --version "$VERSION" --namespace "$NAMESPACE" \
-  --rollback-on-failure --timeout 5m -f "$values"
+  --rollback-on-failure --timeout 5m -f "$values" || exit 1
 
 ENDPOINT="https://llm-dev.$fqdn" VK_LLM_TOKEN="$mgmt_token" VK_LLM_CLIENT_KEY="$client_key" \
-  "$REPO_ROOT/scripts/dev-smoke.sh"
+  "$REPO_ROOT/scripts/dev-smoke.sh" || exit 1
 
 echo "deploy-dev: $NAMESPACE is at $VERSION"

@@ -45,6 +45,7 @@ if [ -n "${GITHUB_ACTIONS:-}" ]; then
 fi
 
 mkdir -p "$(dirname "$TARGET")"
+rm -f "$TARGET"
 umask 077
 cat > "$TARGET" <<YAML
 apiVersion: v1
@@ -66,8 +67,20 @@ contexts:
 current-context: llm-deploy
 YAML
 
-if ! KUBECONFIG="$TARGET" kubectl version --request-timeout=10s >/dev/null 2>&1; then
-  echo "kubeconfig: the cluster does not answer within 10s. Run 'make up' in vk-lab-platform, then retry." >&2
-  rm -f "$TARGET"
-  exit "$UNREACHABLE"
+command -v kubectl >/dev/null || { echo "kubeconfig: kubectl not found" >&2; exit 1; }
+
+# kubectl's own stderr may name the endpoint, so it is matched, never printed.
+if ! kube_err="$(KUBECONFIG="$TARGET" kubectl version --request-timeout=10s 2>&1 >/dev/null)"; then
+  case "$kube_err" in
+    *Unauthorized*|*Forbidden*|*x509*|*certificate*)
+      echo "kubeconfig: the cluster rejected the credential. Run 'make up' in vk-lab-platform, then retry." >&2
+      rm -f "$TARGET"
+      exit 1
+      ;;
+    *)
+      echo "kubeconfig: the cluster does not answer within 10s. Run 'make up' in vk-lab-platform, then retry." >&2
+      rm -f "$TARGET"
+      exit "$UNREACHABLE"
+      ;;
+  esac
 fi
