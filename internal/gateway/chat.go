@@ -116,6 +116,16 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	gen := status.Generation
 	rt, err := g.deps.Controller.Admit(gen)
 	switch {
+	case g.onDemand() && errors.Is(err, controller.ErrBackendUnavailable):
+		if stream {
+			g.holdAndProxy(w, r, body)
+		} else {
+			g.refuseColdStart(w, r)
+		}
+		return
+	case g.onDemand() && errors.Is(err, controller.ErrDraining):
+		g.writeShuttingDownOnDemand(w)
+		return
 	case errors.Is(err, controller.ErrBackendUnavailable), errors.Is(err, controller.ErrDraining):
 		// No response headers have been sent yet, so an Admit failure is
 		// always a plain status — even for stream:true — since the SSE

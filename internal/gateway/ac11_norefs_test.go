@@ -10,11 +10,11 @@ import (
 	"testing"
 )
 
-// This package's own non-test source must never call .Start(, .Stop(
-// or .Demand( on anything — a guard against the gateway ever
-// provisioning, stopping, or registering demand directly.
+// This package's own non-test source must never call .Start( or .Stop(
+// on anything — a guard against the gateway ever provisioning or
+// stopping the GPU directly; Demand is the controller call it is allowed.
 func TestNoProvisioningCalls(t *testing.T) {
-	forbidden := map[string]bool{"Start": true, "Stop": true, "Demand": true}
+	forbidden := map[string]bool{"Start": true, "Stop": true}
 	fset := token.NewFileSet()
 
 	entries, err := os.ReadDir(".")
@@ -84,7 +84,7 @@ func TestNoTunnelImport(t *testing.T) {
 	}
 }
 
-func TestControllerInterfaceHasExactlyFiveMethods(t *testing.T) {
+func TestControllerInterfaceHasExactlySixMethods(t *testing.T) {
 	var methods []string
 	typ := (*Controller)(nil)
 	_ = typ // the interface's method set is checked structurally below
@@ -110,7 +110,7 @@ func TestControllerInterfaceHasExactlyFiveMethods(t *testing.T) {
 		}
 		return true
 	})
-	if len(methods) != 5 {
-		t.Fatalf("Controller interface has %d methods (%v), want 5", len(methods), methods)
+	if len(methods) != 6 {
+		t.Fatalf("Controller interface has %d methods (%v), want 6", len(methods), methods)
 	}
 }

@@ -21,14 +21,15 @@ import (
 )
 
 // Controller is the subset of *controller.Controller this package calls;
-// Start, Stop and Demand are deliberately absent so the gateway cannot
-// provision, stop, or register on-demand demand by construction.
+// Start and Stop are deliberately absent so the gateway cannot stop the
+// GPU or change the budget by construction.
 type Controller interface {
 	Admit(gen int64) (http.RoundTripper, error)
 	RequestEnd(gen int64)
 	ObserveFirstToken(gen int64, d time.Duration)
 	ReportUpstreamFailure(gen int64)
 	Status() controller.Snapshot
+	Demand(ctx context.Context, keyID string, until time.Time) (controller.Snapshot, error)
 }
 
 // Deps are every external dependency Gateway calls.
@@ -60,6 +61,8 @@ type Gateway struct {
 	nextID    int
 
 	metrics *gatewayMetrics
+
+	held atomic.Int64
 }
 
 func New(d Deps) (*Gateway, error) {

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -32,9 +33,12 @@ func (panicOnAnyCallController) ReportUpstreamFailure(int64) {
 func (panicOnAnyCallController) Status() controller.Snapshot {
 	panic("Status must never be called by /v1/models")
 }
+func (panicOnAnyCallController) Demand(context.Context, string, time.Time) (controller.Snapshot, error) {
+	panic("Demand must never be called by /v1/models")
+}
 
 // TestModelsNeverCallsController runs the full middleware chain, not
-// just the mux, and wires in a controller that panics on all five
+// just the mux, and wires in a controller that panics on all six
 // methods, so this covers "0 calls" on every one of them, not only Status.
 func TestModelsNeverCallsController(t *testing.T) {
 	d := testDeps(t)
