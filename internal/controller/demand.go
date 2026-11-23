@@ -88,14 +88,25 @@ func (c *Controller) cancelUnattendedStart(ctx context.Context) {
 	}
 }
 
-// readProgress keeps the last good reading; a failed read never changes state.
+// progressReadTimeout bounds one readProgress call; a var so a test can shorten it.
+var progressReadTimeout = 10 * time.Second
+
+// readProgress keeps the last good reading; a failed read never changes
+// state. It single-flights against overlapping Loading polls and bounds
+// the exec so one hung SSH session can't leak a goroutine per poll.
 func (c *Controller) readProgress(ctx context.Context, gen int64) {
+	if !c.progressReading.CompareAndSwap(false, true) {
+		return
+	}
+	defer c.progressReading.Store(false)
 	c.mu.Lock()
 	conn := c.conn
 	c.mu.Unlock()
 	if conn == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, progressReadTimeout)
+	defer cancel()
 	p, err := c.deps.Worker.Progress(ctx, conn.Exec)
 	if err != nil {
 		return

@@ -173,9 +173,10 @@ type Controller struct {
 	demandUntil time.Time
 	demandKeyID string // the latest Demand's key, for a start the backoff deferred to a later Tick
 
-	progressMu  sync.Mutex
-	progress    DownloadProgress
-	progressGen int64
+	progressMu      sync.Mutex
+	progress        DownloadProgress
+	progressGen     int64
+	progressReading atomic.Bool // single-flights readProgress across overlapping Loading polls
 
 	reconciling    atomic.Bool
 	reconcileMu    sync.Mutex

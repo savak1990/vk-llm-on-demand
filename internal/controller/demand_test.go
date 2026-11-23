@@ -313,6 +313,59 @@ func TestExpiredDemandLogsCancelOnce(t *testing.T) {
 	}
 }
 
+func TestReadProgressFailedReadKeepsLastGood(t *testing.T) {
+	c, _, _, _, w := newTestController(t)
+	w.progress = DownloadProgress{Bytes: 500, Stages: []string{"download_begin"}}
+	c.state, c.generation = Loading, 3
+	c.conn = tunnelConnForTest(func() error { return nil })
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Loading.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+	})
+	c.readProgress(context.Background(), 3)
+	if got := c.Status().DownloadedBytes; got != 500 {
+		t.Fatalf("DownloadedBytes = %d, want 500", got)
+	}
+
+	w.mu.Lock()
+	w.progressErr = errors.New("exec failed")
+	w.mu.Unlock()
+	c.readProgress(context.Background(), 3)
+
+	if got := c.Status().DownloadedBytes; got != 500 {
+		t.Fatalf("DownloadedBytes after failed read = %d, want unchanged 500", got)
+	}
+	if c.stateNow() != Loading {
+		t.Fatalf("state = %v, want unchanged Loading", c.stateNow())
+	}
+}
+
+func TestReadProgressSingleFlight(t *testing.T) {
+	c, _, _, _, w := newTestController(t)
+	saved := progressReadTimeout
+	progressReadTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { progressReadTimeout = saved })
+	c.conn = tunnelConnForTest(func() error { return nil })
+
+	w.mu.Lock()
+	w.progressBlock = make(chan struct{})
+	w.mu.Unlock()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			c.readProgress(context.Background(), 1)
+		}()
+	}
+	wg.Wait()
+
+	if got := w.progressCallCount(); got != 1 {
+		t.Fatalf("Progress calls = %d, want 1", got)
+	}
+}
+
 func TestDemandStopSkippedByOriginGuardLogsNothing(t *testing.T) {
 	c, _ := newOnDemandController(t)
 	logs := captureLog(c)
