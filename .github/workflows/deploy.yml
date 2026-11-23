@@ -1,4 +1,4 @@
-# Publishes a prerelease on every merge to main: no cluster write, no mobile build.
+# Publishes a prerelease on every merge to main and installs it into llm-dev; never llm.
 # Cutting a release is release.yml, a separate button; every action here is pinned
 # to a full commit SHA — see ci.yml for why.
 name: deploy
@@ -56,7 +56,7 @@ jobs:
               - 'deploy/docker/gpu-on-demand.Dockerfile'
 
   publish:
-    needs: version
+    needs: [version]
     permissions:
       contents: read
       packages: write
@@ -64,3 +64,48 @@ jobs:
     with:
       version: ${{ needs.version.outputs.version }}
       go: ${{ needs.version.outputs.go }}
+
+  # Namespace llm-dev only: the credential has no RoleBinding in llm, which Argo owns.
+  deploy-dev:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: gpu-control
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: eu-west-1
+
+      # Exit 2 means the lab is torn down, a normal state: warn and stay green.
+      - name: Deploy to llm-dev
+        env:
+          PROJECT_NAME: vk-hetzner-lab
+          VERSION: ${{ needs.version.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          status=0
+          echo "deploy-dev: PROJECT_NAME=$PROJECT_NAME VERSION=$VERSION"
+          ./scripts/deploy-dev.sh "$VERSION" "$SHA" || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "### llm-dev is at \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$status" -eq 2 ]; then
+            echo "### llm-dev was not updated: the cluster is not reachable" >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::llm-dev was not updated: the cluster is not reachable. Bring the lab up in vk-lab-platform, then re-run this job."
+            exit 0
+          fi
+          exit "$status"
