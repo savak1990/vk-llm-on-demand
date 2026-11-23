@@ -116,7 +116,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			d.Generation++
 			d.Instance = &store.Instance{
 				State: Creating.String(), Label: label,
-				Offer:     store.Offer{MachineID: ev.Offer.MachineID, GPU: ev.Offer.GPUName, DPH: ev.Offer.Hourly.USD(), InetDown: ev.Offer.InetDownMBps},
+				Offer:     store.Offer{MachineID: ev.Offer.MachineID, GPU: ev.Offer.GPUName, DPH: ev.Offer.Hourly.USD(), InetDown: ev.Offer.InetDownMbps},
 				CreatedAt: f.Now,
 			}
 			d.Ops = append(d.Ops, store.Op{Key: fmt.Sprintf("create-%d", d.Generation), StartedAt: f.Now})
@@ -579,7 +579,7 @@ func searchFilter(f Facts) provider.OfferFilter {
 		MinCPURAMGB:       pf.MinCPURAMGB,
 		MinDiskGB:         pf.MinDiskGB,
 		MinReliability:    pf.MinReliability,
-		MinInetDownMBps:   pf.MinInetDownMBps,
+		MinInetDownMbps:   pf.MinInetDownMbps,
 		MinDiskBwMBps:     pf.MinDiskBwMBps,
 		MinCUDA:           pf.MinCUDA,
 		Geolocation:       pf.Geolocation,

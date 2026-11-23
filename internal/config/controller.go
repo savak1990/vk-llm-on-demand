@@ -43,7 +43,7 @@ type ProviderFilter struct {
 	MinCPURAMGB     int
 	MinDiskGB       int
 	MinReliability  float64
-	MinInetDownMBps float64
+	MinInetDownMbps float64
 	MinDiskBwMBps   float64
 	MinCUDA         float64
 	Geolocation     []string
@@ -73,7 +73,7 @@ func LoadController() (Controller, error) {
 	if c.ProviderFilter.MinReliability, err = envFloat("VKLLM_PROVIDER_FILTER_MIN_RELIABILITY", 0.95); err != nil {
 		return Controller{}, err
 	}
-	if c.ProviderFilter.MinInetDownMBps, err = envFloat("VKLLM_PROVIDER_FILTER_MIN_INET_DOWN_MBPS", 500); err != nil {
+	if c.ProviderFilter.MinInetDownMbps, err = envFloat("VKLLM_PROVIDER_FILTER_MIN_INET_DOWN_MBPS", 500); err != nil {
 		return Controller{}, err
 	}
 	if c.ProviderFilter.MinDiskBwMBps, err = envFloat("VKLLM_PROVIDER_FILTER_MIN_DISK_BW_MBPS", 500); err != nil {

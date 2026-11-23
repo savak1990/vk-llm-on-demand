@@ -4,10 +4,15 @@ import "github.com/savak1990/vk-llm-on-demand/internal/provider"
 
 func buildFilterBody(f provider.OfferFilter) map[string]any {
 	b := map[string]any{
-		"dph_total": map[string]any{"lte": f.MaxHourly.USD()},
-		"verified":  map[string]any{"eq": true},
-		"rentable":  map[string]any{"eq": true},
-		"type":      "ondemand",
+		"dph_total":      map[string]any{"lte": f.MaxHourly.USD()},
+		"inet_down_cost": map[string]any{"lte": f.MaxDownloadPerGB.USD()},
+		"storage_cost":   map[string]any{"lte": f.MaxStoragePerGBMonth.USD()},
+		"verified":       map[string]any{"eq": true},
+		"rentable":       map[string]any{"eq": true},
+		"type":           "ondemand",
+	}
+	if f.AllocatedStorageGB != 0 {
+		b["allocated_storage"] = f.AllocatedStorageGB
 	}
 	if f.GPUName != "" {
 		b["gpu_name"] = map[string]any{"eq": f.GPUName}
@@ -27,8 +32,8 @@ func buildFilterBody(f provider.OfferFilter) map[string]any {
 	if f.MinReliability != 0 {
 		b["reliability"] = map[string]any{"gte": f.MinReliability}
 	}
-	if f.MinInetDownMBps != 0 {
-		b["inet_down"] = map[string]any{"gte": f.MinInetDownMBps}
+	if f.MinInetDownMbps != 0 {
+		b["inet_down"] = map[string]any{"gte": f.MinInetDownMbps}
 	}
 	if f.MinDiskBwMBps != 0 {
 		b["disk_bw"] = map[string]any{"gte": f.MinDiskBwMBps}

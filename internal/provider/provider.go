@@ -23,26 +23,31 @@ type Money int64
 func (m Money) USD() float64 { return float64(m) / 1e6 }
 
 type OfferFilter struct {
-	GPUName           string
-	NumGPUs           int
-	MinCPUCores       int
-	MinCPURAMGB       int
-	MinDiskGB         int
-	MinReliability    float64
-	MinInetDownMBps   float64
-	MinDiskBwMBps     float64
-	MinCUDA           float64
-	Geolocation       []string
-	MaxHourly         Money
-	ExcludeMachineIDs []int64
+	GPUName              string
+	NumGPUs              int
+	MinCPUCores          int
+	MinCPURAMGB          int
+	MinDiskGB            int
+	AllocatedStorageGB   int
+	MinReliability       float64
+	MinInetDownMbps      float64
+	MinDiskBwMBps        float64
+	MinCUDA              float64
+	Geolocation          []string
+	MaxHourly            Money
+	MaxDownloadPerGB     Money
+	MaxStoragePerGBMonth Money
+	ExcludeMachineIDs    []int64
 }
 
 type Offer struct {
-	ID, MachineID                                      int64
-	GPUName, Geolocation                               string
-	NumGPUs                                            int
-	Hourly                                             Money
-	Reliability, InetDownMBps, DiskBwMBps, CUDAMaxGood float64
+	ID, MachineID                                          int64
+	GPUName, Geolocation                                   string
+	NumGPUs                                                int
+	Hourly                                                 Money // dph_total: GPU plus storage for the search's allocated_storage
+	DphBase, DownloadPerGB, UploadPerGB, StoragePerGBMonth Money
+	DiskSpaceGB                                            float64
+	Reliability, InetDownMbps, DiskBwMBps, CUDAMaxGood     float64
 }
 
 type CreateRequest struct {

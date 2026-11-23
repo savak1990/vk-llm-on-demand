@@ -86,7 +86,7 @@ func TestFailNextCreate(t *testing.T) {
 	}
 }
 
-func TestFakeSharesSelect(t *testing.T) {
+func TestFakeSharesFilter(t *testing.T) {
 	offers := []provider.Offer{
 		{ID: 1, MachineID: 1, GPUName: "L40S", Hourly: 500000},
 		{ID: 2, MachineID: 2, GPUName: "A100", Hourly: 1000000},
@@ -109,8 +109,8 @@ func TestFakeSharesSelect(t *testing.T) {
 		t.Fatalf("SearchOffers failed: %v", err)
 	}
 
-	// Select from provider directly
-	selectedOffers := provider.Select(offers, filter)
+	// Filter from provider directly
+	selectedOffers := provider.Filter(offers, filter)
 
 	// Compare
 	if len(fakeOffers) != len(selectedOffers) {
