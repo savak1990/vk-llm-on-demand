@@ -7,8 +7,8 @@ namespace: llm
 # chart and the image it runs always match.
 charts:
   registry: ghcr.io/savak1990/vk-llm-on-demand/charts
-chartVersion: "0.1.1-main.0ab826b"
-tag: "0ab826b66c19bde932507c53949ba7ad1524efe8"
+chartVersion: "0.2.0"
+tag: "b886c35e35a15941618be08ff8cd4880e8527b96"
 
 # Secrets the platform renders into namespace llm (vk-lab-platform
 # gitops/templates/platform/shared/llm/secrets.yaml). The chart mounts them
