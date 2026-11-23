@@ -47,8 +47,9 @@ type statusDoc struct {
 			DownloadUSD float64 `json:"downloadUSD"`
 		} `json:"breakdown"`
 		Selection *struct {
-			ModelBytes               int64 `json:"modelBytes"`
-			EstimatedDownloadSeconds int64 `json:"estimatedDownloadSeconds"`
+			ModelBytes               int64   `json:"modelBytes"`
+			EstimatedDownloadSeconds int64   `json:"estimatedDownloadSeconds"`
+			EstimatedDownloadUSD     float64 `json:"estimatedDownloadUSD"`
 		} `json:"selection"`
 	} `json:"cost"`
 	Unavailable    string     `json:"unavailable"`

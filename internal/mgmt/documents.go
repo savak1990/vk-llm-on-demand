@@ -36,6 +36,7 @@ type selectionDoc struct {
 	ModelBytes               int64   `json:"modelBytes"`
 	HorizonSeconds           int64   `json:"horizonSeconds"`
 	EstimatedDownloadSeconds int64   `json:"estimatedDownloadSeconds"`
+	EstimatedDownloadUSD     float64 `json:"estimatedDownloadUSD"`
 	EstimatedSessionUSD      float64 `json:"estimatedSessionUSD"`
 }
 
@@ -142,7 +143,10 @@ func selectionOf(snap controller.Snapshot) *selectionDoc {
 	if snap.CreatedAt.IsZero() || e == nil {
 		return nil
 	}
-	return &selectionDoc{ModelBytes: e.ModelBytes, HorizonSeconds: e.HorizonSeconds, EstimatedDownloadSeconds: e.DownloadSeconds, EstimatedSessionUSD: e.SessionUSD}
+	return &selectionDoc{
+		ModelBytes: e.ModelBytes, HorizonSeconds: e.HorizonSeconds, EstimatedDownloadSeconds: e.DownloadSeconds,
+		EstimatedDownloadUSD: e.DownloadUSD, EstimatedSessionUSD: e.SessionUSD,
+	}
 }
 
 // resultFor classifies an op against the snapshot the caller already

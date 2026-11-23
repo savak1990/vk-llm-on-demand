@@ -118,7 +118,7 @@ func TestStatusAndCostDocumentsCarryPricesBreakdownSelection(t *testing.T) {
 		"cost":   buildCostDocument(snap, config.Mgmt{}, now),
 	} {
 		b, _ := json.Marshal(raw)
-		for _, key := range []string{`"gpuUSD":0.24`, `"storageUSD":0.02`, `"downloadUSD":1.14`, `"estimatedDownloadSeconds":263`, `"estimatedSessionUSD":1.49`, `"modelBytes":29200000000`} {
+		for _, key := range []string{`"gpuUSD":0.24`, `"storageUSD":0.02`, `"downloadUSD":1.14`, `"estimatedDownloadSeconds":263`, `"estimatedSessionUSD":1.49`, `"estimatedDownloadUSD":1.14`, `"modelBytes":29200000000`} {
 			if !strings.Contains(string(b), key) {
 				t.Fatalf("%s document lacks %s: %s", name, key, b)
 			}

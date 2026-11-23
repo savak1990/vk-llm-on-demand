@@ -44,10 +44,10 @@ func renderStatus(w io.Writer, doc statusDoc) {
 		_, _ = fmt.Fprintf(tw, "Price\t$%.2f/h\n", doc.Instance.PriceUSDPerHour)
 	}
 
-	if doc.Instance != nil && doc.Instance.Prices != nil && doc.Cost.Breakdown != nil && doc.Cost.Selection != nil {
+	if doc.Instance != nil && doc.Instance.Prices != nil && doc.Cost.Selection != nil {
 		s := doc.Cost.Selection
 		_, _ = fmt.Fprintf(tw, "Download\t$%.2f (%.1f GB × $%.3f/GB, est. %s)\n",
-			doc.Cost.Breakdown.DownloadUSD, float64(s.ModelBytes)/1e9, doc.Instance.Prices.DownloadUSDPerGB, formatDuration(s.EstimatedDownloadSeconds))
+			s.EstimatedDownloadUSD, float64(s.ModelBytes)/1e9, doc.Instance.Prices.DownloadUSDPerGB, formatDuration(s.EstimatedDownloadSeconds))
 	}
 
 	if doc.UptimeSeconds == 0 {

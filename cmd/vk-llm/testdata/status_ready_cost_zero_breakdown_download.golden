@@ -1,0 +1,11 @@
+Provider          vast.ai
+State             READY
+GPU               RTX 6000Ada
+Model             qwen-35b (32768 tokens)
+Ready             yes
+Price             $0.62/h (GPU $0.56 + storage $0.06)
+Download          $1.14 (29.2 GB × $0.039/GB, est. 4m23s)
+Uptime            25m30s
+Est. cost         $1.41 this instance, $4.20 / $30.00 this month (estimate)
+Last inference    never
+Idle shutdown in  30m00s
