@@ -120,8 +120,8 @@ same for both. `scripts/gpu-control.sh` does not change.
 1. **A generic deploy credential.** One template renders, for each app in a
    values list, a ServiceAccount `<app>-deploy`, a Role and RoleBinding per
    listed namespace with that app's own rules, and the namespace-read
-   ClusterRole. Ahorro's entry reproduces today's objects exactly (same
-   names, namespaces and rules), so its golden render does not change.
+   ClusterRole. Ahorro's entry reproduces today's objects (same names,
+   namespaces and rules); only their comments change in the golden render.
    `scripts/lib/ahorro-deploy.sh` becomes one publisher and one cleanup
    function taking the app name, writing
    `/<project>/cluster/<app>-deploy/{endpoint,ca,token,fqdn}`; `argo-up.sh`
@@ -219,15 +219,16 @@ same for both. `scripts/gpu-control.sh` does not change.
 - AC3. A merge to `main` produces a `deploy-dev` job that is green within
   10 minutes, and `helm -n llm-dev history gpu-on-demand` shows that
   version.
-- AC4. `kubectl auth can-i --as=system:serviceaccount:<ns>:llm-deploy`
+- AC4. `kubectl auth can-i --as=system:serviceaccount:llm-dev:llm-deploy`
   answers `no` for every verb in namespace `llm` and `yes` for
   `create deployments` in `llm-dev`.
 - AC5. `GET https://llm-dev.<fqdn>/api/v1/gpu/status` returns 200 with
   state "no GPU", and the Vast.ai instance list is unchanged by the deploy.
 - AC6. `gpu-control` with `target=dev, action=status` succeeds; with
   `target=prod` it still reports production.
-- AC7. Ahorro's platform golden render is byte-identical before and after
-  the generic credential change.
+- AC7. After the generic credential change, the platform's golden diff for
+  Ahorro's deploy objects shows comment lines only: names, namespaces and
+  rules are unchanged.
 
 ## Definition of done
 
