@@ -182,7 +182,9 @@ func cmdStart(cfg Config, c *client, clk clock.Clock, stdout, stderr io.Writer, 
 	}
 
 	var tracker progress.Tracker
+	var gen int64
 	last := printStateChange(stderr, clk, "", res.doc.State)
+	resetOnNewGeneration(&tracker, &gen, res.doc)
 	printProgress(stderr, clk, &tracker, res.doc)
 	wait := pollInterval
 	for first := true; ; first = false {
@@ -220,6 +222,7 @@ func cmdStart(cfg Config, c *client, clk clock.Clock, stdout, stderr io.Writer, 
 			return 1
 		default:
 			last = printStateChange(stderr, clk, last, res.doc.State)
+			resetOnNewGeneration(&tracker, &gen, res.doc)
 			printProgress(stderr, clk, &tracker, res.doc)
 		}
 	}
@@ -296,6 +299,16 @@ func printStateChange(stderr io.Writer, clk clock.Clock, last, state string) str
 	return state
 }
 
+// resetOnNewGeneration replaces the tracker when doc names a new,
+// non-zero generation, so a restart's milestones are not suppressed by
+// the previous generation's percentages and once-only lines.
+func resetOnNewGeneration(tr *progress.Tracker, lastGen *int64, doc statusDoc) {
+	if doc.Generation != 0 && doc.Generation != *lastGen {
+		*tr = progress.Tracker{}
+		*lastGen = doc.Generation
+	}
+}
+
 func stateOf(doc statusDoc) progress.State {
 	s := progress.State{Public: doc.State, Ready: doc.Ready}
 	if doc.Instance != nil {
@@ -307,12 +320,9 @@ func stateOf(doc statusDoc) progress.State {
 	return s
 }
 
-// printProgress prints each new milestone line from doc, after the
-// state-change line. A bare document (no instance, no progress) carries
-// nothing new, and a draining/deleting/failed one still carries the old
-// instance being torn down, so both are skipped rather than fed to the
-// tracker, which would otherwise print a stale offer and never print the
-// next one.
+// printProgress skips a bare document (nothing new) and a
+// draining/deleting/failed one (still carries the old instance); every
+// other document's new milestone lines print after the state-change line.
 func printProgress(stderr io.Writer, clk clock.Clock, tr *progress.Tracker, doc statusDoc) {
 	switch doc.State {
 	case "DRAINING", "DELETING", "FAILED":
