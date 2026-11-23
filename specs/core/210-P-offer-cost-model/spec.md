@@ -423,10 +423,8 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
 ## Definition of done
 
 - [x] AC1–AC15 pass (tier 1/2).
-- [ ] `make specs-check go-build go-test go-lint helm-lint helm-template`
-      all exit 0. **Not yet:** `go-lint` fails on `internal/modelsize`
-      (`bodyclose` ×2, `revive` ×1); every other target is 0. See
-      Evidence.
+- [x] `make specs-check go-build go-test go-lint helm-lint helm-template`
+      all exit 0.
 - [x] ADR 0017 flipped to Accepted in the same PR.
 - [x] Amendments to spec 100, ADR 0005, specs 140, 180, 200 merged.
 - [ ] Status flipped to DONE; folder renamed `210-D-...`.
@@ -455,6 +453,8 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
 **Commits, `git log --oneline origin/main..HEAD`:**
 
 ```
+b1d8449 modelsize: refactor head() to return header and contentlength, eliminate bodyclose lint errors
+7f969c4 docs: CORE-210 amendments to specs 100, 140, 180, 200 and ADR 0005; ADR 0017 accepted
 be520eb worker: clean stale model before downloading to prevent double-disk usage
 f55e3f0 worker: skip a verified model on disk; reassemble parts without twice the disk
 c8f4604 status, cost, CLI: show recorded prices, the cost breakdown and the selection estimate
@@ -471,13 +471,13 @@ dbbee38 CORE-210: Breakdown carries model size and horizon
 72538d0 CORE-210: design — rank offers by estimated session cost
 ```
 
-**Validation, 2026-11-23 (Task 9):**
+**Validation, 2026-11-23:**
 
 | Target | Result |
 |---|---|
 | `make specs-check` | 0 |
 | `make go-build` | 0 |
 | `make go-test` | 0 (all packages `ok`, including `internal/offercost`, `internal/modelsize`, `internal/controller`, `internal/worker`) |
-| `make go-lint` | **1** — `bodyclose` on `internal/modelsize/modelsize.go:54` and `:60` (the `HEAD` response body is not closed on both the no-redirect and the follow-redirect paths); `revive` unused-parameter on `internal/modelsize/modelsize_test.go:19`. Introduced in `ea9efc8`; not fixed in this commit. |
+| `make go-lint` | 0 (`golangci-lint run ./...` → `0 issues`; `b1d8449` refactored `head()` in `internal/modelsize/modelsize.go` to return the header and content length and close the response body internally, and renamed the unused test parameter) |
 | `make helm-lint` | 0 |
 | `make helm-template` | 0 |
