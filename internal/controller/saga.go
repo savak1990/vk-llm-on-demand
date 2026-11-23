@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,7 +14,10 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
 
-var errOfferOutsideFilter = errors.New("controller: offer above a price cap or below the disk size")
+var (
+	errOfferOutsideFilter = errors.New("controller: offer above a price cap or below the disk size")
+	errDiskBelowModel     = errors.New("controller: disk below the model's need")
+)
 
 // dispatchSearch is saga step 1: size the model, size the disk, search,
 // then rank by estimated session cost.
@@ -39,6 +43,11 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 		return
 	}
 	ranked := offercost.Rank(offers, offercost.Inputs{ModelBytes: bytes, Horizon: horizon(cfg), DiskGB: disk})
+	if cfg.MaxInstanceSpendUSD > 0 {
+		ranked = slices.DeleteFunc(ranked, func(r offercost.Ranked) bool {
+			return r.Breakdown.DownloadUSD.USD() >= cfg.MaxInstanceSpendUSD
+		})
+	}
 	if len(ranked) == 0 {
 		c.postEvent(Event{Kind: EvNoOffer, Reason: "no_offer"})
 		return
@@ -68,6 +77,10 @@ func dispatchCreate(ctx context.Context, c *Controller, e effCreate) {
 	}
 	if !provider.Admit(e.offer, e.filter) {
 		c.postEvent(Event{Kind: EvCreateFailed, Gen: e.gen, Err: errOfferOutsideFilter, Class: provider.Fatal})
+		return
+	}
+	if e.breakdown.DiskGB <= 0 || e.breakdown.DiskGB < e.filter.MinDiskGB {
+		c.postEvent(Event{Kind: EvCreateFailed, Gen: e.gen, Err: errDiskBelowModel, Class: provider.Fatal})
 		return
 	}
 	seed, err := c.deps.WorkerSeed()
