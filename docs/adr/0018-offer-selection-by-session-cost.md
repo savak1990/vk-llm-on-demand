@@ -1,4 +1,4 @@
-# ADR 0017: Offers are ranked by estimated session cost, with hard caps on every price and on disk
+# ADR 0018: Offers are ranked by estimated session cost, with hard caps on every price and on disk
 
 ## Status
 

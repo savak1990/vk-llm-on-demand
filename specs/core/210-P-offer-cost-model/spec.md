@@ -3,7 +3,7 @@ id: "CORE-210"
 status: "READY"
 updated: "2026-11-23"
 depends_on: ["CORE-020", "CORE-050", "CORE-070", "CORE-100"]
-adrs: ["0017", "0004", "0005", "0011", "0014", "0015"]
+adrs: ["0018", "0004", "0005", "0011", "0014", "0015"]
 ---
 
 # 210 — Offer selection by estimated session cost
@@ -11,7 +11,7 @@ adrs: ["0017", "0004", "0005", "0011", "0014", "0015"]
 **Status note:** READY. Problem and requirements written 2026-11-22 from
 the first two real rentals (CORE-130 / Task 9); design agreed the same day
 after a read-only offer-search probe (Evidence). Decisions are recorded in
-[ADR 0017](../../../docs/adr/0017-offer-selection-by-session-cost.md).
+[ADR 0018](../../../docs/adr/0018-offer-selection-by-session-cost.md).
 
 **Complexity:** L — one new pure package, one new HTTP resolver, new offer
 fields end to end (provider → state → status → CLI), three new caps, one
@@ -110,7 +110,7 @@ In this repository:
   status and cost documents, CLI lines.
 - `deploy/helm/gpu-on-demand/` — `values.yaml`, `values.schema.json`,
   `_helpers.tpl`; a values comment on `networkPolicy.vastApiCidrs`.
-- Docs: ADR 0017 (new); amendments to spec 100 (cost model), ADR 0005
+- Docs: ADR 0018 (new); amendments to spec 100 (cost model), ADR 0005
   (bandwidth is not "cents"), spec 140 (R8 checklist line), spec 180 and
   spec 200 (one line each, see Interactions).
 
@@ -384,7 +384,7 @@ counted." The CLI prints the lines in Outcome.
    the resolver, worker adapter disk. Check: controller and wire tests.
 7. Status, cost documents and CLI. Check: mgmt golden JSON, CLI render.
 8. Worker script: checksum skip, append-and-delete. Check: onstart golden.
-9. Docs: ADR 0017 to Accepted; spec 100, ADR 0005, specs 140, 180, 200.
+9. Docs: ADR 0018 to Accepted; spec 100, ADR 0005, specs 140, 180, 200.
    Check: `make specs-check`.
 
 ## Tests / acceptance criteria
@@ -430,7 +430,7 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
 - [x] AC1–AC16 pass (tier 1/2).
 - [x] `make specs-check go-build go-test go-lint helm-lint helm-template`
       all exit 0.
-- [x] ADR 0017 flipped to Accepted in the same PR.
+- [x] ADR 0018 flipped to Accepted in the same PR.
 - [x] Amendments to spec 100, ADR 0005, specs 140, 180, 200 merged.
 - [ ] Status flipped to DONE; folder renamed `210-D-...`.
 - [x] Evidence section filled.

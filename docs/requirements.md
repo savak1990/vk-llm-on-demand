@@ -27,7 +27,7 @@ release; P2 and P3 are future.
 | Id | Requirement | Acceptance criterion | Spec | Tag |
 |---|---|---|---|---|
 | FR-2.1 | `POST /api/v1/gpu/start` provisions exactly one instance and is idempotent | 50 concurrent starts → one `CreateInstance`; repeats return 200/202 with the current state | 050, 055 | — |
-| FR-2.2 | Offers are filtered by price, GPU, CPU, RAM, disk, reliability, bandwidth, CUDA version and optional region, ordered by estimated session cost (ADR 0017) | Table test with recorded offers; nothing above `maxHourlyPriceUSD` is chosen | 020 | V |
+| FR-2.2 | Offers are filtered by price, GPU, CPU, RAM, disk, reliability, bandwidth, CUDA version and optional region, ordered by estimated session cost (ADR 0018) | Table test with recorded offers; nothing above `maxHourlyPriceUSD` is chosen | 020 | V |
 | FR-2.3 | Cold start to READY on a passing host is under 8 minutes | Measured in the spike and the acceptance run, per stage | 030, 140 | A |
 | FR-2.4 | Each cold-start stage is timed and exported | `vkllm_coldstart_stage_seconds` has all eight stages after one cold start | 050, 090 | — |
 | FR-2.5 | Start returns promptly; readiness is observed by polling status | start p99 < 200 ms; status reflects each public state in order | 055, 150 | — |
