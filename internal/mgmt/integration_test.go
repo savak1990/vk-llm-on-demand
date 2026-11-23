@@ -25,16 +25,16 @@ import (
 // copy of internal/controller's own test fakes.
 type allowAllBudget struct{}
 
-func (allowAllBudget) Allow(store.Document, provider.Money, bool) string    { return "" }
-func (allowAllBudget) AssertPrice(float64, float64) error                   { return nil }
-func (allowAllBudget) OpenEntry(*store.Document, time.Time, int64, float64) {}
-func (allowAllBudget) CloseEntry(*store.Document, time.Time, int64)         {}
-func (allowAllBudget) Rollover(*store.Document, time.Time)                  {}
-func (allowAllBudget) RefreshOpenEntry(*store.Document, time.Time)          {}
-func (allowAllBudget) UsedRatio(store.Document) float64                     { return 0 }
-func (allowAllBudget) EstimatedMTD(store.Document) float64                  { return 0 }
-func (allowAllBudget) CapUSD(store.Document) float64                        { return 0 }
-func (allowAllBudget) CeilingUSD() float64                                  { return 0 }
+func (allowAllBudget) Allow(store.Document, provider.Money, bool) string             { return "" }
+func (allowAllBudget) AssertPrice(float64, float64) error                            { return nil }
+func (allowAllBudget) OpenEntry(*store.Document, time.Time, int64, float64, float64) {}
+func (allowAllBudget) CloseEntry(*store.Document, time.Time, int64)                  {}
+func (allowAllBudget) Rollover(*store.Document, time.Time)                           {}
+func (allowAllBudget) RefreshOpenEntry(*store.Document, time.Time)                   {}
+func (allowAllBudget) UsedRatio(store.Document) float64                              { return 0 }
+func (allowAllBudget) EstimatedMTD(store.Document) float64                           { return 0 }
+func (allowAllBudget) CapUSD(store.Document) float64                                 { return 0 }
+func (allowAllBudget) CeilingUSD() float64                                           { return 0 }
 
 var _ controller.Budget = allowAllBudget{}
 

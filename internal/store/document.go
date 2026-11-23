@@ -44,10 +44,28 @@ type Instance struct {
 }
 
 type Offer struct {
-	MachineID int64   `json:"machineId"`
-	GPU       string  `json:"gpu"`
-	DPH       float64 `json:"dph"`
-	InetDown  float64 `json:"inetDown"`
+	MachineID int64          `json:"machineId"`
+	GPU       string         `json:"gpu"`
+	DPH       float64        `json:"dph"`
+	InetDown  float64        `json:"inetDown"`
+	Prices    *OfferPrices   `json:"prices,omitempty"`
+	Estimate  *OfferEstimate `json:"estimate,omitempty"`
+}
+
+type OfferPrices struct {
+	GPUUSDPerHour        float64 `json:"gpuUSDPerHour"`
+	StorageUSDPerGBMonth float64 `json:"storageUSDPerGBMonth"`
+	DownloadUSDPerGB     float64 `json:"downloadUSDPerGB"`
+	UploadUSDPerGB       float64 `json:"uploadUSDPerGB"`
+}
+
+type OfferEstimate struct {
+	ModelBytes      int64   `json:"modelBytes"`
+	DiskGB          int     `json:"diskGB"`
+	HorizonSeconds  int64   `json:"horizonSeconds"`
+	DownloadSeconds int64   `json:"downloadSeconds"`
+	DownloadUSD     float64 `json:"downloadUSD"`
+	SessionUSD      float64 `json:"sessionUSD"`
 }
 
 type Op struct {
@@ -69,11 +87,12 @@ type Ledger struct {
 }
 
 type LedgerEntry struct {
-	Gen    int64      `json:"gen"`
-	Start  time.Time  `json:"start"`
-	End    *time.Time `json:"end"`
-	DPH    float64    `json:"dph"`
-	EstUSD float64    `json:"estUsd"`
+	Gen      int64      `json:"gen"`
+	Start    time.Time  `json:"start"`
+	End      *time.Time `json:"end"`
+	DPH      float64    `json:"dph"`
+	FixedUSD float64    `json:"fixedUsd,omitempty"`
+	EstUSD   float64    `json:"estUsd"`
 }
 
 type DenyEntry struct {

@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,5 +147,46 @@ func TestUpgradeV1(t *testing.T) {
 	b3, _ := json.Marshal(raw)
 	if _, err := Decode(b3); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("desired=5: want ErrCorrupt, got %v", err)
+	}
+}
+
+func TestDecodeOfferWithoutPricesLeavesThemNil(t *testing.T) {
+	doc, err := Decode([]byte(`{"schemaVersion":2,"installationId":"iid","desired":"RUNNING","generation":1,
+		"instance":{"label":"vkllm:iid:1","state":"READY","offer":{"machineId":1,"gpu":"L40S","dph":0.5,"inetDown":900}},
+		"ledger":{"month":"2026-11","totalUsd":0,"entries":[{"gen":1,"start":"2026-11-22T00:00:00Z","end":null,"dph":0.5,"estUsd":0.1}]},
+		"cache":null}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if doc.Instance.Offer.Prices != nil || doc.Instance.Offer.Estimate != nil {
+		t.Fatalf("legacy offer decoded with prices/estimate: %+v", doc.Instance.Offer)
+	}
+	if doc.Ledger.Entries[0].FixedUSD != 0 {
+		t.Fatalf("legacy entry FixedUSD = %v, want 0", doc.Ledger.Entries[0].FixedUSD)
+	}
+}
+
+func TestEncodeDecodeKeepsOfferPricesAndEstimate(t *testing.T) {
+	doc, _ := NewDocument("iid")
+	doc.Instance = &Instance{Label: "vkllm:iid:1", Offer: Offer{MachineID: 40508, GPU: "RTX 6000Ada", DPH: 0.6156, InetDown: 889.4,
+		Prices:   &OfferPrices{GPUUSDPerHour: 0.56, StorageUSDPerGBMonth: 0.667, DownloadUSDPerGB: 0.039, UploadUSDPerGB: 0.039},
+		Estimate: &OfferEstimate{ModelBytes: 29_200_000_000, DiskGB: 60, HorizonSeconds: 1800, DownloadSeconds: 263, DownloadUSD: 1.14, SessionUSD: 1.49},
+	}}
+	doc.Ledger.Entries = []LedgerEntry{{Gen: 1, DPH: 0.6156, FixedUSD: 1.14, EstUSD: 1.14}}
+	b, err := Encode(doc)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	for _, key := range []string{`"prices"`, `"gpuUSDPerHour"`, `"estimate"`, `"downloadSeconds"`, `"fixedUsd"`} {
+		if !strings.Contains(string(b), key) {
+			t.Fatalf("encoded document lacks %s: %s", key, b)
+		}
+	}
+	got, err := Decode(b)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if *got.Instance.Offer.Prices != *doc.Instance.Offer.Prices || *got.Instance.Offer.Estimate != *doc.Instance.Offer.Estimate || got.Ledger.Entries[0].FixedUSD != 1.14 {
+		t.Fatalf("round trip lost data: %+v", got.Instance.Offer)
 	}
 }

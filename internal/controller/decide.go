@@ -151,7 +151,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			}
 			d.Instance.ProviderID = providerIDString(ev.ProviderID)
 			if f.Budget != nil {
-				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH)
+				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, 0)
 			}
 			if dest {
 				d.Instance.State = Destroying.String()
@@ -194,7 +194,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				return errStale
 			}
 			if f.Budget != nil {
-				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH)
+				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, 0)
 			}
 			d.Instance.State = Destroying.String()
 			finishOp(d, createOpKey(d.Generation), "duplicate_label", f.Now)
