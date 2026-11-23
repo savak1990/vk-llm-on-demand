@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"math"
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
@@ -51,7 +50,7 @@ func (c *Controller) Status() Snapshot {
 	}
 	snap.GPUName = doc.Instance.Offer.GPU
 	snap.MachineID = doc.Instance.Offer.MachineID
-	snap.Hourly = provider.Money(math.Round(doc.Instance.Offer.DPH * 1_000_000))
+	snap.Hourly = provider.FromUSD(doc.Instance.Offer.DPH)
 	if id, ok := providerIDOf(doc); ok {
 		snap.ProviderID = id
 	}
@@ -67,8 +66,10 @@ func (c *Controller) Status() Snapshot {
 	if doc.Instance.IdleDeadline != nil {
 		snap.UntilIdleShutdown = doc.Instance.IdleDeadline.Sub(c.deps.Clock.Now())
 	}
+	snap.Prices, snap.Estimate, snap.InetDownMbps = doc.Instance.Offer.Prices, doc.Instance.Offer.Estimate, doc.Instance.Offer.InetDown
 	if e, ok := openEntry(doc); ok {
 		snap.SpendInstanceUSD = e.EstUSD
+		snap.SpendGPUUSD, snap.SpendStorageUSD, snap.SpendDownloadUSD = splitSpend(e, snap.Prices)
 	}
 	if snap.LastError == "" {
 		snap.LastError = c.getLastError()
@@ -81,6 +82,17 @@ func (c *Controller) Status() Snapshot {
 	}
 	c.stagesMu.Unlock()
 	return snap
+}
+
+// splitSpend divides an entry's time cost between GPU and storage in the
+// ratio of their hourly prices; the fixed part is the download.
+func splitSpend(e store.LedgerEntry, p *store.OfferPrices) (gpu, storage, download float64) {
+	timeUSD := e.EstUSD - e.FixedUSD
+	gpu = timeUSD
+	if p != nil && e.DPH > 0 && p.GPUUSDPerHour < e.DPH {
+		gpu = timeUSD * p.GPUUSDPerHour / e.DPH
+	}
+	return gpu, timeUSD - gpu, e.FixedUSD
 }
 
 // openEntry returns the current generation's still-open ledger entry,

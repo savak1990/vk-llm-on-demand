@@ -13,6 +13,7 @@ import (
 
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
@@ -40,6 +41,8 @@ type Deps struct {
 	WorkerSeed     func() ([]byte, error)
 	InstallationID string
 	ModelAlias     string // e.g. "qwen3.6-35b-a3b"; owned by model.* config, not config.Controller
+	ModelSize      modelsize.Resolver
+	ModelURL       string
 	Config         config.Controller
 	Reg            prometheus.Registerer
 	Log            *slog.Logger
@@ -80,6 +83,13 @@ type Snapshot struct {
 	BudgetMonthUSD     float64
 	BudgetCeilingUSD   float64
 	ProviderBalanceUSD *float64
+
+	Prices           *store.OfferPrices
+	Estimate         *store.OfferEstimate
+	InetDownMbps     float64
+	SpendGPUUSD      float64
+	SpendStorageUSD  float64
+	SpendDownloadUSD float64
 
 	Stages           map[string]time.Duration
 	LastError        string
@@ -171,6 +181,9 @@ type Controller struct {
 func New(d Deps) (*Controller, error) {
 	if d.Config.ProvisioningMode != "explicit" {
 		return nil, fmt.Errorf("controller: provisioningMode %q not supported", d.Config.ProvisioningMode)
+	}
+	if d.ModelSize == nil || d.ModelURL == "" {
+		return nil, errors.New("controller: ModelSize and ModelURL are required")
 	}
 	var since time.Time
 	if d.Clock != nil {

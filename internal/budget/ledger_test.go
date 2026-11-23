@@ -1,6 +1,7 @@
 package budget
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func TestOpenRefreshClose(t *testing.T) {
 	doc := store.Document{}
 	c := New(Config{})
 
-	c.OpenEntry(&doc, t0, 7, 0.60)
+	c.OpenEntry(&doc, t0, 7, 0.60, 0)
 	if len(doc.Ledger.Entries) != 1 || doc.Ledger.Entries[0].Gen != 7 || doc.Ledger.Entries[0].End != nil {
 		t.Fatalf("OpenEntry: Entries = %+v", doc.Ledger.Entries)
 	}
@@ -72,7 +73,7 @@ func TestFoldOnOverflow(t *testing.T) {
 	}
 	totalBeforeFold := doc.Ledger.TotalUSD
 
-	c.OpenEntry(&doc, t0.Add(101*time.Hour), 101, 0.71)
+	c.OpenEntry(&doc, t0.Add(101*time.Hour), 101, 0.71, 0)
 	c.CloseEntry(&doc, t0.Add(101*time.Hour+time.Minute), 101)
 	newEntryCost := doc.Ledger.Entries[len(doc.Ledger.Entries)-1].EstUSD
 
@@ -141,5 +142,36 @@ func TestRolloverNoOpWithinSameMonth(t *testing.T) {
 	c.Rollover(&doc, now)
 	if doc.Ledger.TotalUSD != 5 {
 		t.Fatalf("Rollover within the same month changed TotalUSD to %v, want unchanged 5", doc.Ledger.TotalUSD)
+	}
+}
+
+func TestOpenEntryFixedAmountCountsAtOnce(t *testing.T) {
+	c := New(Config{MonthlyUSD: 30, MaxMonthlyUSD: 100, MaxHourlyPriceUSD: 0.80})
+	t0 := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
+	doc := store.Document{Ledger: store.Ledger{Month: "2026-11"}}
+
+	c.OpenEntry(&doc, t0, 1, 0.60, 1.14)
+	if got := c.EstimatedMTD(doc); got != 1.14 {
+		t.Fatalf("MTD right after open = %v, want 1.14", got)
+	}
+	c.RefreshOpenEntry(&doc, t0.Add(time.Hour))
+	if got := c.EstimatedMTD(doc); math.Abs(got-1.74) > 1e-9 {
+		t.Fatalf("MTD after 1h = %v, want 1.74", got)
+	}
+	c.CloseEntry(&doc, t0.Add(time.Hour), 1)
+	if math.Abs(doc.Ledger.TotalUSD-1.74) > 1e-9 {
+		t.Fatalf("TotalUSD = %v, want 1.74", doc.Ledger.TotalUSD)
+	}
+}
+
+func TestRolloverDropsFixedAmountFromNewMonth(t *testing.T) {
+	c := New(Config{MonthlyUSD: 30, MaxMonthlyUSD: 100, MaxHourlyPriceUSD: 0.80})
+	t0 := time.Date(2026, 11, 30, 23, 0, 0, 0, time.UTC)
+	doc := store.Document{Ledger: store.Ledger{Month: "2026-11"}}
+	c.OpenEntry(&doc, t0, 1, 0.60, 1.14)
+
+	c.Rollover(&doc, t0.Add(2*time.Hour))
+	if len(doc.Ledger.Entries) != 1 || doc.Ledger.Entries[0].FixedUSD != 0 {
+		t.Fatalf("after rollover entries = %+v, want one open entry with FixedUSD 0", doc.Ledger.Entries)
 	}
 }

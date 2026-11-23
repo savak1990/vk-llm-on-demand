@@ -22,7 +22,7 @@ const (
 // probing readiness, and the metrics-pull tick.
 type Worker interface {
 	WorkerKey(workerSeed []byte, installationID string, gen int64) string
-	BuildCreate(offer provider.Offer, label, workerKey string) provider.CreateRequest
+	BuildCreate(offer provider.Offer, diskGB int, label, workerKey string) provider.CreateRequest
 	Probe(ctx context.Context, rt http.RoundTripper, key, alias string) (ProbeStatus, error)
 	Scrape(ctx context.Context, rt http.RoundTripper) error
 }

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -280,7 +281,7 @@ func TestReconcileTable(t *testing.T) {
 				t.Fatalf("events = %+v, want %+v", got, tc.wantEvents)
 			}
 			for i := range got {
-				if got[i] != tc.wantEvents[i] {
+				if !reflect.DeepEqual(got[i], tc.wantEvents[i]) {
 					t.Fatalf("event[%d] = %+v, want %+v", i, got[i], tc.wantEvents[i])
 				}
 			}
@@ -419,7 +420,7 @@ func TestReconcileBudgetExhaustedCarriesGen(t *testing.T) {
 	})
 	c.reconcileOnce(context.Background())
 	got := queuedEvents(c)
-	if len(got) != 2 || got[1] != (Event{Kind: EvBudgetExhausted, Gen: 3, Reason: "budget_exhausted"}) {
+	if len(got) != 2 || !reflect.DeepEqual(got[1], Event{Kind: EvBudgetExhausted, Gen: 3, Reason: "budget_exhausted"}) {
 		t.Fatalf("events = %+v, want Tick then BudgetExhausted gen=3", got)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/budget"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
@@ -96,12 +97,13 @@ func buildHarness(t *testing.T) *harness {
 		Budget: bgt, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
+		ModelSize: modelsize.Fixed(1_000_000_000), ModelURL: "https://example.invalid/model.gguf",
 		Config: config.Controller{
 			ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80,
 			IdleShutdownEnabled: true,
 			IdleShutdownTimeout: 1800 * time.Second, ShutdownDrainTimeout: 60 * time.Second,
 			StartupTimeout: 900 * time.Second, MaxLifetime: 12 * time.Hour,
-			MaxProvisionAttemptsPerHour: 3, ReconcileInterval: 60 * time.Second,
+			MaxProvisionAttemptsPerHour: 3, ReconcileInterval: 60 * time.Second, MaxDiskGB: 200,
 		},
 		Reg: reg, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})

@@ -47,8 +47,23 @@ func NewSeeded(c clock.Clock) *Fake {
 	return f
 }
 
-func (f *Fake) SetOffers(o ...provider.Offer) { f.mu.Lock(); defer f.mu.Unlock(); f.offers = o }
-func (f *Fake) SetBalance(m provider.Money)   { f.mu.Lock(); defer f.mu.Unlock(); f.balance = m }
+// SetOffers stores o. Tests set only the fields they assert on, so a zero
+// speed or disk gets a value that passes every search filter.
+func (f *Fake) SetOffers(o ...provider.Offer) {
+	o = append([]provider.Offer(nil), o...)
+	for i := range o {
+		if o[i].InetDownMbps == 0 {
+			o[i].InetDownMbps = 1000
+		}
+		if o[i].DiskSpaceGB == 0 {
+			o[i].DiskSpaceGB = 500
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.offers = o
+}
+func (f *Fake) SetBalance(m provider.Money) { f.mu.Lock(); defer f.mu.Unlock(); f.balance = m }
 func (f *Fake) SetLatency(op string, d time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -115,7 +130,7 @@ func (f *Fake) SearchOffers(ctx context.Context, filter provider.OfferFilter) ([
 	if err := f.takeFailure("search"); err != nil {
 		return nil, err
 	}
-	return provider.Select(offers, filter), nil
+	return provider.Filter(offers, filter), nil
 }
 
 func (f *Fake) CreateInstance(ctx context.Context, r provider.CreateRequest) (provider.InstanceID, error) {

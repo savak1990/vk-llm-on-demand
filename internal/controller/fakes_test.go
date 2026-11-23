@@ -16,8 +16,8 @@ func TestFakeWorkerKeyAndBuildCreate(t *testing.T) {
 	if key == "" {
 		t.Fatal("WorkerKey: empty")
 	}
-	req := w.BuildCreate(provider.Offer{ID: 11, Hourly: 600000}, "vkllm:iid:7", key)
-	if req.OfferID != 11 || req.Label != "vkllm:iid:7" {
+	req := w.BuildCreate(provider.Offer{ID: 11, Hourly: 600000}, 60, "vkllm:iid:7", key)
+	if req.OfferID != 11 || req.Label != "vkllm:iid:7" || req.DiskGB != 60 {
 		t.Fatalf("BuildCreate: %+v", req)
 	}
 }
@@ -71,11 +71,11 @@ func (w *fakeWorker) WorkerKey(_ []byte, installationID string, gen int64) strin
 	return fmt.Sprintf("fake-key-%s-%d", installationID, gen)
 }
 
-func (w *fakeWorker) BuildCreate(offer provider.Offer, label, workerKey string) provider.CreateRequest {
+func (w *fakeWorker) BuildCreate(offer provider.Offer, diskGB int, label, workerKey string) provider.CreateRequest {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.buildCalls++
-	return provider.CreateRequest{OfferID: offer.ID, Label: label, Env: map[string]string{"WORKER_KEY": workerKey}}
+	return provider.CreateRequest{OfferID: offer.ID, DiskGB: diskGB, Label: label, Env: map[string]string{"WORKER_KEY": workerKey}}
 }
 
 func (w *fakeWorker) Probe(_ context.Context, _ http.RoundTripper, _, _ string) (ProbeStatus, error) {

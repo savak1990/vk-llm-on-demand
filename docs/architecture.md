@@ -287,6 +287,9 @@ and are set by the chart under `config.*`.
 | `lifecycle.startupTimeout` | 15m | create → READY |
 | `lifecycle.safety.maxInstances` | 1 | |
 | `lifecycle.safety.maxHourlyPriceUSD` | 0.80 | |
+| `lifecycle.safety.maxDownloadPriceUSDPerGB` | 0.10 | ADR 0018 |
+| `lifecycle.safety.maxStoragePriceUSDPerGBMonth` | 1.00 | ADR 0018 |
+| `lifecycle.safety.maxDiskGB` | 200 | ADR 0018 |
 | `lifecycle.safety.maxLifetime` | 12h | safeguard, not the idle rule |
 | `lifecycle.safety.maxInstanceSpendUSD` | 0 | 0 = off |
 | `lifecycle.safety.maxProvisionAttemptsPerHour` | 3 | |
@@ -351,6 +354,7 @@ workflow lives in this repository and needs one secret and one variable
 | [0015](adr/0015-runtime-mutable-budget-cap.md) | Runtime-mutable budget cap behind a Helm-only ceiling | Accepted |
 | [0016](adr/0016-github-actions-token-from-ssm.md) | `gpu-control` reads its token from AWS SSM via OIDC | Accepted |
 | [0017](adr/0017-gpu-control-endpoint-from-ssm-fqdn.md) | `gpu-control` builds its endpoint from the lab fqdn in SSM | Accepted |
+| [0018](adr/0018-offer-selection-by-session-cost.md) | Offers ranked by estimated session cost; caps on download, storage, disk | Accepted |
 
 ## 13. Unresolved
 

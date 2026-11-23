@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -145,6 +146,30 @@ func TestStatusGolden(t *testing.T) {
 			}`),
 		},
 		{
+			"ready_cost",
+			parseStatusDoc(t, `{
+				"provider": "vast.ai",
+				"state": "READY",
+				"instance": {
+					"gpu": "RTX 6000Ada", "machineId": 40508, "priceUSDPerHour": 0.6156,
+					"createdAt": "2026-11-22T10:30:00Z", "readyAt": "2026-11-22T10:40:00Z",
+					"prices": {"gpuUSDPerHour": 0.56, "storageUSDPerGBMonth": 0.667, "downloadUSDPerGB": 0.039, "uploadUSDPerGB": 0.039},
+					"inetDownMbps": 889.4
+				},
+				"model": {"alias": "qwen-35b", "contextSize": 32768},
+				"ready": true,
+				"uptimeSeconds": 1530,
+				"lastInferenceFinishedAt": null,
+				"secondsUntilIdleShutdown": 1800,
+				"cost": {
+					"estimatedInstanceUSD": 1.41, "estimatedMonthUSD": 4.2, "budgetMonthUSD": 30,
+					"breakdown": {"gpuUSD": 0.24, "storageUSD": 0.03, "downloadUSD": 1.14},
+					"selection": {"modelBytes": 29200000000, "horizonSeconds": 1800, "estimatedDownloadSeconds": 263, "estimatedDownloadUSD": 1.14, "estimatedSessionUSD": 1.49}
+				},
+				"unavailable": ""
+			}`),
+		},
+		{
 			"desired_mismatch",
 			parseStatusDoc(t, `{
 				"provider": "vast.ai",
@@ -189,5 +214,18 @@ func TestJSONRender(t *testing.T) {
 	renderJSON(&buf, raw)
 	if buf.String() != string(raw) {
 		t.Errorf("JSON render mismatch:\ngot:\n%s\nwant:\n%s", buf.String(), string(raw))
+	}
+}
+
+func TestDownloadLineUsesSelectionNotBreakdown(t *testing.T) {
+	// Before the ledger entry opens, breakdown.downloadUSD is 0; the line shows the amount charged at create.
+	doc := parseStatusDoc(t, `{"state": "READY",
+		"instance": {"priceUSDPerHour": 0.6156, "prices": {"gpuUSDPerHour": 0.56, "downloadUSDPerGB": 0.039}},
+		"cost": {"breakdown": {"downloadUSD": 0},
+			"selection": {"modelBytes": 29200000000, "estimatedDownloadSeconds": 263, "estimatedDownloadUSD": 1.14}}}`)
+	var buf bytes.Buffer
+	renderStatus(&buf, doc)
+	if !strings.Contains(buf.String(), "$1.14 (29.2 GB") {
+		t.Fatalf("Download line does not show the selection amount:\n%s", buf.String())
 	}
 }

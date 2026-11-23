@@ -81,6 +81,10 @@ cleanup because destroying the instance removes everything.
   explicit call, not made here.
 - Bandwidth is billed by Vast per byte; 26 GB inbound per provision at the
   snapshot's typical `inet_down_cost` is cents, recorded in the cost model.
+- **Amended 2026-11-22 (ADR 0018):** bandwidth is not "cents". One host
+  charged $0.039/GB, so one 29.2 GB download cost $1.14, 81% of that
+  rental. Offers are now ranked by session cost including the download,
+  and the download price has a hard cap.
 
 ## Risks
 

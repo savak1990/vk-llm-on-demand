@@ -15,14 +15,13 @@ import (
 // internal/controller, and vice versa.
 type workerAdapter struct {
 	cfg              config.Worker
-	diskGB           int
 	modelAlias       string
 	modelContextSize int
 	exporter         *worker.Exporter
 }
 
-func newWorkerAdapter(cfg config.Worker, diskGB int, modelAlias string, modelContextSize int, exp *worker.Exporter) *workerAdapter {
-	return &workerAdapter{cfg: cfg, diskGB: diskGB, modelAlias: modelAlias, modelContextSize: modelContextSize, exporter: exp}
+func newWorkerAdapter(cfg config.Worker, modelAlias string, modelContextSize int, exp *worker.Exporter) *workerAdapter {
+	return &workerAdapter{cfg: cfg, modelAlias: modelAlias, modelContextSize: modelContextSize, exporter: exp}
 }
 
 var _ controller.Worker = (*workerAdapter)(nil)
@@ -34,9 +33,9 @@ func (a *workerAdapter) WorkerKey(seed []byte, installationID string, gen int64)
 // BuildCreate's error path is unreachable: wire() already validates
 // these same fields once at startup via worker.BuildCreate directly.
 // A panic here means that check and this call disagree.
-func (a *workerAdapter) BuildCreate(offer provider.Offer, label, workerKey string) provider.CreateRequest {
+func (a *workerAdapter) BuildCreate(offer provider.Offer, diskGB int, label, workerKey string) provider.CreateRequest {
 	req, err := worker.BuildCreate(worker.CreateParams{
-		Image: a.cfg.WorkerImage, DiskGB: a.diskGB, Label: label,
+		Image: a.cfg.WorkerImage, DiskGB: diskGB, Label: label,
 		ModelURL: a.cfg.ModelURL, ModelSHA256: a.cfg.ModelSHA256, Alias: a.modelAlias,
 		Ctx: a.modelContextSize, Parallel: a.cfg.ModelParallel,
 		DeadMan: a.cfg.WorkerDeadManTimeout, WorkerKey: workerKey,

@@ -6,16 +6,19 @@ import (
 
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
-const limitationsText = "Estimates only; provider billing is authoritative."
+const limitationsText = "Estimates only; provider billing is authoritative. Upload bandwidth and the worker image pull are not counted."
 
 type instanceDoc struct {
-	GPU             string     `json:"gpu"`
-	MachineID       int64      `json:"machineId"`
-	PriceUSDPerHour float64    `json:"priceUSDPerHour"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	ReadyAt         *time.Time `json:"readyAt"`
+	GPU             string             `json:"gpu"`
+	MachineID       int64              `json:"machineId"`
+	PriceUSDPerHour float64            `json:"priceUSDPerHour"`
+	CreatedAt       time.Time          `json:"createdAt"`
+	ReadyAt         *time.Time         `json:"readyAt"`
+	Prices          *store.OfferPrices `json:"prices,omitempty"`
+	InetDownMbps    float64            `json:"inetDownMbps"`
 }
 
 type modelDoc struct {
@@ -23,10 +26,26 @@ type modelDoc struct {
 	ContextSize int    `json:"contextSize"`
 }
 
+type breakdownDoc struct {
+	GPUUSD      float64 `json:"gpuUSD"`
+	StorageUSD  float64 `json:"storageUSD"`
+	DownloadUSD float64 `json:"downloadUSD"`
+}
+
+type selectionDoc struct {
+	ModelBytes               int64   `json:"modelBytes"`
+	HorizonSeconds           int64   `json:"horizonSeconds"`
+	EstimatedDownloadSeconds int64   `json:"estimatedDownloadSeconds"`
+	EstimatedDownloadUSD     float64 `json:"estimatedDownloadUSD"`
+	EstimatedSessionUSD      float64 `json:"estimatedSessionUSD"`
+}
+
 type costSummary struct {
-	EstimatedInstanceUSD float64 `json:"estimatedInstanceUSD"`
-	EstimatedMonthUSD    float64 `json:"estimatedMonthUSD"`
-	BudgetMonthUSD       float64 `json:"budgetMonthUSD"`
+	EstimatedInstanceUSD float64       `json:"estimatedInstanceUSD"`
+	EstimatedMonthUSD    float64       `json:"estimatedMonthUSD"`
+	BudgetMonthUSD       float64       `json:"budgetMonthUSD"`
+	Breakdown            *breakdownDoc `json:"breakdown,omitempty"`
+	Selection            *selectionDoc `json:"selection,omitempty"`
 }
 
 type statusDocument struct {
@@ -50,14 +69,16 @@ type statusDocument struct {
 }
 
 type costDocument struct {
-	Estimates            bool     `json:"estimates"`
-	PriceUSDPerHour      float64  `json:"priceUSDPerHour"`
-	UptimeSeconds        int64    `json:"uptimeSeconds"`
-	EstimatedInstanceUSD float64  `json:"estimatedInstanceUSD"`
-	EstimatedMonthUSD    float64  `json:"estimatedMonthUSD"`
-	BudgetMonthUSD       float64  `json:"budgetMonthUSD"`
-	ProviderBalanceUSD   *float64 `json:"providerBalanceUSD"`
-	Limitations          string   `json:"limitations"`
+	Estimates            bool          `json:"estimates"`
+	PriceUSDPerHour      float64       `json:"priceUSDPerHour"`
+	UptimeSeconds        int64         `json:"uptimeSeconds"`
+	EstimatedInstanceUSD float64       `json:"estimatedInstanceUSD"`
+	EstimatedMonthUSD    float64       `json:"estimatedMonthUSD"`
+	BudgetMonthUSD       float64       `json:"budgetMonthUSD"`
+	ProviderBalanceUSD   *float64      `json:"providerBalanceUSD"`
+	Limitations          string        `json:"limitations"`
+	Breakdown            *breakdownDoc `json:"breakdown,omitempty"`
+	Selection            *selectionDoc `json:"selection,omitempty"`
 }
 
 func buildStatusDocument(snap controller.Snapshot, cfg config.Mgmt, now time.Time) statusDocument {
@@ -73,9 +94,11 @@ func buildStatusDocument(snap controller.Snapshot, cfg config.Mgmt, now time.Tim
 		doc.Instance = &instanceDoc{
 			GPU: snap.GPUName, MachineID: snap.MachineID, PriceUSDPerHour: snap.Hourly.USD(),
 			CreatedAt: snap.CreatedAt, ReadyAt: snap.ReadyAt,
+			Prices: snap.Prices, InetDownMbps: snap.InetDownMbps,
 		}
 		doc.UptimeSeconds = int64(now.Sub(snap.CreatedAt).Seconds())
 	}
+	doc.Cost.Breakdown, doc.Cost.Selection = breakdownOf(snap), selectionOf(snap)
 	doc.LastInferenceFinishedAt = snap.LastInferenceFinishedAt
 	if snap.Public == "READY" {
 		doc.IdleDeadline = snap.IdleDeadline
@@ -104,7 +127,26 @@ func buildCostDocument(snap controller.Snapshot, _ config.Mgmt, now time.Time) c
 		doc.UptimeSeconds = int64(now.Sub(snap.CreatedAt).Seconds())
 		doc.EstimatedInstanceUSD = snap.SpendInstanceUSD
 	}
+	doc.Breakdown, doc.Selection = breakdownOf(snap), selectionOf(snap)
 	return doc
+}
+
+func breakdownOf(snap controller.Snapshot) *breakdownDoc {
+	if snap.CreatedAt.IsZero() {
+		return nil
+	}
+	return &breakdownDoc{GPUUSD: snap.SpendGPUUSD, StorageUSD: snap.SpendStorageUSD, DownloadUSD: snap.SpendDownloadUSD}
+}
+
+func selectionOf(snap controller.Snapshot) *selectionDoc {
+	e := snap.Estimate
+	if snap.CreatedAt.IsZero() || e == nil {
+		return nil
+	}
+	return &selectionDoc{
+		ModelBytes: e.ModelBytes, HorizonSeconds: e.HorizonSeconds, EstimatedDownloadSeconds: e.DownloadSeconds,
+		EstimatedDownloadUSD: e.DownloadUSD, EstimatedSessionUSD: e.SessionUSD,
+	}
 }
 
 // resultFor classifies an op against the snapshot the caller already

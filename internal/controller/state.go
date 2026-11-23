@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/offercost"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
@@ -104,6 +105,8 @@ type Event struct {
 	Gen  int64
 
 	Offer      provider.Offer
+	Breakdown  offercost.Breakdown
+	Filter     provider.OfferFilter
 	Reason     string // "" (gate ok) | "backoff" (pacing, not a denial) | "no_offer" | "budget_exhausted" | "balance_low" | "attempts_exhausted"
 	ProviderID provider.InstanceID
 	Err        error
@@ -136,9 +139,11 @@ type Effect interface{ effect() }
 // worker, and destroy/close-conn are generic (state, next) hooks, not per-row effects.
 type effSearch struct{ filter provider.OfferFilter }
 type effCreate struct {
-	offer provider.Offer
-	gen   int64
-	label string
+	offer     provider.Offer
+	breakdown offercost.Breakdown
+	filter    provider.OfferFilter
+	gen       int64
+	label     string
 }
 type effGet struct {
 	id  provider.InstanceID

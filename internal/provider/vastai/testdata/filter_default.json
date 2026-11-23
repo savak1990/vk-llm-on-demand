@@ -1,15 +1,25 @@
 {
+  "allocated_storage": 60,
   "cpu_ram": {
     "gte": 32000
   },
   "cuda_max_good": {
     "gte": 12.8
   },
+  "disk_space": {
+    "gte": 60
+  },
   "dph_total": {
     "lte": 0.8
   },
+  "inet_down_cost": {
+    "lte": 0.1
+  },
   "rentable": {
     "eq": true
+  },
+  "storage_cost": {
+    "lte": 1
   },
   "type": "ondemand",
   "verified": {

@@ -13,23 +13,25 @@ const MaxLedgerEntries = 100
 
 // estUSD rounds elapsed time up to the next whole second — never
 // understate a deny-gate input — before applying the hourly rate.
-func estUSD(dph float64, start, now time.Time) float64 {
+func estUSD(fixed, dph float64, start, now time.Time) float64 {
 	seconds := math.Ceil(now.Sub(start).Seconds())
 	if seconds < 0 {
 		seconds = 0
 	}
-	return dph * seconds / 3600
+	return fixed + dph*seconds/3600
 }
 
-func (c *Checker) OpenEntry(doc *store.Document, now time.Time, gen int64, dphUSD float64) {
-	doc.Ledger.Entries = append(doc.Ledger.Entries, store.LedgerEntry{Gen: gen, Start: now, DPH: dphUSD})
+// OpenEntry charges fixedUSD (the model download) at once, so the budget
+// gate sees it before the money is spent.
+func (c *Checker) OpenEntry(doc *store.Document, now time.Time, gen int64, dphUSD, fixedUSD float64) {
+	doc.Ledger.Entries = append(doc.Ledger.Entries, store.LedgerEntry{Gen: gen, Start: now, DPH: dphUSD, FixedUSD: fixedUSD, EstUSD: fixedUSD})
 }
 
 func (c *Checker) RefreshOpenEntry(doc *store.Document, now time.Time) {
 	for i := range doc.Ledger.Entries {
 		e := &doc.Ledger.Entries[i]
 		if e.End == nil {
-			e.EstUSD = estUSD(e.DPH, e.Start, now)
+			e.EstUSD = estUSD(e.FixedUSD, e.DPH, e.Start, now)
 		}
 	}
 }
@@ -38,7 +40,7 @@ func (c *Checker) CloseEntry(doc *store.Document, now time.Time, gen int64) {
 	for i := range doc.Ledger.Entries {
 		e := &doc.Ledger.Entries[i]
 		if e.Gen == gen && e.End == nil {
-			e.EstUSD = estUSD(e.DPH, e.Start, now)
+			e.EstUSD = estUSD(e.FixedUSD, e.DPH, e.Start, now)
 			t := now
 			e.End = &t
 			doc.Ledger.TotalUSD += e.EstUSD

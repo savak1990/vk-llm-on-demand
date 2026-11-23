@@ -25,6 +25,10 @@ type statusDoc struct {
 		PriceUSDPerHour float64    `json:"priceUSDPerHour"`
 		CreatedAt       *time.Time `json:"createdAt"`
 		ReadyAt         *time.Time `json:"readyAt"`
+		Prices          *struct {
+			GPUUSDPerHour    float64 `json:"gpuUSDPerHour"`
+			DownloadUSDPerGB float64 `json:"downloadUSDPerGB"`
+		} `json:"prices"`
 	} `json:"instance"`
 	Model struct {
 		Alias       string `json:"alias"`
@@ -39,6 +43,11 @@ type statusDoc struct {
 		EstimatedInstanceUSD float64 `json:"estimatedInstanceUSD"`
 		EstimatedMonthUSD    float64 `json:"estimatedMonthUSD"`
 		BudgetMonthUSD       float64 `json:"budgetMonthUSD"`
+		Selection            *struct {
+			ModelBytes               int64   `json:"modelBytes"`
+			EstimatedDownloadSeconds int64   `json:"estimatedDownloadSeconds"`
+			EstimatedDownloadUSD     float64 `json:"estimatedDownloadUSD"`
+		} `json:"selection"`
 	} `json:"cost"`
 	Unavailable    string     `json:"unavailable"`
 	NextCreateAt   *time.Time `json:"nextCreateAt"`

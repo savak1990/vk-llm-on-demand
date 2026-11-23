@@ -150,6 +150,10 @@ Cache document: the `cache` field above plus `status` (`uninitialized \| initial
 
 `storage_cost` ($/GB/month, research §1.2, §1.4) is captured from the offer chosen at `cache init`; it is **not** a persisted `cache` field (that list is fixed). Instead it folds into CORE-100's ledger as one more `LedgerEntry` with `Gen: 0` (reserved, never a real generation), `DPH = storage_cost × sizeGB / (24×30)`, `End` always `nil` while `cache.volumeId` is set. `EstimatedMTD` already sums every open entry, so no change to that function; `estimatedStorageUSD` is this entry's `EstUSD`. The rate refreshes opportunistically on the next successful `SearchOffers` for `cache.machineId`; between refreshes the last known rate stands, labelled an estimate like every other cost figure (CORE-100).
 
+CORE-210: on a cache hit the offer's `DownloadUSD` is 0, and the
+instance's `allocated_storage` must not include the volume, so storage is
+counted once (the volume's own ledger entry).
+
 ### Failure cases
 
 | Case | Detection | Response |

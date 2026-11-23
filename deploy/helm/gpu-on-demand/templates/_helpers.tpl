@@ -89,6 +89,9 @@ VKLLM_LIFECYCLE_SHUTDOWN_DRAIN_TIMEOUT: {{ .Values.config.lifecycle.shutdown.dra
 VKLLM_LIFECYCLE_SHUTDOWN_ALLOW_FORCE: {{ .Values.config.lifecycle.shutdown.allowForce | quote }}
 VKLLM_LIFECYCLE_STARTUP_TIMEOUT: {{ .Values.config.lifecycle.startupTimeout | quote }}
 VKLLM_LIFECYCLE_SAFETY_MAX_HOURLY_PRICE_USD: {{ .Values.config.lifecycle.safety.maxHourlyPriceUSD | quote }}
+VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB: {{ .Values.config.lifecycle.safety.maxDownloadPriceUSDPerGB | quote }}
+VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH: {{ .Values.config.lifecycle.safety.maxStoragePriceUSDPerGBMonth | quote }}
+VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB: {{ .Values.config.lifecycle.safety.maxDiskGB | int64 | quote }}
 VKLLM_LIFECYCLE_SAFETY_MAX_LIFETIME: {{ .Values.config.lifecycle.safety.maxLifetime | quote }}
 VKLLM_LIFECYCLE_SAFETY_MAX_INSTANCE_SPEND_USD: {{ .Values.config.lifecycle.safety.maxInstanceSpendUSD | quote }}
 VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR: {{ .Values.config.lifecycle.safety.maxProvisionAttemptsPerHour | int64 | quote }}

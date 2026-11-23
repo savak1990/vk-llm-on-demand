@@ -10,9 +10,12 @@ import (
 
 func defaultFilter() provider.OfferFilter {
 	return provider.OfferFilter{
-		MinCPURAMGB: 32,
-		MinCUDA:     12.8,
-		MaxHourly:   800000, // $0.80
+		MinCPURAMGB:          32,
+		MinCUDA:              12.8,
+		MinDiskGB:            60,
+		MaxHourly:            800000,  // $0.80
+		MaxDownloadPerGB:     100000,  // $0.10
+		MaxStoragePerGBMonth: 1000000, // $1.00
 	}
 }
 

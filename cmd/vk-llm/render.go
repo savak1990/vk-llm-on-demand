@@ -33,10 +33,21 @@ func renderStatus(w io.Writer, doc statusDoc) {
 	}
 	_, _ = fmt.Fprintf(tw, "Ready\t%s\n", readyStr)
 
-	if doc.Instance == nil {
+	switch {
+	case doc.Instance == nil:
 		_, _ = fmt.Fprintf(tw, "Price\t—\n")
-	} else {
+	case doc.Instance.Prices != nil:
+		p := doc.Instance.PriceUSDPerHour
+		g := doc.Instance.Prices.GPUUSDPerHour
+		_, _ = fmt.Fprintf(tw, "Price\t$%.2f/h (GPU $%.2f + storage $%.2f)\n", p, g, p-g)
+	default:
 		_, _ = fmt.Fprintf(tw, "Price\t$%.2f/h\n", doc.Instance.PriceUSDPerHour)
+	}
+
+	if doc.Instance != nil && doc.Instance.Prices != nil && doc.Cost.Selection != nil {
+		s := doc.Cost.Selection
+		_, _ = fmt.Fprintf(tw, "Download\t$%.2f (%.1f GB × $%.3f/GB, est. %s)\n",
+			s.EstimatedDownloadUSD, float64(s.ModelBytes)/1e9, doc.Instance.Prices.DownloadUSDPerGB, formatDuration(s.EstimatedDownloadSeconds))
 	}
 
 	if doc.UptimeSeconds == 0 {

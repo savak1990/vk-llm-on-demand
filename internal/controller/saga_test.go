@@ -1,14 +1,20 @@
 package controller
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/budget"
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 	"github.com/savak1990/vk-llm-on-demand/internal/obs"
+	"github.com/savak1990/vk-llm-on-demand/internal/offercost"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
@@ -26,7 +32,8 @@ func newTestController(t *testing.T) (*Controller, *fakeprovider.Fake, *fakecloc
 		Provider: prov, Store: fakestore.New("iid"), Dialer: &recordDialer{}, Clock: clk, Budget: bgt, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
-		Config: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxProvisionAttemptsPerHour: 3, IdleShutdownEnabled: true, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second},
+		ModelSize: modelsize.Fixed(1_000_000_000), ModelURL: "https://example.invalid/model.gguf",
+		Config: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxProvisionAttemptsPerHour: 3, IdleShutdownEnabled: true, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxDiskGB: 200},
 		Reg:    obs.NewRegistry(), // publishCostMetrics calls obs.Set*, which need obs's singleton registered, same as production wiring
 	})
 	if err != nil {
@@ -77,16 +84,34 @@ func TestDispatchSearchProviderErrorSetsErr(t *testing.T) {
 
 func TestDispatchCreateSuccess(t *testing.T) {
 	c, _, _, _, _ := newTestController(t)
-	dispatchCreate(context.Background(), c, effCreate{offer: provider.Offer{ID: 11, Hourly: 600000}, gen: 1, label: "vkllm:iid:1"})
+	dispatchCreate(context.Background(), c, effCreate{
+		offer: provider.Offer{ID: 11, Hourly: 600000}, breakdown: offercost.Breakdown{DiskGB: 60},
+		filter: provider.OfferFilter{MaxHourly: 800000}, gen: 1, label: "vkllm:iid:1",
+	})
 	ev, ok := recvEvent(t, c)
 	if !ok || ev.Kind != EvCreated || ev.Gen != 1 {
 		t.Fatalf("event = %+v, ok=%v", ev, ok)
 	}
 }
 
+func TestDispatchCreateRefusesDiskBelowModel(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	dispatchCreate(context.Background(), c, effCreate{
+		offer: provider.Offer{ID: 11, Hourly: 600000}, breakdown: offercost.Breakdown{DiskGB: 0},
+		filter: provider.OfferFilter{MaxHourly: 800000}, gen: 1, label: "vkllm:iid:1",
+	})
+	ev, ok := recvEvent(t, c)
+	if !ok || ev.Kind != EvCreateFailed || ev.Class != provider.Fatal {
+		t.Fatalf("event = %+v, ok=%v; want fatal EvCreateFailed", ev, ok)
+	}
+	if prov.Calls("create") != 0 {
+		t.Fatalf("Calls(create) = %d, want 0", prov.Calls("create"))
+	}
+}
+
 func TestDispatchCreatePriceOverCapNeverCallsProvider(t *testing.T) {
 	c, prov, _, _, _ := newTestController(t)
-	dispatchCreate(context.Background(), c, effCreate{offer: provider.Offer{ID: 11, Hourly: 900000}, gen: 1, label: "vkllm:iid:1"}) // $0.90 > $0.80 cap
+	dispatchCreate(context.Background(), c, effCreate{offer: provider.Offer{ID: 11, Hourly: 900000}, filter: provider.OfferFilter{MaxHourly: 800000}, gen: 1, label: "vkllm:iid:1"}) // $0.90 > $0.80 cap
 	ev, ok := recvEvent(t, c)
 	if !ok || ev.Kind != EvCreateFailed || ev.Err == nil {
 		t.Fatalf("event = %+v, ok=%v", ev, ok)
@@ -224,5 +249,125 @@ func TestNextCreateAllowedAt(t *testing.T) {
 	ops = append(ops, store.Op{Key: "create-4", FinishedAt: &f3, Outcome: "ready"})
 	if got := nextCreateAllowedAt(ops); !got.IsZero() {
 		t.Fatalf("ready resets: got %v, want zero", got)
+	}
+}
+
+type errSize struct{}
+
+func (errSize) Bytes(context.Context, string) (int64, error) { return 0, errors.New("no size") }
+
+func TestDispatchSearchModelSizeUnknownRetriesWithoutSearch(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	c.deps.ModelSize = errSize{}
+	var buf bytes.Buffer
+	c.deps.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000})
+	dispatchSearch(context.Background(), c, effSearch{filter: provider.OfferFilter{MaxHourly: 800000}})
+	ev, ok := recvEvent(t, c)
+	if !ok || ev.Kind != EvNoOffer || ev.Err == nil || ev.Reason != "provider_error" {
+		t.Fatalf("event = %+v, ok=%v; want EvNoOffer provider_error with Err", ev, ok)
+	}
+	if prov.Calls("search") != 0 {
+		t.Fatalf("Calls(search) = %d, want 0", prov.Calls("search"))
+	}
+	if !strings.Contains(buf.String(), "reason=model_size_unknown") {
+		t.Fatalf("log = %q, want reason=model_size_unknown", buf.String())
+	}
+}
+
+func TestDispatchSearchModelTooLargeStopsWithoutSearch(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	c.deps.ModelSize = modelsize.Fixed(500_000_000_000) // needs 590 GB > 200
+	var buf bytes.Buffer
+	c.deps.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	dispatchSearch(context.Background(), c, effSearch{filter: provider.OfferFilter{MaxHourly: 800000}})
+	ev, ok := recvEvent(t, c)
+	if !ok || ev.Kind != EvNoOffer || ev.Err != nil || ev.Reason != "no_offer" {
+		t.Fatalf("event = %+v, ok=%v; want EvNoOffer no_offer without Err", ev, ok)
+	}
+	if prov.Calls("search") != 0 {
+		t.Fatalf("Calls(search) = %d, want 0", prov.Calls("search"))
+	}
+	if !strings.Contains(buf.String(), "reason=model_too_large") {
+		t.Fatalf("log = %q, want reason=model_too_large", buf.String())
+	}
+}
+
+func TestDispatchSearchRanksBySessionCostAndSizesDisk(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	c.deps.ModelSize = modelsize.Fixed(29_200_000_000)
+	prov.SetOffers(
+		provider.Offer{ID: 1, MachineID: 40508, Hourly: 615556, DphBase: 560000, DownloadPerGB: 39063, InetDownMbps: 889.4},
+		provider.Offer{ID: 2, MachineID: 117871, Hourly: 650000, DphBase: 630000, DownloadPerGB: 10000, InetDownMbps: 1000},
+	)
+	f := provider.OfferFilter{MaxHourly: 800000, MaxDownloadPerGB: 100000, MaxStoragePerGBMonth: 1000000}
+	dispatchSearch(context.Background(), c, effSearch{filter: f})
+	ev, ok := recvEvent(t, c)
+	if !ok || ev.Kind != EvOfferChosen || ev.Offer.MachineID != 117871 {
+		t.Fatalf("event = %+v, ok=%v; want machine 117871 (cheaper session, dearer GPU)", ev, ok)
+	}
+	if ev.Breakdown.DiskGB != 49 || ev.Filter.MinDiskGB != 49 {
+		t.Fatalf("disk = %d / filter %d, want 49 (minDiskGB 0 in this config)", ev.Breakdown.DiskGB, ev.Filter.MinDiskGB)
+	}
+	if ev.Breakdown.HorizonSeconds != 1800 {
+		t.Fatalf("horizon = %d, want the 30m idle timeout", ev.Breakdown.HorizonSeconds)
+	}
+}
+
+func TestDispatchSearchInstanceSpendCap(t *testing.T) {
+	cheapSessionBigDownload := provider.Offer{ID: 1, Hourly: 100000, DownloadPerGB: 100000} // download alone == $0.10
+	plain := provider.Offer{ID: 2, Hourly: 600000}
+	cases := []struct {
+		name     string
+		capUSD   float64
+		offers   []provider.Offer
+		wantKind EventKind
+		wantID   int64
+	}{
+		{"download alone reaches the cap, next offer wins", 0.10, []provider.Offer{cheapSessionBigDownload, plain}, EvOfferChosen, 2},
+		{"every offer reaches the cap", 0.10, []provider.Offer{cheapSessionBigDownload}, EvNoOffer, 0},
+		{"cap 0 is off", 0, []provider.Offer{cheapSessionBigDownload, plain}, EvOfferChosen, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, prov, _, _, _ := newTestController(t)
+			c.deps.Config.MaxInstanceSpendUSD = tc.capUSD
+			prov.SetOffers(tc.offers...)
+			f := provider.OfferFilter{MaxHourly: 800000, MaxDownloadPerGB: 200000, MaxStoragePerGBMonth: 1000000}
+			dispatchSearch(context.Background(), c, effSearch{filter: f})
+			ev, ok := recvEvent(t, c)
+			if !ok || ev.Kind != tc.wantKind || ev.Offer.ID != tc.wantID || (tc.wantKind == EvNoOffer && ev.Reason != "no_offer") {
+				t.Fatalf("event = %+v, ok=%v; want kind %v offer %d", ev, ok, tc.wantKind, tc.wantID)
+			}
+		})
+	}
+}
+
+func TestDispatchCreateRefusesOfferOutsideFilter(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	offer := provider.Offer{ID: 11, Hourly: 500000, DownloadPerGB: 200000} // $0.20/GB > $0.10 cap
+	filter := provider.OfferFilter{MaxHourly: 800000, MaxDownloadPerGB: 100000, MaxStoragePerGBMonth: 1000000}
+	dispatchCreate(context.Background(), c, effCreate{offer: offer, filter: filter, gen: 1, label: "vkllm:iid:1"})
+	ev, ok := recvEvent(t, c)
+	if !ok || ev.Kind != EvCreateFailed || ev.Class != provider.Fatal {
+		t.Fatalf("event = %+v, ok=%v; want fatal EvCreateFailed", ev, ok)
+	}
+	if prov.Calls("create") != 0 {
+		t.Fatalf("Calls(create) = %d, want 0", prov.Calls("create"))
+	}
+}
+
+func TestGateRefusesOfferWhoseDownloadExceedsRemainingBudget(t *testing.T) {
+	c, _, clk, _, _ := newTestController(t)
+	c.deps.Budget = budget.New(budget.Config{MonthlyUSD: 30, MaxMonthlyUSD: 100, MaxHourlyPriceUSD: 0.80})
+	doc, _ := store.NewDocument("iid")
+	doc.Ledger = store.Ledger{Month: clk.Now().UTC().Format("2006-01"), TotalUSD: 29}
+	over := Event{Kind: EvOfferChosen, Breakdown: offercost.Breakdown{DownloadUSD: 1_140_640}}
+	if r := c.gateReason(Searching, over, doc, clk.Now()); r != "budget_exhausted" {
+		t.Fatalf("gateReason = %q, want budget_exhausted ($29 spent + $1.14 download >= $30)", r)
+	}
+	under := Event{Kind: EvOfferChosen, Breakdown: offercost.Breakdown{DownloadUSD: 500_000}}
+	if r := c.gateReason(Searching, under, doc, clk.Now()); r != "" {
+		t.Fatalf("gateReason = %q, want admit ($29.50 < $30)", r)
 	}
 }

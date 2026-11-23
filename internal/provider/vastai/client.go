@@ -210,7 +210,7 @@ func decodeJSON(body []byte, v any) error {
 }
 
 // SearchOffers queries /bundles with the given filter and applies the
-// local price cap and denylist (the server filter is not the guarantee).
+// caps, disk minimum and denylist locally (the server filter is not the guarantee).
 func (c *Client) SearchOffers(ctx context.Context, f provider.OfferFilter) ([]provider.Offer, error) {
 	body, err := json.Marshal(buildFilterBody(f))
 	if err != nil {
@@ -229,16 +229,21 @@ func (c *Client) SearchOffers(ctx context.Context, f provider.OfferFilter) ([]pr
 	}
 	var decoded struct {
 		Offers []struct {
-			ID          int64   `json:"id"`
-			MachineID   int64   `json:"machine_id"`
-			GPUName     string  `json:"gpu_name"`
-			Geolocation string  `json:"geolocation"`
-			NumGPUs     int     `json:"num_gpus"`
-			DphTotal    float64 `json:"dph_total"`
-			Reliability float64 `json:"reliability2"`
-			InetDown    float64 `json:"inet_down"`
-			DiskBw      float64 `json:"disk_bw"`
-			CudaMaxGood float64 `json:"cuda_max_good"`
+			ID           int64   `json:"id"`
+			MachineID    int64   `json:"machine_id"`
+			GPUName      string  `json:"gpu_name"`
+			Geolocation  string  `json:"geolocation"`
+			NumGPUs      int     `json:"num_gpus"`
+			DphTotal     float64 `json:"dph_total"`
+			DphBase      float64 `json:"dph_base"`
+			InetDownCost float64 `json:"inet_down_cost"`
+			InetUpCost   float64 `json:"inet_up_cost"`
+			StorageCost  float64 `json:"storage_cost"`
+			DiskSpace    float64 `json:"disk_space"`
+			Reliability  float64 `json:"reliability2"`
+			InetDown     float64 `json:"inet_down"`
+			DiskBw       float64 `json:"disk_bw"`
+			CudaMaxGood  float64 `json:"cuda_max_good"`
 		} `json:"offers"`
 	}
 	if err := decodeJSON(respBody, &decoded); err != nil {
@@ -249,12 +254,14 @@ func (c *Client) SearchOffers(ctx context.Context, f provider.OfferFilter) ([]pr
 	out := make([]provider.Offer, 0, len(decoded.Offers))
 	for _, o := range decoded.Offers {
 		out = append(out, provider.Offer{
-			ID: o.ID, MachineID: o.MachineID, GPUName: o.GPUName, Geolocation: o.Geolocation,
-			NumGPUs: o.NumGPUs, Hourly: provider.Money(o.DphTotal*1e6 + 0.5),
-			Reliability: o.Reliability, InetDownMBps: o.InetDown, DiskBwMBps: o.DiskBw, CUDAMaxGood: o.CudaMaxGood,
+			ID: o.ID, MachineID: o.MachineID, GPUName: o.GPUName, Geolocation: o.Geolocation, NumGPUs: o.NumGPUs,
+			Hourly: provider.FromUSD(o.DphTotal), DphBase: provider.FromUSD(o.DphBase),
+			DownloadPerGB: provider.FromUSD(o.InetDownCost), UploadPerGB: provider.FromUSD(o.InetUpCost), StoragePerGBMonth: provider.FromUSD(o.StorageCost),
+			DiskSpaceGB: o.DiskSpace,
+			Reliability: o.Reliability, InetDownMbps: o.InetDown, DiskBwMBps: o.DiskBw, CUDAMaxGood: o.CudaMaxGood,
 		})
 	}
-	return provider.Select(out, f), nil
+	return provider.Filter(out, f), nil
 }
 
 type instanceDTO struct {
@@ -275,7 +282,7 @@ func (d instanceDTO) toInstance() provider.Instance {
 		ID: d.ID, Label: d.Label, StatusMsg: d.StatusMsg,
 		Status: provider.MapStatus(d.ActualStatus), RawStatus: d.ActualStatus,
 		MachineID: d.MachineID, PublicIP: d.PublicIP, SSHHost: d.SSHHost, SSHPort: d.SSHPort,
-		Hourly:    provider.Money(d.DphTotal*1e6 + 0.5),
+		Hourly:    provider.FromUSD(d.DphTotal),
 		StartedAt: time.Unix(int64(d.StartDate), 0),
 	}
 }
@@ -546,5 +553,5 @@ func (c *Client) Balance(ctx context.Context) (provider.Money, error) {
 	if decoded.Credit != nil {
 		amount = *decoded.Credit
 	}
-	return provider.Money(amount*1e6 + 0.5), nil
+	return provider.FromUSD(amount), nil
 }

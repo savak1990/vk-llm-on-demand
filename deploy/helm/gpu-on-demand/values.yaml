@@ -22,6 +22,7 @@ config:
       minCpuRamGB: 32
       minDiskGB: 60
       minReliability: 0.95
+      # megabits per second (Vast's inet_down), not megabytes
       minInetDownMBps: 500
       minDiskBwMBps: 500
       minCudaVersion: 12.8
@@ -37,6 +38,9 @@ config:
     startupTimeout: 15m
     safety:
       maxHourlyPriceUSD: 0.80
+      maxDownloadPriceUSDPerGB: 0.10
+      maxStoragePriceUSDPerGBMonth: 1.00
+      maxDiskGB: 200
       maxLifetime: 12h
       maxInstanceSpendUSD: 0
       maxProvisionAttemptsPerHour: 3
@@ -106,6 +110,8 @@ networkPolicy:
   enabled: false
   gatewayNamespace: envoy
   monitoringNamespace: monitoring
+  # Pinning this also blocks the controller's HEAD request to the model URL:
+  # every start then logs model_size_unknown and nothing is rented.
   vastApiCidrs: []
   apiServerCidrs: []
   sshPorts:

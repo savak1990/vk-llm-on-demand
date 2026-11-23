@@ -222,6 +222,9 @@ func (c *Controller) gateReason(state State, ev Event, doc store.Document, now t
 		if r := c.deps.Budget.Allow(doc, balance, known); r != "" {
 			return r
 		}
+		if offer && c.deps.Budget.Exhausted(doc, ev.Breakdown.DownloadUSD.USD()) {
+			return "budget_exhausted"
+		}
 	}
 	a := doc.AttemptsThisHour
 	if a.Hour == now.UTC().Format("2006-01-02T15") && a.Count >= c.deps.Config.MaxProvisionAttemptsPerHour {

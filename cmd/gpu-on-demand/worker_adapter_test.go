@@ -21,7 +21,7 @@ func testWorkerCfg() config.Worker {
 }
 
 func TestWorkerAdapterWorkerKeyDelegates(t *testing.T) {
-	a := newWorkerAdapter(testWorkerCfg(), 60, "qwen3.6-35b-a3b", 32768, worker.NewExporter())
+	a := newWorkerAdapter(testWorkerCfg(), "qwen3.6-35b-a3b", 32768, worker.NewExporter())
 	got := a.WorkerKey([]byte("seed"), "iid", 7)
 	want := worker.WorkerKey([]byte("seed"), "iid", 7)
 	if got != want {
@@ -30,9 +30,9 @@ func TestWorkerAdapterWorkerKeyDelegates(t *testing.T) {
 }
 
 func TestWorkerAdapterBuildCreateSetsOfferIDAndStaticFields(t *testing.T) {
-	a := newWorkerAdapter(testWorkerCfg(), 60, "qwen3.6-35b-a3b", 32768, worker.NewExporter())
+	a := newWorkerAdapter(testWorkerCfg(), "qwen3.6-35b-a3b", 32768, worker.NewExporter())
 	offer := provider.Offer{ID: 42, Hourly: 710000}
-	req := a.BuildCreate(offer, "vkllm:iid:7", "worker-key-xyz")
+	req := a.BuildCreate(offer, 60, "vkllm:iid:7", "worker-key-xyz")
 
 	if req.OfferID != 42 {
 		t.Errorf("OfferID = %d, want 42", req.OfferID)
@@ -52,7 +52,7 @@ func TestWorkerAdapterBuildCreateSetsOfferIDAndStaticFields(t *testing.T) {
 }
 
 func TestWorkerAdapterProbeMapsReadinessToProbeStatus(t *testing.T) {
-	a := newWorkerAdapter(testWorkerCfg(), 60, "qwen3.6-35b-a3b", 32768, worker.NewExporter())
+	a := newWorkerAdapter(testWorkerCfg(), "qwen3.6-35b-a3b", 32768, worker.NewExporter())
 	// No listener on this transport: every call reaches past dial and
 	// returns the http.Client's own connection-refused error, which
 	// worker.Client.Probe already treats as Unreachable (not a failure).
@@ -67,7 +67,7 @@ func TestWorkerAdapterProbeMapsReadinessToProbeStatus(t *testing.T) {
 
 func TestWorkerAdapterScrapeUpdatesExporterOnSuccessAndMarksDownOnFailure(t *testing.T) {
 	exp := worker.NewExporter()
-	a := newWorkerAdapter(testWorkerCfg(), 60, "qwen3.6-35b-a3b", 32768, exp)
+	a := newWorkerAdapter(testWorkerCfg(), "qwen3.6-35b-a3b", 32768, exp)
 	// Same no-listener transport: Metrics fails, Scrape must mark the
 	// exporter down and return the error rather than panic or hide it.
 	if err := a.Scrape(context.Background(), http.DefaultTransport); err == nil {

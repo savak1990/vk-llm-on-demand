@@ -371,10 +371,13 @@ synthetic spike).
   next. (R7)
 - AC21. Action: sum the provider balance deltas recorded by scenarios 1 and
   17. Expected: the delta is ≤ `VKLLM_E2E_BUDGET_USD`. (R6, C-1)
+- AC22. Compare `cost.estimatedInstanceUSD` at destroy with the Vast.ai
+  billing page for the same instance id; report the difference; above 10%
+  fails (CORE-210 R12).
 
 ## Definition of done
 
-- [ ] AC1–AC21 observed on one real run against the target installation.
+- [ ] AC1–AC22 observed on one real run against the target installation.
 - [ ] The Markdown report is in this spec's Evidence and appended to
       `docs/research.md` §7.
 - [ ] `docs/open-questions.md` rows this spec settles (if any) are updated.

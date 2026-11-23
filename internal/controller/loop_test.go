@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/offercost"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
@@ -169,7 +170,11 @@ func TestGenerationChangeResetsInFlightAndSuspect(t *testing.T) {
 	c.suspect = true
 	putDoc(t, c, func(d *store.Document) { d.Desired = store.DesiredRunning })
 
-	if err := c.processEvent(context.Background(), Event{Kind: EvOfferChosen, Offer: provider.Offer{ID: 11, MachineID: 42, Hourly: 600000}}); err != nil {
+	ev := Event{
+		Kind: EvOfferChosen, Offer: provider.Offer{ID: 11, MachineID: 42, Hourly: 600000},
+		Breakdown: offercost.Breakdown{DiskGB: 60}, Filter: provider.OfferFilter{MaxHourly: 800000},
+	}
+	if err := c.processEvent(context.Background(), ev); err != nil {
 		t.Fatalf("processEvent: %v", err)
 	}
 	if ev, ok := recvEvent(t, c); !ok || ev.Kind != EvCreated {

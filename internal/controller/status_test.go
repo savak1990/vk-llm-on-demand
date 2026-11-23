@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -46,6 +47,26 @@ func TestStatusNeverCallsProvider(t *testing.T) {
 	_ = c.Status()
 	if prov.Calls("get")+prov.Calls("list")+prov.Calls("search")+prov.Calls("create")+prov.Calls("destroy") != 0 {
 		t.Fatal("Status must never call the provider")
+	}
+}
+
+func TestSplitSpendDividesTimeCostByPriceRatio(t *testing.T) {
+	e := store.LedgerEntry{DPH: 0.6, FixedUSD: 1.14, EstUSD: 1.14 + 0.3}
+	gpu, storage, dl := splitSpend(e, &store.OfferPrices{GPUUSDPerHour: 0.56})
+	if math.Abs(gpu-0.28) > 1e-9 || math.Abs(storage-0.02) > 1e-9 || dl != 1.14 {
+		t.Fatalf("split = %v %v %v, want 0.28 0.02 1.14", gpu, storage, dl)
+	}
+	gpu, storage, _ = splitSpend(e, nil)
+	if math.Abs(gpu-0.3) > 1e-9 || storage != 0 {
+		t.Fatalf("legacy split = %v %v, want all time cost on GPU", gpu, storage)
+	}
+}
+
+func TestSplitSpendSumsToEstUSD(t *testing.T) {
+	e := store.LedgerEntry{DPH: 0.6156, FixedUSD: 1.14, EstUSD: 1.14 + 0.25}
+	gpu, storage, dl := splitSpend(e, &store.OfferPrices{GPUUSDPerHour: 0.56})
+	if math.Abs(gpu+storage+dl-e.EstUSD) > 1e-9 {
+		t.Fatalf("gpu+storage+dl = %v, want %v", gpu+storage+dl, e.EstUSD)
 	}
 }
 

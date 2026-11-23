@@ -79,7 +79,7 @@ func TestSearchFixture(t *testing.T) { // AC1-style: price cap and denylist appl
 	c := fakeclock.New(time.Unix(0, 0))
 	cl, _ := newTestClient(t, srv, c)
 
-	f := provider.OfferFilter{MaxHourly: 800000, ExcludeMachineIDs: []int64{300}}
+	f := provider.OfferFilter{MaxHourly: 800000, MaxDownloadPerGB: 100000, MaxStoragePerGBMonth: 1000000, MinDiskGB: 60, ExcludeMachineIDs: []int64{300}}
 	offers, err := cl.SearchOffers(context.Background(), f)
 	if err != nil {
 		t.Fatalf("SearchOffers: %v", err)
@@ -87,8 +87,13 @@ func TestSearchFixture(t *testing.T) { // AC1-style: price cap and denylist appl
 	if len(offers) != 1 {
 		t.Fatalf("len(offers) = %d, want 1 (price cap and denylist applied): %+v", len(offers), offers)
 	}
-	if offers[0].ID != 1 || offers[0].MachineID != 100 {
-		t.Fatalf("unexpected offer: %+v", offers[0])
+	o := offers[0]
+	if o.ID != 1 || o.MachineID != 100 {
+		t.Fatalf("unexpected offer: %+v", o)
+	}
+	if o.Hourly != 750000 || o.DphBase != 740000 || o.DownloadPerGB != 39063 || o.UploadPerGB != 39063 ||
+		o.StoragePerGBMonth != 200000 || o.DiskSpaceGB != 120.5 || o.InetDownMbps != 900 {
+		t.Fatalf("decoded prices: %+v", o)
 	}
 }
 

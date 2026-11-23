@@ -3,32 +3,83 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/offercost"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
 
-// dispatchSearch is saga step 1.
+var (
+	errOfferOutsideFilter = errors.New("controller: offer above a price cap or below the disk size")
+	errDiskBelowModel     = errors.New("controller: disk below the model's need")
+)
+
+// dispatchSearch is saga step 1: size the model, size the disk, search,
+// then rank by estimated session cost.
 func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
-	offers, err := c.deps.Provider.SearchOffers(ctx, e.filter)
+	cfg := c.deps.Config
+	bytes, err := c.deps.ModelSize.Bytes(ctx, c.deps.ModelURL)
+	if err != nil {
+		c.warn("controller: offer search skipped", "reason", "model_size_unknown", "err", err)
+		c.postEvent(Event{Kind: EvNoOffer, Err: err, Reason: "provider_error"})
+		return
+	}
+	disk := offercost.DiskGB(bytes, cfg.ProviderFilter.MinDiskGB)
+	if disk > cfg.MaxDiskGB {
+		c.warn("controller: offer search skipped", "reason", "model_too_large", "diskGB", disk, "maxDiskGB", cfg.MaxDiskGB)
+		c.postEvent(Event{Kind: EvNoOffer, Reason: "no_offer"})
+		return
+	}
+	f := e.filter
+	f.MinDiskGB = disk
+	offers, err := c.deps.Provider.SearchOffers(ctx, f)
 	if err != nil {
 		c.postEvent(Event{Kind: EvNoOffer, Err: err, Reason: "provider_error"})
 		return
 	}
-	if len(offers) == 0 {
+	ranked := offercost.Rank(offers, offercost.Inputs{ModelBytes: bytes, Horizon: horizon(cfg), DiskGB: disk})
+	if cfg.MaxInstanceSpendUSD > 0 {
+		ranked = slices.DeleteFunc(ranked, func(r offercost.Ranked) bool {
+			return r.Breakdown.DownloadUSD.USD() >= cfg.MaxInstanceSpendUSD
+		})
+	}
+	if len(ranked) == 0 {
 		c.postEvent(Event{Kind: EvNoOffer, Reason: "no_offer"})
 		return
 	}
-	c.postEvent(Event{Kind: EvOfferChosen, Offer: offers[0]})
+	c.postEvent(Event{Kind: EvOfferChosen, Offer: ranked[0].Offer, Breakdown: ranked[0].Breakdown, Filter: f})
 }
 
-// Price is asserted before the provider call so an over-cap offer never reaches it.
+func horizon(cfg config.Controller) time.Duration {
+	if cfg.IdleShutdownEnabled {
+		return cfg.IdleShutdownTimeout
+	}
+	return cfg.MaxLifetime
+}
+
+func (c *Controller) warn(msg string, args ...any) {
+	if c.deps.Log != nil {
+		c.deps.Log.Warn(msg, args...)
+	}
+}
+
+// Price and filter are asserted before the provider call so an over-cap offer never reaches it.
 func dispatchCreate(ctx context.Context, c *Controller, e effCreate) {
 	if err := c.deps.Budget.AssertPrice(e.offer.Hourly.USD(), c.deps.Config.MaxHourlyPriceUSD); err != nil {
 		c.postEvent(Event{Kind: EvCreateFailed, Gen: e.gen, Err: err, Class: provider.Fatal})
+		return
+	}
+	if !provider.Admit(e.offer, e.filter) {
+		c.postEvent(Event{Kind: EvCreateFailed, Gen: e.gen, Err: errOfferOutsideFilter, Class: provider.Fatal})
+		return
+	}
+	if e.breakdown.DiskGB <= 0 || e.breakdown.DiskGB < e.filter.MinDiskGB {
+		c.postEvent(Event{Kind: EvCreateFailed, Gen: e.gen, Err: errDiskBelowModel, Class: provider.Fatal})
 		return
 	}
 	seed, err := c.deps.WorkerSeed()
@@ -37,7 +88,7 @@ func dispatchCreate(ctx context.Context, c *Controller, e effCreate) {
 		return
 	}
 	key := c.deps.Worker.WorkerKey(seed, c.deps.InstallationID, e.gen)
-	req := c.deps.Worker.BuildCreate(e.offer, e.label, key)
+	req := c.deps.Worker.BuildCreate(e.offer, e.breakdown.DiskGB, e.label, key)
 	id, err := c.deps.Provider.CreateInstance(ctx, req)
 	if err != nil {
 		class := provider.Retryable

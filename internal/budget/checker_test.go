@@ -94,7 +94,7 @@ func TestClosedEntryCountsTowardMonthlyCap(t *testing.T) {
 	c := New(Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.80})
 	t0 := time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
 	doc := store.Document{Ledger: store.Ledger{Month: "2026-11"}}
-	c.OpenEntry(&doc, t0, 1, 0.80)
+	c.OpenEntry(&doc, t0, 1, 0.80, 0)
 	c.CloseEntry(&doc, t0.Add(40*time.Hour), 1)
 	if r := c.Allow(doc, provider.Money(100_000_000), true); r != "budget_exhausted" {
 		t.Fatalf("Allow after $32 closed spend = %q, want budget_exhausted", r)

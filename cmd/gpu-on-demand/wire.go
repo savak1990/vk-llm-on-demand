@@ -15,6 +15,7 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 	"github.com/savak1990/vk-llm-on-demand/internal/gateway"
 	"github.com/savak1990/vk-llm-on-demand/internal/mgmt"
+	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
@@ -30,6 +31,7 @@ type wireDeps struct {
 	Provider       provider.Provider
 	Store          store.Store
 	Dialer         tunnel.Dialer
+	ModelSize      modelsize.Resolver
 	Keys           *auth.Keys
 	Seed           *gateway.WorkerSeed    // gateway.Deps needs the *WorkerSeed itself
 	WorkerSeedFunc func() ([]byte, error) // controller.Deps needs only the current bytes
@@ -58,7 +60,7 @@ func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, e
 	}
 
 	exp := worker.NewExporter()
-	w := newWorkerAdapter(d.Worker, d.Controller.ProviderFilter.MinDiskGB, d.ModelAlias, d.Mgmt.ModelContextSize, exp)
+	w := newWorkerAdapter(d.Worker, d.ModelAlias, d.Mgmt.ModelContextSize, exp)
 	controller.RegisterMetrics(d.Reg)
 	store.RegisterMetrics(d.Reg)
 	d.Reg.MustRegister(exp)
@@ -68,6 +70,7 @@ func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, e
 		Provider: d.Provider, Store: d.Store, Dialer: d.Dialer, Clock: d.Clock,
 		Budget: b, Worker: w, WorkerSeed: d.WorkerSeedFunc,
 		InstallationID: d.InstallationID, ModelAlias: d.ModelAlias,
+		ModelSize: d.ModelSize, ModelURL: d.Worker.ModelURL,
 		Config: d.Controller, Reg: d.Reg, Log: d.Log,
 	})
 	if err != nil {
