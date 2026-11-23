@@ -1,6 +1,6 @@
 ---
 id: "CORE-220"
-status: "READY"
+status: "IN_PROGRESS"
 updated: "2026-11-23"
 depends_on: ["CORE-050", "CORE-055", "CORE-060", "CORE-070", "CORE-100", "CORE-130"]
 adrs: ["0018", "0007", "0010", "0011", "0012", "0006"]

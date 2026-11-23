@@ -30,6 +30,8 @@ type Controller struct {
 	MaxLifetime                  time.Duration
 	MaxInstanceSpendUSD          float64
 	MaxProvisionAttemptsPerHour  int
+	DemandGrace                  time.Duration
+	ModelSizeBytes               int64
 
 	ReconcileInterval time.Duration
 
@@ -149,6 +151,15 @@ func LoadController() (Controller, error) {
 		return Controller{}, fmt.Errorf("config: VKLLM_TUNNEL_DIALER must be ssh or direct, got %q", c.TunnelDialer)
 	}
 	c.TunnelDirectAddr = envString("VKLLM_TUNNEL_DIRECT_ADDR", "")
+
+	if c.DemandGrace, err = envDuration("VKLLM_ONDEMAND_DEMAND_GRACE", 60*time.Second); err != nil {
+		return Controller{}, err
+	}
+	size, err := envInt("VKLLM_MODEL_SIZE_BYTES", 0)
+	if err != nil {
+		return Controller{}, err
+	}
+	c.ModelSizeBytes = int64(size)
 
 	return c, nil
 }

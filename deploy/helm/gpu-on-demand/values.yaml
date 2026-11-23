@@ -54,6 +54,13 @@ config:
     maxBodyBytes: 1048576
     maxTokensCap: 8192
     rateLimitPerKeyRPM: 60
+  onDemand:
+    maxWait: 600s
+    maxPending: 32
+    heartbeatInterval: 15s
+    tickerInterval: 30s
+    demandGrace: 60s
+    tickerPhrases: []
   mgmt:
     rateLimitPerKeyRPM: 60
   tunnel:
@@ -68,6 +75,7 @@ config:
     alias: qwen3.6-35b-a3b
     url: ""
     sha256: ""
+    sizeBytes: 0
     contextSize: 32768
     parallel: 1
     generationTimeout: 10m

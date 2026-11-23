@@ -102,6 +102,12 @@ VKLLM_CONTROLLER_RECONCILE_INTERVAL: {{ .Values.config.controller.reconcileInter
 VKLLM_GATEWAY_MAX_BODY_BYTES: {{ .Values.config.gateway.maxBodyBytes | int64 | quote }}
 VKLLM_GATEWAY_MAX_TOKENS_CAP: {{ .Values.config.gateway.maxTokensCap | int64 | quote }}
 VKLLM_GATEWAY_RATE_LIMIT_PER_KEY_RPM: {{ .Values.config.gateway.rateLimitPerKeyRPM | int64 | quote }}
+VKLLM_ONDEMAND_MAX_WAIT: {{ .Values.config.onDemand.maxWait | quote }}
+VKLLM_ONDEMAND_MAX_PENDING: {{ .Values.config.onDemand.maxPending | int64 | quote }}
+VKLLM_ONDEMAND_HEARTBEAT_INTERVAL: {{ .Values.config.onDemand.heartbeatInterval | quote }}
+VKLLM_ONDEMAND_TICKER_INTERVAL: {{ .Values.config.onDemand.tickerInterval | quote }}
+VKLLM_ONDEMAND_DEMAND_GRACE: {{ .Values.config.onDemand.demandGrace | quote }}
+VKLLM_ONDEMAND_TICKER_PHRASES: {{ join "\n" .Values.config.onDemand.tickerPhrases | quote }}
 VKLLM_MGMT_RATE_LIMIT_RPM: {{ .Values.config.mgmt.rateLimitPerKeyRPM | int64 | quote }}
 VKLLM_TUNNEL_DIALER: {{ .Values.config.tunnel.dialer | quote }}
 VKLLM_TUNNEL_DIRECT_ADDR: {{ .Values.config.tunnel.directAddr | quote }}
@@ -112,6 +118,7 @@ VKLLM_AUTH_WORKER_SEED_FILE: {{ .Values.config.auth.workerSeedFile | quote }}
 VKLLM_MODEL_ALIAS: {{ .Values.config.model.alias | quote }}
 VKLLM_MODEL_URL: {{ required "config.model.url is required: no production value is pinned anywhere yet" .Values.config.model.url | quote }}
 VKLLM_MODEL_SHA256: {{ required "config.model.sha256 is required: no production value is pinned anywhere yet" .Values.config.model.sha256 | quote }}
+VKLLM_MODEL_SIZE_BYTES: {{ .Values.config.model.sizeBytes | int64 | quote }}
 VKLLM_MODEL_CONTEXT_SIZE: {{ .Values.config.model.contextSize | int64 | quote }}
 VKLLM_MODEL_PARALLEL: {{ .Values.config.model.parallel | int64 | quote }}
 VKLLM_MODEL_GENERATION_TIMEOUT: {{ .Values.config.model.generationTimeout | quote }}

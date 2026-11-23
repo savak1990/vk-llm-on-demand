@@ -179,7 +179,7 @@ type Controller struct {
 // New validates the configuration and builds a Controller; it does not
 // start the loop (Run does) or touch the provider or the store.
 func New(d Deps) (*Controller, error) {
-	if d.Config.ProvisioningMode != "explicit" {
+	if d.Config.ProvisioningMode != "explicit" && d.Config.ProvisioningMode != "on-demand" {
 		return nil, fmt.Errorf("controller: provisioningMode %q not supported", d.Config.ProvisioningMode)
 	}
 	if d.ModelSize == nil || d.ModelURL == "" {
