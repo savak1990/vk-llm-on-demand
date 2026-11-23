@@ -106,7 +106,17 @@ func wrapSSHClient(client *ssh.Client, hostKey string, interval time.Duration, m
 		return closeErr
 	}
 	go keepaliveLoop(client, closer, closed, interval, maxMisses)
-	return NewConn(transport, closer, hostKey)
+	exec := func(ctx context.Context, cmd string) ([]byte, error) {
+		s, err := client.NewSession()
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = s.Close() }()
+		stop := context.AfterFunc(ctx, func() { _ = s.Close() })
+		defer stop()
+		return s.Output(cmd)
+	}
+	return NewConnWithExec(transport, closer, hostKey, exec)
 }
 
 func keepaliveLoop(client *ssh.Client, closeFn func() error, closed <-chan struct{}, interval time.Duration, maxMisses int) {

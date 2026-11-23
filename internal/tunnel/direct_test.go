@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -98,5 +99,15 @@ func TestDirectCloseIsSafeConcurrentlyAndTwice(t *testing.T) {
 
 	if err := conn.Close(); err != nil {
 		t.Fatalf("Close() again: %v, want nil", err)
+	}
+}
+
+func TestDirectExecUnsupported(t *testing.T) {
+	conn, err := NewDirect(startEchoHTTPServer(t)).Dial(context.Background(), Instance{})
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	if _, err := conn.Exec(context.Background(), "true"); !errors.Is(err, ErrExecUnsupported) {
+		t.Fatalf("err = %v, want ErrExecUnsupported", err)
 	}
 }

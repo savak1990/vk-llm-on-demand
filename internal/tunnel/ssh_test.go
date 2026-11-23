@@ -258,3 +258,21 @@ func TestSSHDialHandshakeStallDoesNotHangOrLeak(t *testing.T) {
 		t.Fatal("listener never accepted a connection")
 	}
 }
+
+func TestSSHExec(t *testing.T) {
+	backend := startEchoHTTPServer(t)
+	addr, _ := startTestSSHServer(t, backend, globalRequestAck)
+	host, port, _ := splitHostPortForTest(t, addr)
+	conn, err := NewSSH(testSSHKey(t)).Dial(context.Background(), Instance{Host: host, Port: port})
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	out, err := conn.Exec(context.Background(), "echo hi")
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if string(out) != "exec:echo hi" {
+		t.Fatalf("out = %q", out)
+	}
+}
