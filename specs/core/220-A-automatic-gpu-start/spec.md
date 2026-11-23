@@ -2,8 +2,8 @@
 id: "CORE-220"
 status: "IN_PROGRESS"
 updated: "2026-11-23"
-depends_on: ["CORE-050", "CORE-055", "CORE-060", "CORE-070", "CORE-100", "CORE-130"]
-adrs: ["0019", "0007", "0010", "0011", "0012", "0006"]
+depends_on: ["CORE-050", "CORE-055", "CORE-060", "CORE-070", "CORE-100", "CORE-130", "CORE-210"]
+adrs: ["0019", "0007", "0010", "0011", "0012", "0006", "0018"]
 ---
 
 # 220 — Automatic GPU start from a chat client
