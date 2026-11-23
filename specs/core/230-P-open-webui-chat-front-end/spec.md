@@ -10,8 +10,10 @@ adrs: ["0009", "0010", "0012", "0020"]
 
 **Status note:** READY. Design agreed with the user on 2026-11-22/23 and
 re-checked on 2026-11-23 (authorization, hosting, features, logs, limits,
-acceptance). Not implemented. Like CORE-130, the spec lives here and most
-changes are a pull request against `vk-lab-platform`.
+acceptance). Not implemented. Like CORE-130, the spec lives here. The chat
+app itself is this repository's `chat/` chart (ADR 0020); the pull request
+against `vk-lab-platform` adds the shared services: secrets, database,
+namespace, AppProject and pointer `vk-llm-chat`, traffic policies.
 
 **Complexity:** M — one upstream chart, one small Deployment, one new
 database, five secrets, two repositories.
@@ -261,7 +263,8 @@ deployed only after that session confirms room on the cluster.
   search-query generation and web search MUST be on.
 - R11. The gateway's output cap MUST be 16384 tokens.
 - R12. The platform's render check and aws golden MUST include the new
-  objects.
+  platform objects (namespace, ExternalSecrets, AppProject, pointer,
+  traffic policies).
 - R13. Both chat routes MUST carry a 1200 s request timeout; only the login
   route (`/api/v1/auths/`) MUST carry a 20 req/s local rate limit.
 - R14. File uploads and per-user API keys MUST be off.
@@ -283,17 +286,17 @@ deployed only after that session confirms room on the cluster.
    1 to change in `rolesanywhere`.
 3. Same PR: `cnpg-system` ExternalSecret and managed role, `Database` CR.
    Check: render check green.
-4. Platform PR: namespace `chat` and ExternalSecret, `client-keys`
-   template, `openwebui` database, AppProject and pointer `vk-llm-chat`,
-   traffic policies. Check: render check green, golden updated; the
-   rendered `vk-llm-api-token` keeps `management-tokens` and
-   `worker-seed`.
+4. Same PR: namespace `chat` and ExternalSecret, `client-keys` template,
+   AppProject and pointer `vk-llm-chat`, traffic policies. Check: render
+   check green, golden updated; the rendered `vk-llm-api-token` keeps
+   `management-tokens` and `worker-seed`.
 5. This repository: `chat/` chart, ADR 0020 (merged before the platform
    PR).
 6. This repository: `maxTokensCap` 16384, `rateLimitPerKeyRPM` 100,
    requirements §13. Check: `make gitops-check specs-check`.
 7. Wait for HETZ-176's confirmation of room on the cluster.
-8. Operator: apply `persistent-up` and `bootstrap-up`, merge both PRs.
+8. Operator: apply `persistent-up` and `bootstrap-up`; merge this
+   repository's PR, then the platform PR.
 9. Acceptance without the GPU: AC1, AC2 (browser), AC5, AC6, AC8, AC10.
 10. One GPU session of 60 minutes or less (`vk-llm start` … `vk-llm stop`,
    cost at most $0.80): AC2 (Conduit), AC3, AC4, AC7, AC9, AC11. Paste the
@@ -317,9 +320,9 @@ deployed only after that session confirms room on the cluster.
   chat is still present. (R2)
 - AC7. A request without `max_tokens` is clamped to 16384 (gateway log
   `max_tokens_clamped`). (R11)
-- AC8. Argo shows the new Application `vk-llm-chat` `Synced`/`Healthy`; the render check
-  passes; `vk-llm status` still works with the management token. (R1, R12,
-  R17)
+- AC8. Argo shows the new Application `vk-llm-chat` `Synced`/`Healthy`; the
+  render check passes; `vk-llm status` still works with the management
+  token. (R1, R12, R17)
 - AC9. After a chat that contains a unique word, a Loki query for that word
   over the `chat` and `llm` namespaces returns no lines. (R15)
 - AC10. The upload control is absent or refused; the settings page offers
