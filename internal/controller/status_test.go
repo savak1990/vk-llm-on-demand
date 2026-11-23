@@ -62,6 +62,14 @@ func TestSplitSpendDividesTimeCostByPriceRatio(t *testing.T) {
 	}
 }
 
+func TestSplitSpendSumsToEstUSD(t *testing.T) {
+	e := store.LedgerEntry{DPH: 0.6156, FixedUSD: 1.14, EstUSD: 1.14 + 0.25}
+	gpu, storage, dl := splitSpend(e, &store.OfferPrices{GPUUSDPerHour: 0.56})
+	if math.Abs(gpu+storage+dl-e.EstUSD) > 1e-9 {
+		t.Fatalf("gpu+storage+dl = %v, want %v", gpu+storage+dl, e.EstUSD)
+	}
+}
+
 func TestStatusProviderBalanceUnknownUntilFirstRead(t *testing.T) {
 	c, _, _, _, _ := newTestController(t)
 	c.balanceMu.Lock()

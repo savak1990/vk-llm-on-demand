@@ -141,3 +141,22 @@ func TestLoadControllerRejectsBadCostCaps(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadControllerRejectsBadDiskCaps(t *testing.T) {
+	const minKey, maxKey = "VKLLM_PROVIDER_FILTER_MIN_DISK_GB", "VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB"
+	for name, env := range map[string]map[string]string{
+		"min=0,max=0":  {minKey: "0", maxKey: "0"},
+		"min=0,max=-5": {minKey: "0", maxKey: "-5"},
+		"min=-1":       {minKey: "-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			clearControllerEnv(t)
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			if _, err := LoadController(); err == nil {
+				t.Fatalf("LoadController accepted %v", env)
+			}
+		})
+	}
+}

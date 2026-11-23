@@ -74,6 +74,9 @@ func LoadController() (Controller, error) {
 	if c.ProviderFilter.MinDiskGB, err = envInt("VKLLM_PROVIDER_FILTER_MIN_DISK_GB", 60); err != nil {
 		return Controller{}, err
 	}
+	if c.ProviderFilter.MinDiskGB < 0 {
+		return Controller{}, fmt.Errorf("config: VKLLM_PROVIDER_FILTER_MIN_DISK_GB must be >= 0, got %d", c.ProviderFilter.MinDiskGB)
+	}
 	if c.ProviderFilter.MinReliability, err = envFloat("VKLLM_PROVIDER_FILTER_MIN_RELIABILITY", 0.95); err != nil {
 		return Controller{}, err
 	}
@@ -114,6 +117,9 @@ func LoadController() (Controller, error) {
 	}
 	if c.MaxDiskGB, err = envInt("VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB", 200); err != nil {
 		return Controller{}, err
+	}
+	if c.MaxDiskGB < 1 {
+		return Controller{}, fmt.Errorf("config: VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB must be >= 1, got %d", c.MaxDiskGB)
 	}
 	if !positiveFinite(c.MaxDownloadPriceUSDPerGB) {
 		return Controller{}, fmt.Errorf("config: VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB must be a positive finite number, got %v", c.MaxDownloadPriceUSDPerGB)
