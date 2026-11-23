@@ -287,6 +287,9 @@ and are set by the chart under `config.*`.
 | `lifecycle.startupTimeout` | 15m | create → READY |
 | `lifecycle.safety.maxInstances` | 1 | |
 | `lifecycle.safety.maxHourlyPriceUSD` | 0.80 | |
+| `lifecycle.safety.maxDownloadPriceUSDPerGB` | 0.10 | ADR 0017 |
+| `lifecycle.safety.maxStoragePriceUSDPerGBMonth` | 1.00 | ADR 0017 |
+| `lifecycle.safety.maxDiskGB` | 200 | ADR 0017 |
 | `lifecycle.safety.maxLifetime` | 12h | safeguard, not the idle rule |
 | `lifecycle.safety.maxInstanceSpendUSD` | 0 | 0 = off |
 | `lifecycle.safety.maxProvisionAttemptsPerHour` | 3 | |

@@ -145,6 +145,10 @@ follow the same path, as parameters of `POST /api/v1/gpu/start` and of
 6. The budget balance floor reads its own copy of the max hourly price.
 7. The worker adapter's panic path must become an error once input is no
    longer validated at boot.
+8. CORE-210 resolves the model size at runtime per URL and sizes the disk
+   from it; a per-start model only changes those inputs. A per-start price
+   cap can only lower the Helm caps (`maxHourlyPriceUSD`,
+   `maxDownloadPriceUSDPerGB`, `maxStoragePriceUSDPerGBMonth`).
 
 ## Out of scope for this spec
 

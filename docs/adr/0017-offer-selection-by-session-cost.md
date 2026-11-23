@@ -2,8 +2,8 @@
 
 ## Status
 
-Proposed (2026-11-22). Amends CORE-100's cost model and ADR 0005's
-"bandwidth is cents" assumption. Implemented by CORE-210.
+Accepted (2026-11-23). Proposed 2026-11-22. Amends CORE-100's cost model
+and ADR 0005's "bandwidth is cents" assumption. Implemented by CORE-210.
 
 ## Context
 

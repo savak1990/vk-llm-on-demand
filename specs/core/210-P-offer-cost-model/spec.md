@@ -1,7 +1,7 @@
 ---
 id: "CORE-210"
 status: "READY"
-updated: "2026-11-22"
+updated: "2026-11-23"
 depends_on: ["CORE-020", "CORE-050", "CORE-070", "CORE-100"]
 adrs: ["0017", "0004", "0005", "0011", "0014", "0015"]
 ---
@@ -85,8 +85,9 @@ and the monthly budget counts the download from the moment of create.
 
 In this repository:
 
-- `internal/offercost/` (new, pure) — `Inputs`, `Breakdown`, `Estimate`,
-  `Rank`, `DiskGB`.
+- `internal/offercost/` (new, pure) — `Inputs`, `Breakdown`, `Rank`,
+  `DiskGB`; `estimate` is internal, `Rank` is its only caller and holds
+  the `inet_down <= 0` guard.
 - `internal/modelsize/` (new) — `Resolver` interface, HTTP implementation,
   in-memory cache.
 - `internal/provider/provider.go`, `select.go` — new `Offer` and
@@ -203,7 +204,8 @@ The HTTP implementation sends `HEAD` without following redirects and reads
 `x-linked-size` (Hugging Face sets it on the 302; spec 030 recorded it). If
 the header is absent, it follows redirects and reads `Content-Length`. The
 timeout is 10 s. Only a success is cached, keyed by URL, for the process
-life. A missing or non-positive size is an error.
+life. A missing or non-positive size is an error: no implementation in the
+package, including `Fixed`, returns a non-positive size with a nil error.
 
 Network policy: the default egress rule already allows public 443. An
 operator who pins `networkPolicy.vastApiCidrs` blocks Hugging Face; every
@@ -313,6 +315,10 @@ counted." The CLI prints the lines in Outcome.
   (`: >"$M"` first). Peak disk is about 1.13 × the model. A failed append
   leaves a short file, and the existing checksum step fails it with
   `fail_checksum`, so a bad file is never served.
+- Before a download attempt, a stale `/models/model.gguf` (and its
+  `.aria2` control file) is deleted so a retry never leaves a partial
+  file doubling disk use; the curl fallback deletes a partial model file
+  before re-downloading parts for the same reason.
 
 ### Interactions
 
@@ -339,7 +345,9 @@ counted." The CLI prints the lines in Outcome.
   be created, so `dph_total` includes storage. (source: probe)
 - R5. The ledger MUST count the estimated download as a fixed amount from
   the moment of create; `estimatedInstanceUSD`, month-to-date spend and
-  `maxInstanceSpendUSD` MUST include it. (source: CORE-100; user decision)
+  `maxInstanceSpendUSD` MUST include it. The admission gate MUST refuse an
+  offer whose download alone would reach the cap. (source: CORE-100; user
+  decision)
 - R6. `Instance.Offer` MUST record the four prices and the selection
   estimate; the status and cost documents MUST expose them as structured
   JSON. (source: ADR 0004; user decision)
@@ -362,7 +370,7 @@ counted." The CLI prints the lines in Outcome.
 
 ## Implementation steps
 
-1. `internal/offercost`: types, `Estimate`, `DiskGB`, `Rank`.
+1. `internal/offercost`: types, `estimate` (internal), `DiskGB`, `Rank`.
    Check: table tests with the probe offers and the two billed runs.
 2. `internal/modelsize`: resolver and cache. Check: `httptest` cases.
 3. Provider: `Offer`/`OfferFilter` fields, `Filter`, filter body, DTO,
@@ -409,16 +417,20 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
   append-and-delete fallback.
 - AC14. Existing controller sim tests pass unchanged (fake offers have
   download cost 0).
+- AC15. The admission gate returns `budget_exhausted` for an offer whose
+  `DownloadUSD` plus month-to-date spend reaches the cap.
 
 ## Definition of done
 
-- [ ] AC1–AC14 pass (tier 1/2).
+- [x] AC1–AC15 pass (tier 1/2).
 - [ ] `make specs-check go-build go-test go-lint helm-lint helm-template`
-      all exit 0.
-- [ ] ADR 0017 flipped to Accepted in the same PR.
-- [ ] Amendments to spec 100, ADR 0005, specs 140, 180, 200 merged.
+      all exit 0. **Not yet:** `go-lint` fails on `internal/modelsize`
+      (`bodyclose` ×2, `revive` ×1); every other target is 0. See
+      Evidence.
+- [x] ADR 0017 flipped to Accepted in the same PR.
+- [x] Amendments to spec 100, ADR 0005, specs 140, 180, 200 merged.
 - [ ] Status flipped to DONE; folder renamed `210-D-...`.
-- [ ] Evidence section filled.
+- [x] Evidence section filled.
 
 ## Open questions
 
@@ -439,3 +451,33 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
   - machine 40508: `dph_base` 0.56, `dph_total` 0.6156 at 60 GB,
     `storage_cost` 0.6667, `inet_down` 889.4, `inet_down_cost` 0.0390625.
   - `inet_down` across the sample: 416.0 to 3527.4.
+
+**Commits, `git log --oneline origin/main..HEAD`:**
+
+```
+be520eb worker: clean stale model before downloading to prevent double-disk usage
+f55e3f0 worker: skip a verified model on disk; reassemble parts without twice the disk
+c8f4604 status, cost, CLI: show recorded prices, the cost breakdown and the selection estimate
+b8e06dc controller: size the model and disk, rank offers by session cost, record the estimate
+25193fd store, budget: record offer prices and estimate; charge a fixed download amount at open
+76747ad config: hard caps on download price, storage price and disk size
+4711f3e modelsize: reject Fixed with non-positive size
+ea9efc8 modelsize: resolve a model file's size by HTTP HEAD, cached per URL
+dd6936a offercost: unexport Estimate, add discriminating rank test
+560112d offercost: estimate session cost per offer and rank by it
+6511d1f provider: offer price fields, Admit/Filter without ranking, inet_down in Mbps
+dbbee38 CORE-210: Breakdown carries model size and horizon
+24e2dae CORE-210: align search reasons and cap check with the existing event paths
+72538d0 CORE-210: design — rank offers by estimated session cost
+```
+
+**Validation, 2026-11-23 (Task 9):**
+
+| Target | Result |
+|---|---|
+| `make specs-check` | 0 |
+| `make go-build` | 0 |
+| `make go-test` | 0 (all packages `ok`, including `internal/offercost`, `internal/modelsize`, `internal/controller`, `internal/worker`) |
+| `make go-lint` | **1** — `bodyclose` on `internal/modelsize/modelsize.go:54` and `:60` (the `HEAD` response body is not closed on both the no-redirect and the follow-redirect paths); `revive` unused-parameter on `internal/modelsize/modelsize_test.go:19`. Introduced in `ea9efc8`; not fixed in this commit. |
+| `make helm-lint` | 0 |
+| `make helm-template` | 0 |

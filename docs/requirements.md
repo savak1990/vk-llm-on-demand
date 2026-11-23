@@ -27,7 +27,7 @@ release; P2 and P3 are future.
 | Id | Requirement | Acceptance criterion | Spec | Tag |
 |---|---|---|---|---|
 | FR-2.1 | `POST /api/v1/gpu/start` provisions exactly one instance and is idempotent | 50 concurrent starts → one `CreateInstance`; repeats return 200/202 with the current state | 050, 055 | — |
-| FR-2.2 | Offers are filtered by price, GPU, CPU, RAM, disk, reliability, bandwidth, CUDA version and optional region, ordered by price | Table test with recorded offers; nothing above `maxHourlyPriceUSD` is chosen | 020 | V |
+| FR-2.2 | Offers are filtered by price, GPU, CPU, RAM, disk, reliability, bandwidth, CUDA version and optional region, ordered by estimated session cost (ADR 0017) | Table test with recorded offers; nothing above `maxHourlyPriceUSD` is chosen | 020 | V |
 | FR-2.3 | Cold start to READY on a passing host is under 8 minutes | Measured in the spike and the acceptance run, per stage | 030, 140 | A |
 | FR-2.4 | Each cold-start stage is timed and exported | `vkllm_coldstart_stage_seconds` has all eight stages after one cold start | 050, 090 | — |
 | FR-2.5 | Start returns promptly; readiness is observed by polling status | start p99 < 200 ms; status reflects each public state in order | 055, 150 | — |
@@ -79,7 +79,7 @@ release; P2 and P3 are future.
 
 | Id | Requirement | Acceptance criterion | Spec | Tag |
 |---|---|---|---|---|
-| FR-6.1 | No offer above `maxHourlyPriceUSD` (0.80) is ever created | Unit test; acceptance run log shows chosen price | 020, 100 | — |
+| FR-6.1 | No offer above `maxHourlyPriceUSD` (0.80), `maxDownloadPriceUSDPerGB` (0.10) or `maxStoragePriceUSDPerGBMonth` (1.00) is ever created | Unit test; acceptance run log shows chosen price | 020, 100 | — |
 | FR-6.2 | At most `maxInstances` (1) instances with our label exist | Reconcile destroys extras; simulation | 050 | — |
 | FR-6.3 | Month-to-date estimated spend ≥ `budget.monthlyUSD` (30) stops new provisioning and drains the running instance | Simulation with ledger | 100 | — |
 | FR-6.4 | At `budget.warnFraction` a metric and an alert fire | `vkllm_budget_used_ratio` ≥ 0.8 triggers rule | 090, 100 | — |

@@ -164,6 +164,11 @@ The handler is `CORE-055`'s; this package supplies `estimatedInstanceUSD` (open 
 
 **Worked arithmetic** (`budget.monthlyUSD=30`, `lifecycle.safety.maxHourlyPriceUSD=0.80`, `lifecycle.idleShutdown.timeout=30m`): `$30 ÷ $0.80/h ≈ 37.5 h` of continuous max-price GPU time per month before the cap stops provisioning (~1.25 h/day evenly, ignoring the undercount above). One idle-timeout cycle with zero useful serving costs exactly `0.80 × (30/60) = $0.40`. One failed cold start dying during `Loading` is billed $0 GPU time; its real cost is storage for the few minutes it existed (ADR 0005's $0.05–0.20/GB-month, 60 GB, ~10 min: a fraction of a cent) plus whatever partial bytes of the 26 GB model were pulled, at a typical `inet_down_cost` ADR 0005 calls "cents" for the full download — **a few cents at most**, while our entry (open from `Created`, spanning `Loading`) reports the full `dph` rate — the overcount above, made concrete. With `maxInstanceSpendUSD` at its default `0`, the per-instance ceiling is the `$9.60` product above, not this monthly figure.
 
+**Amended by CORE-210 (ADR 0017):** storage is now inside `dph`, because
+the search sends `allocated_storage`; the model download is a fixed
+`fixedUsd` amount on the ledger entry, charged at `Created`. Upload
+bandwidth and the worker image pull are still not counted.
+
 ### Observability
 
 The ledger functions and `Allow` are pure and call no `obs` setter; they run inside a CAS function that may be retried up to 8 times. The caller (`CORE-050`) sets the four metrics after the commit, from the committed document, never from inside the retried function (a conflict retry must never double-count a cost):
