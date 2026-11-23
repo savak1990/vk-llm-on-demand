@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
@@ -192,5 +195,80 @@ func TestHeldStreamStartFails(t *testing.T) {
 	body := h.run(t, 10*time.Second)
 	if !strings.Contains(body, "No GPU offer matches") || !strings.HasSuffix(body, "data: [DONE]\n\n") {
 		t.Fatalf("body:\n%s", body)
+	}
+}
+
+func readyAfterHold(worker http.RoundTripper) *fakeController {
+	var admits atomic.Int32
+	fc := &fakeController{
+		demandSnap: controller.Snapshot{Public: "ALLOCATING", Desired: "RUNNING"},
+		admitFn: func(int64) (http.RoundTripper, error) {
+			if admits.Add(1) == 1 {
+				return nil, controller.ErrBackendUnavailable
+			}
+			return worker, nil
+		},
+	}
+	fc.statusFn = scripted(controller.Snapshot{Public: "READY", Desired: "RUNNING", Ready: true, Generation: 4})
+	return fc
+}
+
+func TestHeldStreamWorkerErrorEndsWithTail(t *testing.T) {
+	fc := readyAfterHold(fakeRoundTripper(func(*http.Request) (*http.Response, error) { return nil, errors.New("boom") }))
+	h := startHold(t, fc)
+	body := h.run(t, 10*time.Second)
+	if !strings.Contains(body, "[vk-llm] connection to the worker was lost") || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+		t.Fatalf("body:\n%s", body)
+	}
+}
+
+func TestHeldStreamWorkerRejectsEndsWithTail(t *testing.T) {
+	fc := readyAfterHold(fakeRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 500, Body: &chunkedBody{}}, nil
+	}))
+	h := startHold(t, fc)
+	body := h.run(t, 10*time.Second)
+	if !strings.Contains(body, "[vk-llm] the worker rejected the request") || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+		t.Fatalf("body:\n%s", body)
+	}
+}
+
+func TestHeldSlotReleasedWhileAnswering(t *testing.T) {
+	var h *holdRun
+	var held, pending atomic.Int64
+	held.Store(-1)
+	fc := readyAfterHold(fakeRoundTripper(func(*http.Request) (*http.Response, error) {
+		held.Store(h.g.held.Load())
+		pending.Store(int64(testutil.ToFloat64(h.g.metrics.pendingRequests)))
+		return &http.Response{StatusCode: 200, Body: &chunkedBody{chunks: [][]byte{[]byte("data: [DONE]\n\n")}}}, nil
+	}))
+	h = startHold(t, fc)
+	h.run(t, 10*time.Second)
+	if held.Load() != 0 || pending.Load() != 0 {
+		t.Fatalf("while answering: held = %d, pending = %d, want 0 and 0", held.Load(), pending.Load())
+	}
+	if got := h.g.held.Load(); got != 0 {
+		t.Fatalf("after return: held = %d, want 0 (released once)", got)
+	}
+	if got := testutil.ToFloat64(h.g.metrics.pendingRequests); got != 0 {
+		t.Fatalf("after return: pending = %v, want 0", got)
+	}
+}
+
+type failingWriter struct{ h http.Header }
+
+func (f *failingWriter) Header() http.Header       { return f.h }
+func (f *failingWriter) Write([]byte) (int, error) { return 0, errors.New("client gone") }
+func (f *failingWriter) WriteHeader(int)           {}
+
+func TestHeldStreamWriteFailureIsClientGone(t *testing.T) {
+	fc := &fakeController{admitErr: controller.ErrBackendUnavailable, demandSnap: controller.Snapshot{Public: "ALLOCATING", Desired: "RUNNING"}}
+	g, err := New(onDemandDeps(t, fc))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	g.Handler().ServeHTTP(&failingWriter{h: http.Header{}}, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[],"stream":true}`))
+	if got := testutil.ToFloat64(g.metrics.coldStartOutcomesTotal.WithLabelValues("client_gone")); got != 1 {
+		t.Fatalf("client_gone outcomes = %v, want 1", got)
 	}
 }

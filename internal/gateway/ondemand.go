@@ -108,6 +108,13 @@ func startFailed(s controller.Snapshot) bool {
 	return false
 }
 
+// writeHeldTail ends a held stream with a reason line, a finish_reason chunk and [DONE].
+func (g *Gateway) writeHeldTail(w http.ResponseWriter, rc *http.ResponseController, code, msg string) {
+	setCodeOverride(w, "stream_error")
+	_, _ = io.WriteString(w, progressChunk(g.deps.Config.ModelAlias, msg, g.deps.Clock.Now())+errorTail(code, msg))
+	_ = rc.Flush()
+}
+
 func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[string]json.RawMessage) {
 	cfg := g.deps.Config.OnDemand
 	if g.held.Add(1) > int64(cfg.MaxPending) {
@@ -115,25 +122,37 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 		g.writeQueueFull(w)
 		return
 	}
-	defer g.held.Add(-1)
 	g.metrics.pendingRequests.Inc()
-	defer g.metrics.pendingRequests.Dec()
+	released := false
+	release := func() {
+		if !released {
+			released = true
+			g.held.Add(-1)
+			g.metrics.pendingRequests.Dec()
+		}
+	}
+	defer release()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.WriteHeader(http.StatusOK)
 	rc := http.NewResponseController(w)
 	alias := g.deps.Config.ModelAlias
+	gone := func() {
+		recorderOf(w).outcome = "client_gone"
+		setCodeOverride(w, "499")
+		g.metrics.coldStartOutcomesTotal.WithLabelValues("client_gone").Inc()
+	}
 	send := func(s string) bool {
-		if _, err := io.WriteString(w, s); err != nil {
+		if _, err := io.WriteString(w, s); err != nil || rc.Flush() != nil {
+			gone()
 			return false
 		}
-		return rc.Flush() == nil
+		return true
 	}
 	fail := func(outcome, code, msg string) {
 		recorderOf(w).outcome = outcome
-		setCodeOverride(w, "stream_error")
 		g.metrics.coldStartOutcomesTotal.WithLabelValues(outcome).Inc()
-		send(progressChunk(alias, msg, g.deps.Clock.Now()) + errorTail(code, msg))
+		g.writeHeldTail(w, rc, code, msg)
 	}
 
 	key := keyIDOf(r)
@@ -181,6 +200,7 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 			g.metrics.waitSeconds.Observe(now.Sub(start).Seconds())
 			g.metrics.coldStartOutcomesTotal.WithLabelValues("ready").Inc()
 			recorderOf(w).gen = s.Generation
+			release()
 			g.proxyChat(w, r, s.Generation, rt, body, true, true)
 			return
 		case startFailed(s):
@@ -211,8 +231,7 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 		}
 		select {
 		case <-r.Context().Done():
-			recorderOf(w).outcome = "client_gone"
-			g.metrics.coldStartOutcomesTotal.WithLabelValues("client_gone").Inc()
+			gone()
 			return
 		case <-tick.C:
 		}

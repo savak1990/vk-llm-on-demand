@@ -186,7 +186,7 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 			g.deps.Controller.ReportUpstreamFailure(gen)
 		}
 		if held {
-			g.writeInStreamOutcome(w, http.NewResponseController(w), outcome)
+			g.writeInStreamOutcome(w, http.NewResponseController(w), outcome, true)
 			return
 		}
 		g.writePreHeaderOutcome(w, outcome)
@@ -202,15 +202,13 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 		// client, so this is plain too, regardless of stream.
 		g.deps.Controller.ReportUpstreamFailure(gen)
 		if held {
-			setCodeOverride(w, "stream_error")
-			_, _ = io.WriteString(w, errorTail("upstream_error", "the worker rejected the request"))
+			g.writeHeldTail(w, http.NewResponseController(w), "upstream_error", "the worker rejected the request")
 			return
 		}
 		writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "the worker rejected the request")
 	case resp.StatusCode >= 400:
 		if held {
-			setCodeOverride(w, "stream_error")
-			_, _ = io.WriteString(w, errorTail("upstream_error", "the worker rejected the request"))
+			g.writeHeldTail(w, http.NewResponseController(w), "upstream_error", "the worker rejected the request")
 			return
 		}
 		g.copyUpstream4xx(w, resp)
@@ -421,7 +419,7 @@ func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen
 				if outcome == outcomeUpstreamError {
 					g.deps.Controller.ReportUpstreamFailure(gen)
 				}
-				g.writeInStreamOutcome(w, rc, outcome)
+				g.writeInStreamOutcome(w, rc, outcome, held)
 			}
 			return
 		}
@@ -431,23 +429,29 @@ func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen
 // writeInStreamOutcome writes the in-stream error row for an outcome
 // discovered after headers already went out; a second WriteHeader call
 // would be silently ignored by net/http, so setCodeOverride is how the real status reaches metrics.
-func (g *Gateway) writeInStreamOutcome(w http.ResponseWriter, rc *http.ResponseController, outcome upstreamOutcome) {
-	switch outcome {
-	case outcomeClientGone:
+func (g *Gateway) writeInStreamOutcome(w http.ResponseWriter, rc *http.ResponseController, outcome upstreamOutcome, held bool) {
+	if outcome == outcomeClientGone {
 		setCodeOverride(w, "499")
 		return // nothing to write, the client is already gone
+	}
+	code, msg := "upstream_error", "connection to the worker was lost"
+	switch outcome {
 	case outcomeShuttingDown:
-		setCodeOverride(w, "stream_error")
-		_, _ = io.WriteString(w, inStreamError("shutting_down", "the server is shutting down")+"data: [DONE]\n\n")
+		code, msg = "shutting_down", "the server is shutting down"
 	case outcomeTimeout:
-		setCodeOverride(w, "stream_error")
-		_, _ = io.WriteString(w, inStreamError("upstream_timeout", "the worker did not respond in time")+"data: [DONE]\n\n")
+		code, msg = "upstream_timeout", "the worker did not respond in time"
 	case outcomeDrainCutoff:
-		setCodeOverride(w, "stream_error")
+		code, msg = "backend_unavailable", "the GPU stopped before it could answer"
+	}
+	if held {
+		g.writeHeldTail(w, rc, code, msg)
+		return
+	}
+	setCodeOverride(w, "stream_error")
+	if outcome == outcomeDrainCutoff {
 		_, _ = io.WriteString(w, backendUnavailableSSE())
-	default:
-		setCodeOverride(w, "stream_error")
-		_, _ = io.WriteString(w, inStreamError("upstream_error", "connection to the worker was lost")+"data: [DONE]\n\n")
+	} else {
+		_, _ = io.WriteString(w, inStreamError(code, msg)+"data: [DONE]\n\n")
 	}
 	_ = rc.Flush()
 }
