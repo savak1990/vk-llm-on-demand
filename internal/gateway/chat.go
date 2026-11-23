@@ -112,10 +112,22 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	rec.clamped = clamped
 	rec.maxTokensRequested = requested
 
+	stripProgress(body)
+
 	status := g.deps.Controller.Status()
 	gen := status.Generation
 	rt, err := g.deps.Controller.Admit(gen)
 	switch {
+	case g.onDemand() && errors.Is(err, controller.ErrBackendUnavailable):
+		if stream {
+			g.holdAndProxy(w, r, body)
+		} else {
+			g.refuseColdStart(w, r)
+		}
+		return
+	case g.onDemand() && errors.Is(err, controller.ErrDraining):
+		g.writeShuttingDownOnDemand(w)
+		return
 	case errors.Is(err, controller.ErrBackendUnavailable), errors.Is(err, controller.ErrDraining):
 		// No response headers have been sent yet, so an Admit failure is
 		// always a plain status — even for stream:true — since the SSE
@@ -130,10 +142,10 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	rec.gen = gen
 	defer g.deps.Controller.RequestEnd(gen)
 
-	g.proxyChat(w, r, gen, rt, body, stream)
+	g.proxyChat(w, r, gen, rt, body, stream, false)
 }
 
-func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, rt http.RoundTripper, body map[string]json.RawMessage, stream bool) {
+func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, rt http.RoundTripper, body map[string]json.RawMessage, stream, held bool) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "server_error", "internal_error", "internal error")
@@ -168,12 +180,14 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 	start := g.deps.Clock.Now() // captured before the round trip, so ttft_seconds measures the real wait, not just time inside streamUpstream
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
-		// No response headers have been sent to the client yet, so
-		// this is always a plain status — never SSE, regardless of
-		// stream — even for a request that asked to stream.
+		// Outside held mode no headers have gone out yet, so this is a plain status even for stream:true.
 		outcome := g.classify(r, err)
 		if outcome == outcomeUpstreamError {
 			g.deps.Controller.ReportUpstreamFailure(gen)
+		}
+		if held {
+			g.writeInStreamOutcome(w, http.NewResponseController(w), outcome, true)
+			return
 		}
 		g.writePreHeaderOutcome(w, outcome)
 		return
@@ -183,15 +197,22 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden, resp.StatusCode >= 500,
 		resp.StatusCode >= 300 && resp.StatusCode < 400:
-		// The upstream answered, but with a status this gateway never
-		// forwards as-is. Headers still haven't been sent to the
-		// client, so this is plain too, regardless of stream.
+		// A status never forwarded as-is; outside held mode no headers have gone out, so it is plain.
 		g.deps.Controller.ReportUpstreamFailure(gen)
+		if held {
+			g.writeHeldTail(w, http.NewResponseController(w), "upstream_error", "the worker rejected the request")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "the worker rejected the request")
 	case resp.StatusCode >= 400:
+		if held {
+			_, message, _ := g.readUpstream4xx(resp)
+			g.writeHeldTail(w, http.NewResponseController(w), "upstream_rejected", message)
+			return
+		}
 		g.copyUpstream4xx(w, resp)
 	case stream:
-		g.streamUpstream(w, resp, gen, r, start)
+		g.streamUpstream(w, resp, gen, r, start, held)
 	default:
 		g.copyUpstream2xx(w, resp, r, start)
 	}
@@ -264,20 +285,26 @@ func isJSONString(raw json.RawMessage) bool {
 // already has all three fields as non-empty strings; anything else is
 // normalized, keeping the upstream message where there is one.
 func (g *Gateway) copyUpstream4xx(w http.ResponseWriter, resp *http.Response) {
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, g.deps.Config.MaxBodyBytes))
-	var probe upstream4xxProbe
-	if json.Unmarshal(raw, &probe) == nil && probe.Error.Message != "" &&
-		isJSONString(probe.Error.Type) && isJSONString(probe.Error.Code) {
+	raw, message, complete := g.readUpstream4xx(resp)
+	if complete {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(raw)
 		return
 	}
-	message := probe.Error.Message
+	writeError(w, resp.StatusCode, "invalid_request_error", "upstream_rejected", message)
+}
+
+// readUpstream4xx returns the body, its message (or a fallback), and whether all three fields are strings.
+func (g *Gateway) readUpstream4xx(resp *http.Response) (raw []byte, message string, complete bool) {
+	raw, _ = io.ReadAll(io.LimitReader(resp.Body, g.deps.Config.MaxBodyBytes))
+	var probe upstream4xxProbe
+	ok := json.Unmarshal(raw, &probe) == nil
+	message = probe.Error.Message
 	if message == "" {
 		message = "the worker rejected the request"
 	}
-	writeError(w, resp.StatusCode, "invalid_request_error", "upstream_rejected", message)
+	return raw, message, ok && probe.Error.Message != "" && isJSONString(probe.Error.Type) && isJSONString(probe.Error.Code)
 }
 
 type upstreamOutcome int
@@ -361,9 +388,11 @@ func inStreamError(code, message string) string {
 // streamUpstream streams a confirmed 2xx SSE response to the client,
 // observing the first-token latency and forwarding every error after
 // the 200/text-event-stream headers go out through writeInStreamOutcome.
-func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen int64, r *http.Request, start time.Time) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.WriteHeader(http.StatusOK)
+func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen int64, r *http.Request, start time.Time, held bool) {
+	if !held {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}
 	rc := http.NewResponseController(w)
 
 	firstByte := true
@@ -395,7 +424,7 @@ func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen
 				if outcome == outcomeUpstreamError {
 					g.deps.Controller.ReportUpstreamFailure(gen)
 				}
-				g.writeInStreamOutcome(w, rc, outcome)
+				g.writeInStreamOutcome(w, rc, outcome, held)
 			}
 			return
 		}
@@ -405,23 +434,29 @@ func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen
 // writeInStreamOutcome writes the in-stream error row for an outcome
 // discovered after headers already went out; a second WriteHeader call
 // would be silently ignored by net/http, so setCodeOverride is how the real status reaches metrics.
-func (g *Gateway) writeInStreamOutcome(w http.ResponseWriter, rc *http.ResponseController, outcome upstreamOutcome) {
-	switch outcome {
-	case outcomeClientGone:
+func (g *Gateway) writeInStreamOutcome(w http.ResponseWriter, rc *http.ResponseController, outcome upstreamOutcome, held bool) {
+	if outcome == outcomeClientGone {
 		setCodeOverride(w, "499")
 		return // nothing to write, the client is already gone
+	}
+	code, msg := "upstream_error", "connection to the worker was lost"
+	switch outcome {
 	case outcomeShuttingDown:
-		setCodeOverride(w, "stream_error")
-		_, _ = io.WriteString(w, inStreamError("shutting_down", "the server is shutting down")+"data: [DONE]\n\n")
+		code, msg = "shutting_down", "the server is shutting down"
 	case outcomeTimeout:
-		setCodeOverride(w, "stream_error")
-		_, _ = io.WriteString(w, inStreamError("upstream_timeout", "the worker did not respond in time")+"data: [DONE]\n\n")
+		code, msg = "upstream_timeout", "the worker did not respond in time"
 	case outcomeDrainCutoff:
-		setCodeOverride(w, "stream_error")
+		code, msg = "backend_unavailable", "the GPU stopped before it could answer"
+	}
+	if held {
+		g.writeHeldTail(w, rc, code, msg)
+		return
+	}
+	setCodeOverride(w, "stream_error")
+	if outcome == outcomeDrainCutoff {
 		_, _ = io.WriteString(w, backendUnavailableSSE())
-	default:
-		setCodeOverride(w, "stream_error")
-		_, _ = io.WriteString(w, inStreamError("upstream_error", "connection to the worker was lost")+"data: [DONE]\n\n")
+	} else {
+		_, _ = io.WriteString(w, inStreamError(code, msg)+"data: [DONE]\n\n")
 	}
 	_ = rc.Flush()
 }

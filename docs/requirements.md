@@ -163,11 +163,13 @@ release; P2 and P3 are future.
 
 ## 13. Explicitly out of scope for the initial release
 
-On-demand provisioning (ADR 0007), persistent-volume cache and preferred
-host (ADR 0014, P2), `vk-llm cache *`, multiple providers, multiple
-models, dynamic model selection, vLLM, multi-GPU, more than one worker,
-agent orchestration, RAG, warm pools, CRDs and an operator, GPU nodes
-joining the cluster, OAuth or per-user quotas, a web dashboard,
-OpenHands integration. See [`roadmap.md`](roadmap.md).
+Persistent-volume cache and preferred host (ADR 0014, P2), `vk-llm cache *`,
+multiple providers, multiple models, dynamic model selection, vLLM,
+multi-GPU, more than one worker, agent orchestration, RAG, warm pools, CRDs
+and an operator, GPU nodes joining the cluster, OAuth or per-user quotas, a
+web dashboard, OpenHands integration. See [`roadmap.md`](roadmap.md).
+
+On-demand provisioning (ADR 0007) was out of scope for the initial release
+and ships after it as an opt-in mode (ADR 0019); explicit stays the default.
 
 Open WebUI as a household chat front end moved into scope with CORE-230.

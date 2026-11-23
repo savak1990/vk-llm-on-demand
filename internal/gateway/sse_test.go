@@ -231,7 +231,7 @@ func TestWriteErrorMidStreamLabeled499(t *testing.T) {
 		Body:       &chunkedBody{chunks: [][]byte{[]byte("data: x\n\n")}},
 	}
 
-	g.streamUpstream(sr, resp, 1, chatReq(`{}`), g.deps.Clock.Now())
+	g.streamUpstream(sr, resp, 1, chatReq(`{}`), g.deps.Clock.Now(), false)
 
 	if sr.codeOverride != "499" {
 		t.Fatalf("codeOverride = %q, want %q (a write failure mid-stream is a disconnect, not a 200)", sr.codeOverride, "499")

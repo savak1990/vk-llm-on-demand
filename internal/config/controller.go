@@ -30,6 +30,7 @@ type Controller struct {
 	MaxLifetime                  time.Duration
 	MaxInstanceSpendUSD          float64
 	MaxProvisionAttemptsPerHour  int
+	DemandGrace                  time.Duration
 
 	ReconcileInterval time.Duration
 
@@ -150,6 +151,12 @@ func LoadController() (Controller, error) {
 	}
 	c.TunnelDirectAddr = envString("VKLLM_TUNNEL_DIRECT_ADDR", "")
 
+	if c.DemandGrace, err = envDuration("VKLLM_ONDEMAND_DEMAND_GRACE", 60*time.Second); err != nil {
+		return Controller{}, err
+	}
+	if c.DemandGrace <= 0 {
+		return Controller{}, fmt.Errorf("config: VKLLM_ONDEMAND_DEMAND_GRACE must be positive, got %v", c.DemandGrace)
+	}
 	return c, nil
 }
 

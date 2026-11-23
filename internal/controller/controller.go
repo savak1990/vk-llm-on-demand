@@ -69,6 +69,12 @@ type Snapshot struct {
 	Hourly     provider.Money
 	ProviderID provider.InstanceID
 
+	Geolocation string
+
+	DownloadedBytes int64
+	ModelBytes      int64
+	WorkerStages    []string
+
 	CreatedAt               time.Time
 	ReadyAt                 *time.Time
 	LastInferenceFinishedAt *time.Time
@@ -108,6 +114,7 @@ const (
 	timerPoll
 	timerFlush
 	timerMetricsPull
+	timerDemand
 )
 
 // Note: the suspect probe (ReportUpstreamFailure) runs on its own
@@ -162,6 +169,15 @@ type Controller struct {
 	noOfferMu    sync.Mutex
 	noOfferUntil time.Time // armed by a no_offer transition; gateReason denies a Start inside it
 
+	demandMu    sync.Mutex
+	demandUntil time.Time
+	demandKeyID string // the latest Demand's key, for a start the backoff deferred to a later Tick
+
+	progressMu      sync.Mutex
+	progress        DownloadProgress
+	progressGen     int64
+	progressReading atomic.Bool // single-flights readProgress across overlapping Loading polls
+
 	reconciling    atomic.Bool
 	reconcileMu    sync.Mutex
 	orphanObserved map[provider.InstanceID]int // keyed by id, not label: a duplicate shares the active instance's label
@@ -179,7 +195,7 @@ type Controller struct {
 // New validates the configuration and builds a Controller; it does not
 // start the loop (Run does) or touch the provider or the store.
 func New(d Deps) (*Controller, error) {
-	if d.Config.ProvisioningMode != "explicit" {
+	if d.Config.ProvisioningMode != "explicit" && d.Config.ProvisioningMode != "on-demand" {
 		return nil, fmt.Errorf("controller: provisioningMode %q not supported", d.Config.ProvisioningMode)
 	}
 	if d.ModelSize == nil || d.ModelURL == "" {

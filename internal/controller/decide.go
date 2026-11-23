@@ -17,6 +17,12 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// T3: a Start while already provisioning or serving, with
 	// desired already RUNNING, changes nothing — not even a no-op CAS.
 	case isProvisioningOrServing(state) && ev.Kind == EvStart && f.Doc.Desired == store.DesiredRunning:
+		if originOf(ev) == originExplicit && f.Doc.StartOrigin == originDemand {
+			return state, func(d *store.Document) error {
+				d.StartOrigin = originExplicit
+				return nil
+			}, nil
+		}
 		return state, nil, nil
 
 	// A backoff wait at Idle is a pacing delay, not a denial: a Tick
@@ -29,6 +35,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance != nil {
 				return errStale
 			}
+			setStartOrigin(d, ev)
 			d.Desired = store.DesiredRunning
 			return nil
 		}, nil
@@ -58,6 +65,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if ev.Kind != EvStart && d.Desired != store.DesiredRunning {
 				return errStale
 			}
+			if ev.Kind == EvStart {
+				setStartOrigin(d, ev)
+			}
 			d.Desired = store.DesiredRunning
 			return nil
 		}, []Effect{effSearch{filter: searchFilter(f)}}
@@ -74,6 +84,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance.State != state.String() {
 				return errStale
 			}
+			setStartOrigin(d, ev)
 			d.Desired = store.DesiredRunning
 			return nil
 		}, nil
@@ -592,7 +603,7 @@ func searchFilter(f Facts) provider.OfferFilter {
 func storeOffer(ev Event) store.Offer {
 	o, b := ev.Offer, ev.Breakdown
 	return store.Offer{
-		MachineID: o.MachineID, GPU: o.GPUName, DPH: o.Hourly.USD(), InetDown: o.InetDownMbps,
+		MachineID: o.MachineID, GPU: o.GPUName, Geo: o.Geolocation, DPH: o.Hourly.USD(), InetDown: o.InetDownMbps,
 		Prices: &store.OfferPrices{
 			GPUUSDPerHour: b.GPUHourly.USD(), StorageUSDPerGBMonth: o.StoragePerGBMonth.USD(),
 			DownloadUSDPerGB: o.DownloadPerGB.USD(), UploadUSDPerGB: o.UploadPerGB.USD(),

@@ -45,6 +45,13 @@ func testDeps(t *testing.T) Deps {
 	}
 }
 
+func testDepsWith(t *testing.T, fc *fakeController) Deps {
+	t.Helper()
+	d := testDeps(t)
+	d.Controller = fc
+	return d
+}
+
 func TestNewRequiresModelAlias(t *testing.T) {
 	d := testDeps(t)
 	d.Config.ModelAlias = ""

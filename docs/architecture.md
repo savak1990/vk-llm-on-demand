@@ -278,7 +278,7 @@ and are set by the chart under `config.*`.
 | `provider.filter.minDiskBwMBps` | 500 | |
 | `provider.filter.minCudaVersion` | 12.8 | image requirement |
 | `provider.filter.geolocation` | `""` | optional country list |
-| `lifecycle.provisioningMode` | `explicit` | `on-demand` future (ADR 0010) |
+| `lifecycle.provisioningMode` | `explicit` | `on-demand` starts the GPU from a chat request (ADR 0019) |
 | `lifecycle.idleShutdown.enabled` | true | `false` refused unless `maxLifetime` set |
 | `lifecycle.idleShutdown.timeout` | **30m** | rolling, from readiness and last inference end (ADR 0011) |
 | `lifecycle.shutdown.policy` | `destroy-compute` | the only MVP policy |
@@ -300,7 +300,8 @@ and are set by the chart under `config.*`.
 | `gateway.maxBodyBytes` | 1048576 | |
 | `gateway.maxTokensCap` | 8192 | |
 | `gateway.rateLimitPerKeyRPM` | 60 | inference keys and management tokens alike |
-| `onDemand.maxWait` / `onDemand.maxPending` / `onDemand.heartbeatInterval` | 480s / 32 / 15s | on-demand mode only (ADR 0007), not rendered by the MVP chart |
+| `onDemand.maxWait` / `onDemand.maxPending` / `onDemand.heartbeatInterval` | 600s / 32 / 15s | on-demand mode only (ADR 0019) |
+| `onDemand.tickerInterval` / `onDemand.demandGrace` / `onDemand.tickerPhrases` | 30s / 60s / `[]` | on-demand mode only; the heartbeat must stay below the grace |
 | `model.alias` | `qwen3.6-35b-a3b` | |
 | `model.url` / `model.sha256` | pinned in `gitops/values.yaml` | |
 | `model.contextSize` / `model.parallel` | 32768 / 1 | |
@@ -343,7 +344,7 @@ workflow lives in this repository and needs one secret and one variable
 | [0004](adr/0004-state-persistence.md) | One ConfigMap with optimistic concurrency | Accepted, fields amended by 0011 |
 | [0005](adr/0005-model-storage.md) | Download from Hugging Face per provision | Accepted; P2 cache in 0014 |
 | [0006](adr/0006-worker-connectivity.md) | Controller-owned SSH tunnel to loopback llama-server | Accepted (bundle A, SSH), with an amended G5 latency threshold |
-| [0007](adr/0007-cold-start-api-strategy.md) | Bounded wait with heartbeats | Future on-demand mode only |
+| [0007](adr/0007-cold-start-api-strategy.md) | Bounded wait with heartbeats | Accepted for on-demand mode, implemented and amended by 0019 |
 | [0008](adr/0008-release-pipeline-and-chart.md) | vk-ahorro pipeline and chart conventions | Accepted, extended by 0013 |
 | [0009](adr/0009-secrets-and-api-keys.md) | Secrets by name; platform KMS → SSM → ESO | Proposed (spec 130) |
 | [0010](adr/0010-explicit-provisioning-mode.md) | Explicit provisioning is the MVP; `backend_unavailable` | Accepted |
@@ -355,6 +356,7 @@ workflow lives in this repository and needs one secret and one variable
 | [0016](adr/0016-github-actions-token-from-ssm.md) | `gpu-control` reads its token from AWS SSM via OIDC | Accepted |
 | [0017](adr/0017-gpu-control-endpoint-from-ssm-fqdn.md) | `gpu-control` builds its endpoint from the lab fqdn in SSM | Accepted |
 | [0018](adr/0018-offer-selection-by-session-cost.md) | Offers ranked by estimated session cost; caps on download, storage, disk | Accepted |
+| [0019](adr/0019-on-demand-mode-progress-stream.md) | On-demand mode: progress stream, non-streaming refusal, unattended-start cancel | Accepted |
 
 ## 13. Unresolved
 

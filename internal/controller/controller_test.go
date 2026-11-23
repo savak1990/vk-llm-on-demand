@@ -7,13 +7,6 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 )
 
-func TestNewRejectsNonExplicitMode(t *testing.T) {
-	_, err := New(Deps{Config: config.Controller{ProvisioningMode: "on-demand"}})
-	if err == nil {
-		t.Fatal("New: want error for non-explicit provisioningMode, got nil")
-	}
-}
-
 func TestNewAcceptsExplicitMode(t *testing.T) {
 	c, err := New(Deps{
 		Config:    config.Controller{ProvisioningMode: "explicit"},
@@ -24,6 +17,18 @@ func TestNewAcceptsExplicitMode(t *testing.T) {
 	}
 	if c.state != Idle {
 		t.Errorf("initial state = %v, want Idle", c.state)
+	}
+}
+
+func TestNewAcceptsOnDemandRejectsOther(t *testing.T) {
+	for mode, ok := range map[string]bool{"explicit": true, "on-demand": true, "eager": false} {
+		_, err := New(Deps{
+			Config:    config.Controller{ProvisioningMode: mode},
+			ModelSize: modelsize.Fixed(1_000_000_000), ModelURL: "https://example.invalid/model.gguf",
+		})
+		if (err == nil) != ok {
+			t.Fatalf("New(%q) err = %v, want ok=%v", mode, err, ok)
+		}
 	}
 }
 

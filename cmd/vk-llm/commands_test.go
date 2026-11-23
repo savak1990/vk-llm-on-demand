@@ -69,6 +69,136 @@ func TestStartWalk(t *testing.T) {
 	}
 }
 
+func TestStartWalkWithProgress(t *testing.T) {
+	f := newFake(t)
+	f.script("POST /api/v1/gpu/start", fakeResponse{code: 202, body: `{"state":"ALLOCATING"}`})
+	f.script("GET /api/v1/gpu/status",
+		fakeResponse{code: 200, body: `{"state":"STARTING","instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871}}`},
+		fakeResponse{code: 200, body: `{"state":"LOADING_MODEL","instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871},"progress":{"downloadedBytes":0,"modelBytes":10000000000,"workerStages":[]}}`},
+		fakeResponse{code: 200, body: `{"state":"LOADING_MODEL","instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871},"progress":{"downloadedBytes":4000000000,"modelBytes":10000000000,"workerStages":[]}}`},
+		fakeResponse{code: 200, body: `{"state":"LOADING_MODEL","instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871},"progress":{"downloadedBytes":10000000000,"modelBytes":10000000000,"workerStages":["download_end"]}}`},
+		fakeResponse{code: 200, body: `{"state":"READY","ready":true,"model":{"alias":"qwen3.6-35b-a3b"},"instance":{"gpu":"RTX 6000Ada"},"secondsUntilIdleShutdown":1800}`},
+	)
+	clk := fake.New(time.Unix(0, 0))
+	var stdout, stderr bytes.Buffer
+	getenv := testGetenv(f, "sk-vkllm-REPLACE_ME")
+	done := make(chan int, 1)
+	go func() { done <- run([]string{"start"}, getenv, &stdout, &stderr, clk) }()
+	for i := 0; i < 4; i++ {
+		clk.BlockUntil(1)
+		clk.Advance(5 * time.Second)
+	}
+	code := <-done
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimRight(stderr.String(), "\n"), "\n")
+	indexOf := func(substr string) int {
+		for i, l := range lines {
+			if strings.Contains(l, substr) {
+				return i
+			}
+		}
+		return -1
+	}
+	offer := indexOf("Renting an RTX 6000Ada in Sweden at $0.55/h (machine 117871); booting the worker…")
+	pct := indexOf("Downloading the model: 40%")
+	verify := indexOf("Download done; verifying the checksum…")
+	if offer < 0 || pct < 0 || verify < 0 {
+		t.Fatalf("stderr = %q, want offer/pct/verify lines all present (offer=%d pct=%d verify=%d)", lines, offer, pct, verify)
+	}
+	if offer >= pct || pct >= verify {
+		t.Fatalf("stderr = %q, want offer < pct < verify, got offer=%d pct=%d verify=%d", lines, offer, pct, verify)
+	}
+	if last := lines[len(lines)-1]; !strings.Contains(last, "ready:") {
+		t.Errorf("last line = %q, want it to contain %q", last, "ready:")
+	}
+}
+
+func TestStartWalkThroughDrainingShowsOnlyTheNewOffer(t *testing.T) {
+	f := newFake(t)
+	f.script("POST /api/v1/gpu/start", fakeResponse{code: 202, body: `{"state":"DRAINING","instance":{"gpu":"L40S","machineId":1,"priceUSDPerHour":0.5}}`})
+	f.script("GET /api/v1/gpu/status",
+		fakeResponse{code: 200, body: `{"state":"DELETING","instance":{"gpu":"L40S","machineId":1,"priceUSDPerHour":0.5}}`},
+		fakeResponse{code: 200, body: `{"state":"STOPPED"}`},
+		fakeResponse{code: 200, body: `{"state":"ALLOCATING"}`},
+		fakeResponse{code: 200, body: `{"state":"STARTING","instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871}}`},
+		fakeResponse{code: 200, body: `{"state":"READY","ready":true,"model":{"alias":"qwen3.6-35b-a3b"},"instance":{"gpu":"RTX 6000Ada"},"secondsUntilIdleShutdown":1800}`},
+	)
+	clk := fake.New(time.Unix(0, 0))
+	var stdout, stderr bytes.Buffer
+	getenv := testGetenv(f, "sk-vkllm-REPLACE_ME")
+	done := make(chan int, 1)
+	go func() { done <- run([]string{"start"}, getenv, &stdout, &stderr, clk) }()
+	for i := 0; i < 4; i++ {
+		clk.BlockUntil(1)
+		clk.Advance(5 * time.Second)
+	}
+	code := <-done
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	out := stderr.String()
+	if strings.Contains(out, "L40S") {
+		t.Errorf("stderr = %q, want no mention of the draining instance's GPU", out)
+	}
+	if !strings.Contains(out, "Renting an RTX 6000Ada in Sweden at $0.55/h (machine 117871); booting the worker…") {
+		t.Errorf("stderr = %q, want the new offer line", out)
+	}
+}
+
+func TestStartWalkAcrossGenerationsResetsTracker(t *testing.T) {
+	f := newFake(t)
+	f.script("POST /api/v1/gpu/start", fakeResponse{code: 202, body: `{"state":"LOADING_MODEL","generation":1,"instance":{"gpu":"L40S","machineId":1,"priceUSDPerHour":0.5},"progress":{"downloadedBytes":9000000000,"modelBytes":10000000000,"workerStages":[]}}`})
+	f.script("GET /api/v1/gpu/status",
+		fakeResponse{code: 200, body: `{"state":"DRAINING","generation":1,"instance":{"gpu":"L40S","machineId":1,"priceUSDPerHour":0.5}}`},
+		fakeResponse{code: 200, body: `{"state":"DELETING","generation":1,"instance":{"gpu":"L40S","machineId":1,"priceUSDPerHour":0.5}}`},
+		fakeResponse{code: 200, body: `{"state":"STOPPED","generation":1}`},
+		fakeResponse{code: 200, body: `{"state":"ALLOCATING","generation":2}`},
+		fakeResponse{code: 200, body: `{"state":"STARTING","generation":2,"instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871}}`},
+		fakeResponse{code: 200, body: `{"state":"LOADING_MODEL","generation":2,"instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871},"progress":{"downloadedBytes":0,"modelBytes":10000000000,"workerStages":[]}}`},
+		fakeResponse{code: 200, body: `{"state":"LOADING_MODEL","generation":2,"instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871},"progress":{"downloadedBytes":3000000000,"modelBytes":10000000000,"workerStages":[]}}`},
+		fakeResponse{code: 200, body: `{"state":"LOADING_MODEL","generation":2,"instance":{"gpu":"RTX 6000Ada","geolocation":"Sweden","priceUSDPerHour":0.55,"machineId":117871},"progress":{"downloadedBytes":6000000000,"modelBytes":10000000000,"workerStages":[]}}`},
+		fakeResponse{code: 200, body: `{"state":"READY","ready":true,"model":{"alias":"qwen3.6-35b-a3b"},"instance":{"gpu":"RTX 6000Ada"},"secondsUntilIdleShutdown":1800}`},
+	)
+	clk := fake.New(time.Unix(0, 0))
+	var stdout, stderr bytes.Buffer
+	getenv := testGetenv(f, "sk-vkllm-REPLACE_ME")
+	done := make(chan int, 1)
+	go func() { done <- run([]string{"start"}, getenv, &stdout, &stderr, clk) }()
+	for i := 0; i < 8; i++ {
+		clk.BlockUntil(1)
+		clk.Advance(5 * time.Second)
+	}
+	code := <-done
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %s", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimRight(stderr.String(), "\n"), "\n")
+	indexOf := func(substr string) int {
+		for i, l := range lines {
+			if strings.Contains(l, substr) {
+				return i
+			}
+		}
+		return -1
+	}
+	workerUpCount := 0
+	for _, l := range lines {
+		if strings.Contains(l, "Worker up; downloading the model") {
+			workerUpCount++
+		}
+	}
+	if workerUpCount != 2 {
+		t.Errorf("stderr = %q, want \"Worker up; downloading the model\" twice, got %d", lines, workerUpCount)
+	}
+	secondOffer := indexOf("Renting an RTX 6000Ada in Sweden at $0.55/h (machine 117871); booting the worker…")
+	pct30 := indexOf("Downloading the model: 30%")
+	if secondOffer < 0 || pct30 < 0 || pct30 <= secondOffer {
+		t.Errorf("stderr = %q, want \"Downloading the model: 30%%\" after the second offer line (secondOffer=%d pct30=%d)", lines, secondOffer, pct30)
+	}
+}
+
 func TestStartAlreadyRunning(t *testing.T) {
 	f := newFake(t)
 	f.script("POST /api/v1/gpu/start", fakeResponse{code: 200, body: `{"state":"READY","ready":true,"secondsUntilIdleShutdown":1440}`})

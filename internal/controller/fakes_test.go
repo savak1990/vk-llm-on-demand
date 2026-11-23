@@ -46,12 +46,16 @@ func TestFakeWorkerScrapeNoop(t *testing.T) {
 }
 
 type fakeWorker struct {
-	mu         sync.Mutex
-	probeSeq   []ProbeStatus
-	probeIdx   int
-	probeCalls int
-	keyCalls   int
-	buildCalls int
+	mu            sync.Mutex
+	probeSeq      []ProbeStatus
+	probeIdx      int
+	probeCalls    int
+	keyCalls      int
+	buildCalls    int
+	progress      DownloadProgress
+	progressErr   error
+	progressBlock chan struct{} // if set, Progress blocks until this closes or ctx ends
+	progressCalls int
 }
 
 func newFakeWorker() *fakeWorker { return &fakeWorker{} }
@@ -99,3 +103,26 @@ func (w *fakeWorker) probes() int {
 }
 
 func (w *fakeWorker) Scrape(context.Context, http.RoundTripper) error { return nil }
+
+func (w *fakeWorker) Progress(ctx context.Context, _ func(context.Context, string) ([]byte, error)) (DownloadProgress, error) {
+	w.mu.Lock()
+	w.progressCalls++
+	p, err, block := w.progress, w.progressErr, w.progressBlock
+	w.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+		}
+	}
+	if err != nil {
+		return DownloadProgress{}, err
+	}
+	return p, nil
+}
+
+func (w *fakeWorker) progressCallCount() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.progressCalls
+}

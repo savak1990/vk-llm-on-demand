@@ -53,6 +53,18 @@ func (a *workerAdapter) Probe(ctx context.Context, rt http.RoundTripper, key, al
 	return controller.ProbeStatus(readiness), err
 }
 
+func (a *workerAdapter) Progress(ctx context.Context, exec func(context.Context, string) ([]byte, error)) (controller.DownloadProgress, error) {
+	out, err := exec(ctx, worker.ProgressCommand)
+	if err != nil {
+		return controller.DownloadProgress{}, err
+	}
+	p, err := worker.ParseProgress(out)
+	if err != nil {
+		return controller.DownloadProgress{}, err
+	}
+	return controller.DownloadProgress{Bytes: p.Bytes, Stages: p.Stages}, nil
+}
+
 func (a *workerAdapter) Scrape(ctx context.Context, rt http.RoundTripper) error {
 	snap, err := (worker.Client{Transport: rt, Key: "", Alias: a.modelAlias}).Metrics(ctx)
 	if err != nil {

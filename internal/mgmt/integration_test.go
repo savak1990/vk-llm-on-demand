@@ -52,6 +52,9 @@ func (readyWorker) Probe(context.Context, http.RoundTripper, string, string) (co
 	return controller.ProbeReady, nil
 }
 func (readyWorker) Scrape(context.Context, http.RoundTripper) error { return nil }
+func (readyWorker) Progress(context.Context, func(context.Context, string) ([]byte, error)) (controller.DownloadProgress, error) {
+	return controller.DownloadProgress{}, nil
+}
 
 var _ controller.Worker = readyWorker{}
 

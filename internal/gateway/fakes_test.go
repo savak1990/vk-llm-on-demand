@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"net/http"
 	"sync"
 	"time"
@@ -26,16 +27,36 @@ type fakeController struct {
 	upstreamErr   []int64
 	status        controller.Snapshot
 	panicOnStatus bool
+
+	demandErr   error
+	demandSnap  controller.Snapshot
+	demandCalls []time.Time
+	statusFn    func() controller.Snapshot
+	statusCalls int
+	admitFn     func(gen int64) (http.RoundTripper, error)
 }
 
 func (f *fakeController) Admit(gen int64) (http.RoundTripper, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.admitCalls = append(f.admitCalls, gen)
-	if f.admitErr != nil {
-		return nil, f.admitErr
+	fn := f.admitFn
+	err := f.admitErr
+	rt := f.admitRT
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(gen)
 	}
-	return f.admitRT, nil
+	if err != nil {
+		return nil, err
+	}
+	return rt, nil
+}
+
+func (f *fakeController) Demand(_ context.Context, _ string, until time.Time) (controller.Snapshot, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.demandCalls = append(f.demandCalls, until)
+	return f.demandSnap, f.demandErr
 }
 
 func (f *fakeController) RequestEnd(gen int64) {
@@ -58,11 +79,18 @@ func (f *fakeController) ReportUpstreamFailure(gen int64) {
 
 func (f *fakeController) Status() controller.Snapshot {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.statusCalls++
 	if f.panicOnStatus {
+		defer f.mu.Unlock()
 		panic("fakeController.Status: should never be called by handleModels")
 	}
-	return f.status
+	fn := f.statusFn
+	s := f.status
+	f.mu.Unlock()
+	if fn != nil {
+		return fn()
+	}
+	return s
 }
 
 func (f *fakeController) snapshot() (admitCalls, endCalls []int64) {
@@ -76,3 +104,9 @@ func (f *fakeController) snapshot() (admitCalls, endCalls []int64) {
 type fakeRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f fakeRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func (f *fakeController) statusCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.statusCalls
+}

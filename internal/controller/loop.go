@@ -22,7 +22,7 @@ const (
 // Same-instant order: deadlines first, so an Admit at the exact idle
 // deadline loses to the idle timer.
 var timerPriority = []timerKind{
-	timerIdle, timerStartup, timerDrain,
+	timerIdle, timerStartup, timerDemand, timerDrain,
 	timerDestroyRetry, timerReconcile, timerPoll, timerFlush, timerMetricsPull,
 }
 
@@ -98,6 +98,9 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	if err != nil {
 		return err
 	}
+	if ev.Kind == EvStop && ev.Origin == originDemand && (doc.StartOrigin != originDemand || inService(state)) {
+		return nil
+	}
 	if ev.Err != nil {
 		c.setLastError(ev.Err.Error())
 	}
@@ -127,6 +130,9 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 			gpuUptimeSecondsTotal.Add(now.Sub(doc.Instance.CreatedAt).Seconds())
 		}
 		doc = committed
+		if ev.Kind == EvStop && ev.Origin == originDemand && c.deps.Log != nil {
+			c.deps.Log.Info("gpu_start_cancelled", "reason", "demand_expired", "generation", doc.Generation, "state", state.String())
+		}
 		if reason, ok := shutdownReason(state, next, ev, inFlight, doc, c.deps.Config, now); ok {
 			shutdownsTotal.WithLabelValues(reason).Inc()
 		}
@@ -182,6 +188,15 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	c.syncTimers(state, next, doc)
 
 	c.queueEffects(effects)
+	if state == Idle && next == Searching && c.deps.Log != nil {
+		keyID := ev.KeyID
+		if keyID == "" && doc.StartOrigin == originDemand {
+			c.demandMu.Lock()
+			keyID = c.demandKeyID
+			c.demandMu.Unlock()
+		}
+		c.deps.Log.Info("gpu_start", "origin", doc.StartOrigin, "key_id", keyID, "generation", doc.Generation)
+	}
 	if ev.Kind == EvStart && isDenial(ev.Reason) {
 		return ErrGPUUnavailable
 	}
@@ -537,6 +552,7 @@ func (c *Controller) pollTick(ctx context.Context) {
 	case Loading:
 		effCtx := c.effCtx()
 		c.spawn(func() { dispatchProbe(effCtx, c, effProbe{gen: gen}) })
+		c.spawn(func() { c.readProgress(effCtx, gen) })
 	}
 	if isCreatingBootingOrLoading(state) {
 		c.armTimer(timerPoll, c.deps.Clock.Now().Add(pollInterval))
@@ -590,6 +606,9 @@ func (c *Controller) fireTimer(ctx context.Context, k timerKind) {
 	case timerStartup, timerDrain:
 		c.clearTimer(k)
 		c.handleEvent(ctx, Event{Kind: EvDeadlineExpired, Gen: c.currentGen()})
+	case timerDemand:
+		c.clearTimer(timerDemand)
+		c.cancelUnattendedStart(ctx)
 	case timerDestroyRetry:
 		c.clearTimer(timerDestroyRetry)
 		c.fireDestroyRetry(ctx)
@@ -640,6 +659,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	if err := c.recover(ctx); err != nil {
 		return err
 	}
+	c.rearmDemandAfterRecovery(ctx)
 	c.mu.Lock()
 	setGPUState(PublicState(c.state, c.failing))
 	c.mu.Unlock()

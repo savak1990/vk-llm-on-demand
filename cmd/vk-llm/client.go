@@ -23,6 +23,7 @@ type statusDoc struct {
 		GPU             string     `json:"gpu"`
 		MachineID       int64      `json:"machineId"`
 		PriceUSDPerHour float64    `json:"priceUSDPerHour"`
+		Geolocation     string     `json:"geolocation,omitempty"`
 		CreatedAt       *time.Time `json:"createdAt"`
 		ReadyAt         *time.Time `json:"readyAt"`
 		Prices          *struct {
@@ -54,6 +55,11 @@ type statusDoc struct {
 	InstallationID string     `json:"installationId"`
 	LabelPrefix    string     `json:"labelPrefix"`
 	Result         string     `json:"result,omitempty"`
+	Progress       *struct {
+		DownloadedBytes int64    `json:"downloadedBytes"`
+		ModelBytes      int64    `json:"modelBytes"`
+		WorkerStages    []string `json:"workerStages"`
+	} `json:"progress,omitempty"`
 }
 
 type apiResult struct {

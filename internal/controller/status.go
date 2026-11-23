@@ -23,6 +23,12 @@ func (c *Controller) Status() Snapshot {
 		Unavailable:    unavailable,
 	}
 	snap.BudgetCeilingUSD = c.deps.Budget.CeilingUSD()
+	c.progressMu.Lock()
+	if c.progressGen == gen {
+		snap.DownloadedBytes = c.progress.Bytes
+		snap.WorkerStages = append([]string(nil), c.progress.Stages...)
+	}
+	c.progressMu.Unlock()
 
 	doc, _, err := c.deps.Store.Load(c.effCtx())
 	if err != nil {
@@ -49,7 +55,11 @@ func (c *Controller) Status() Snapshot {
 		return snap
 	}
 	snap.GPUName = doc.Instance.Offer.GPU
+	snap.Geolocation = doc.Instance.Offer.Geo
 	snap.MachineID = doc.Instance.Offer.MachineID
+	if doc.Instance.Offer.Estimate != nil {
+		snap.ModelBytes = doc.Instance.Offer.Estimate.ModelBytes
+	}
 	snap.Hourly = provider.FromUSD(doc.Instance.Offer.DPH)
 	if id, ok := providerIDOf(doc); ok {
 		snap.ProviderID = id

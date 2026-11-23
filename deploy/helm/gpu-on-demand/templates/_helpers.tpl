@@ -102,6 +102,12 @@ VKLLM_CONTROLLER_RECONCILE_INTERVAL: {{ .Values.config.controller.reconcileInter
 VKLLM_GATEWAY_MAX_BODY_BYTES: {{ .Values.config.gateway.maxBodyBytes | int64 | quote }}
 VKLLM_GATEWAY_MAX_TOKENS_CAP: {{ .Values.config.gateway.maxTokensCap | int64 | quote }}
 VKLLM_GATEWAY_RATE_LIMIT_PER_KEY_RPM: {{ .Values.config.gateway.rateLimitPerKeyRPM | int64 | quote }}
+VKLLM_ONDEMAND_MAX_WAIT: {{ .Values.config.onDemand.maxWait | quote }}
+VKLLM_ONDEMAND_MAX_PENDING: {{ .Values.config.onDemand.maxPending | int64 | quote }}
+VKLLM_ONDEMAND_HEARTBEAT_INTERVAL: {{ .Values.config.onDemand.heartbeatInterval | quote }}
+VKLLM_ONDEMAND_TICKER_INTERVAL: {{ .Values.config.onDemand.tickerInterval | quote }}
+VKLLM_ONDEMAND_DEMAND_GRACE: {{ .Values.config.onDemand.demandGrace | quote }}
+VKLLM_ONDEMAND_TICKER_PHRASES: {{ join "\n" .Values.config.onDemand.tickerPhrases | quote }}
 VKLLM_MGMT_RATE_LIMIT_RPM: {{ .Values.config.mgmt.rateLimitPerKeyRPM | int64 | quote }}
 VKLLM_TUNNEL_DIALER: {{ .Values.config.tunnel.dialer | quote }}
 VKLLM_TUNNEL_DIRECT_ADDR: {{ .Values.config.tunnel.directAddr | quote }}

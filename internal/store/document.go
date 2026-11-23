@@ -26,6 +26,7 @@ type Document struct {
 	MachineDenylist  []DenyEntry     `json:"machineDenylist"`
 	Cache            json.RawMessage `json:"cache"`
 	BudgetMonthUSD   *float64        `json:"budgetMonthUsd,omitempty"`
+	StartOrigin      string          `json:"startOrigin,omitempty"`
 }
 
 type Instance struct {
@@ -48,6 +49,7 @@ type Offer struct {
 	GPU       string         `json:"gpu"`
 	DPH       float64        `json:"dph"`
 	InetDown  float64        `json:"inetDown"`
+	Geo       string         `json:"geo,omitempty"`
 	Prices    *OfferPrices   `json:"prices,omitempty"`
 	Estimate  *OfferEstimate `json:"estimate,omitempty"`
 }

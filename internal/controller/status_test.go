@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -85,5 +86,61 @@ func TestStatusProviderBalanceUnknownUntilFirstRead(t *testing.T) {
 	snap = c.Status()
 	if snap.ProviderBalanceUSD == nil || *snap.ProviderBalanceUSD != 12.5 {
 		t.Fatalf("ProviderBalanceUSD = %v, want 12.5", snap.ProviderBalanceUSD)
+	}
+}
+
+func TestStatusReportsGeolocationAndModelBytes(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 1
+		d.Instance = &store.Instance{
+			State: Creating.String(), Label: "vkllm:iid:1",
+			Offer: store.Offer{MachineID: 7, GPU: "L40S", Geo: "Sweden", Estimate: &store.OfferEstimate{ModelBytes: 28_600_000_000}},
+		}
+	})
+	s := c.Status()
+	if s.Geolocation != "Sweden" || s.ModelBytes != 28_600_000_000 {
+		t.Fatalf("Geolocation %q ModelBytes %d", s.Geolocation, s.ModelBytes)
+	}
+}
+
+func TestStatusModelBytesZeroWithNoEstimate(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 1
+		d.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{MachineID: 7, GPU: "L40S"}}
+	})
+	if s := c.Status(); s.ModelBytes != 0 {
+		t.Fatalf("ModelBytes = %d, want 0 with no estimate", s.ModelBytes)
+	}
+}
+
+func TestLoadingPollReadsDownloadProgress(t *testing.T) {
+	c, _, _, _, w := newTestController(t)
+	w.progress = DownloadProgress{Bytes: 500, Stages: []string{"download_begin"}}
+	c.state, c.generation = Loading, 3
+	c.conn = tunnelConnForTest(func() error { return nil })
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Loading.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+	})
+	c.pollTick(context.Background())
+	waitFor(t, "progress read", func() bool { return c.Status().DownloadedBytes == 500 })
+	if got := c.Status().WorkerStages; len(got) != 1 || got[0] != "download_begin" {
+		t.Fatalf("WorkerStages = %q", got)
+	}
+}
+
+func TestOfferChosenStoresGeolocation(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	c.state = Searching
+	putDoc(t, c, func(d *store.Document) { d.Desired = store.DesiredRunning })
+	ev := Event{Kind: EvOfferChosen, Offer: provider.Offer{ID: 1, MachineID: 7, GPUName: "L40S", Geolocation: "Sweden", Hourly: 500000}}
+	if err := c.processEvent(context.Background(), ev); err != nil {
+		t.Fatalf("processEvent: %v", err)
+	}
+	doc, _, _ := c.deps.Store.Load(context.Background())
+	if doc.Instance == nil || doc.Instance.Offer.Geo != "Sweden" {
+		t.Fatalf("stored offer = %+v", doc.Instance)
 	}
 }

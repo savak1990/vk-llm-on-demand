@@ -2,6 +2,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -81,5 +82,49 @@ func TestLoadGatewayRespectsModelAliasOverride(t *testing.T) {
 	}
 	if g.ModelAlias != "custom-alias" {
 		t.Fatalf("ModelAlias = %q, want %q", g.ModelAlias, "custom-alias")
+	}
+}
+
+func TestLoadGatewayOnDemandDefaults(t *testing.T) {
+	g, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
+	if g.ProvisioningMode != "explicit" {
+		t.Fatalf("ProvisioningMode = %q, want explicit", g.ProvisioningMode)
+	}
+	want := OnDemand{MaxWait: 600 * time.Second, MaxPending: 32, HeartbeatInterval: 15 * time.Second, TickerInterval: 30 * time.Second, DemandGrace: 60 * time.Second}
+	if !reflect.DeepEqual(g.OnDemand, want) {
+		t.Fatalf("OnDemand = %+v, want %+v", g.OnDemand, want)
+	}
+}
+
+func TestLoadGatewayOnDemandOverrides(t *testing.T) {
+	t.Setenv("VKLLM_LIFECYCLE_PROVISIONING_MODE", "on-demand")
+	t.Setenv("VKLLM_ONDEMAND_MAX_WAIT", "90s")
+	t.Setenv("VKLLM_ONDEMAND_TICKER_PHRASES", "one\ntwo\n")
+	g, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
+	if g.ProvisioningMode != "on-demand" || g.OnDemand.MaxWait != 90*time.Second {
+		t.Fatalf("got mode %q maxWait %v", g.ProvisioningMode, g.OnDemand.MaxWait)
+	}
+	if !reflect.DeepEqual(g.OnDemand.TickerPhrases, []string{"one", "two"}) {
+		t.Fatalf("TickerPhrases = %q", g.OnDemand.TickerPhrases)
+	}
+}
+
+func TestLoadGatewayRejectsHeartbeatNotBelowGrace(t *testing.T) {
+	t.Setenv("VKLLM_ONDEMAND_HEARTBEAT_INTERVAL", "60s")
+	if _, err := LoadGateway(); err == nil {
+		t.Fatal("LoadGateway: want error for heartbeat equal to the 60s default grace")
+	}
+}
+
+func TestLoadGatewayRejectsUnknownMode(t *testing.T) {
+	t.Setenv("VKLLM_LIFECYCLE_PROVISIONING_MODE", "eager")
+	if _, err := LoadGateway(); err == nil {
+		t.Fatal("LoadGateway: want error for unknown mode")
 	}
 }

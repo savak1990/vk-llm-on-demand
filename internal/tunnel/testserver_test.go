@@ -81,16 +81,23 @@ func handleTestSSHConn(conn net.Conn, config *ssh.ServerConfig, backendAddr stri
 	}()
 
 	for newChan := range chans {
-		if newChan.ChannelType() != "direct-tcpip" {
+		switch newChan.ChannelType() {
+		case "direct-tcpip":
+			ch, chReqs, err := newChan.Accept()
+			if err != nil {
+				continue
+			}
+			go ssh.DiscardRequests(chReqs)
+			go proxyToBackend(ch, backendAddr)
+		case "session":
+			ch, chReqs, err := newChan.Accept()
+			if err != nil {
+				continue
+			}
+			go serveTestExec(ch, chReqs)
+		default:
 			_ = newChan.Reject(ssh.UnknownChannelType, "unsupported")
-			continue
 		}
-		ch, chReqs, err := newChan.Accept()
-		if err != nil {
-			continue
-		}
-		go ssh.DiscardRequests(chReqs)
-		go proxyToBackend(ch, backendAddr)
 	}
 }
 
@@ -132,4 +139,20 @@ func splitHostPortForTest(t *testing.T, addr string) (host string, port int, err
 		t.Fatalf("Atoi: %v", convErr)
 	}
 	return h, portNum, nil
+}
+
+func serveTestExec(ch ssh.Channel, reqs <-chan *ssh.Request) {
+	defer func() { _ = ch.Close() }()
+	for req := range reqs {
+		if req.Type != "exec" {
+			_ = req.Reply(false, nil)
+			continue
+		}
+		var payload struct{ Command string }
+		_ = ssh.Unmarshal(req.Payload, &payload)
+		_ = req.Reply(true, nil)
+		_, _ = ch.Write([]byte("exec:" + payload.Command))
+		_, _ = ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
+		return
+	}
 }

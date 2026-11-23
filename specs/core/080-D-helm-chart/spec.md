@@ -1,14 +1,22 @@
 ---
 id: "CORE-080"
 status: "DONE"
-updated: "2026-11-06"
+updated: "2026-11-23"
 depends_on: ["CORE-060"]
-adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013"]
+adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013", "0019"]
 ---
 
 # 080 — Helm chart `gpu-on-demand`
 
 **Status note:** DONE as of 2026-11-06. Amended against the `internal/config` env-var contract shipped in PRs #15/#16; the chart, its kind CI job and the Makefile targets are all built and validated (see Evidence).
+
+**2026-11-23 amendment (CORE-220):** the `onDemand` block now renders;
+`provisioningMode` accepts `on-demand` as well as `explicit`. The download
+percentage uses the model size resolved automatically on the chosen
+offer, not a chart value. The values table, the schema snippet and the
+rendered key count below are updated to match `deploy/helm/gpu-on-demand`
+as shipped; the Evidence section is left as the 2026-11-06 record and is
+not restated.
 
 **Complexity:** M — many small templates and a long values schema, no business logic.
 **Risk:** medium — a wrong RBAC verb, a wrong `config.*` → env-var mapping, or a schema guard that does not actually block `idleShutdown.enabled: false` breaks safety invisibly, because nothing here is unit-testable in Go.
@@ -28,7 +36,7 @@ adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013"]
 - A kind-based CI job (testing strategy tier 2): install with the fake provider, a fake worker reached through the `direct` dialer, and three dummy Secrets; wait for Ready with no GPU; drive start/stop and status checks with `curl` against the management API; curl the inference API; `helm upgrade` with a changed `config.*` value; `helm uninstall`.
 - `kubeconform -strict` validation of all three route variants, with a CRD schema source for `HTTPRoute`, `ServiceMonitor`, `ExternalSecret`.
 
-Excludes: the `gitops/` app-of-apps chart and the platform pointer `Application` (CORE-130); the platform's External Secrets IAM policy change (CORE-130, ADR 0009 §3); `deploy/docker/gpu-on-demand.Dockerfile`, `cmd/fake-worker` and the publish/release workflows (CORE-010, CORE-120); the fake worker's own request handling (CORE-010, tier 2 test fixture, not chart code); the state document's JSON shape (CORE-040); the gateway's, management API's and controller's runtime behaviour, including what each `config.*` value actually changes (CORE-050, CORE-055, CORE-060); CORE-090's dashboard JSON and alert rule expressions, and the `PrometheusRule`/dashboard `ConfigMap` templates that render them — this chart renders only the `ServiceMonitor`, gated by `serviceMonitor.enabled`; CORE-090 adds its own templates to this chart's `templates/` directory when it is implemented; the Envoy-side route timeout policy, a platform object outside this chart (660s in explicit mode, `model.generationTimeout + 60s`; 1080s reserved for a future on-demand install — ADR 0010 Consequences, CORE-130); a `-dev` or `-pr` installation of this chart — `docs/testing-strategy.md` states there is exactly one installation per provider account and no preview workflow, so the kind job is the only automated install this spec's CI ever runs.
+Excludes: the `gitops/` app-of-apps chart and the platform pointer `Application` (CORE-130); the platform's External Secrets IAM policy change (CORE-130, ADR 0009 §3); `deploy/docker/gpu-on-demand.Dockerfile`, `cmd/fake-worker` and the publish/release workflows (CORE-010, CORE-120); the fake worker's own request handling (CORE-010, tier 2 test fixture, not chart code); the state document's JSON shape (CORE-040); the gateway's, management API's and controller's runtime behaviour, including what each `config.*` value actually changes (CORE-050, CORE-055, CORE-060); CORE-090's dashboard JSON and alert rule expressions, and the `PrometheusRule`/dashboard `ConfigMap` templates that render them — this chart renders only the `ServiceMonitor`, gated by `serviceMonitor.enabled`; CORE-090 adds its own templates to this chart's `templates/` directory when it is implemented; the Envoy-side route timeout policy, a platform object outside this chart (660s in explicit mode, `model.generationTimeout + 60s`; at least 1200s in on-demand mode, `onDemand.maxWait + model.generationTimeout` — ADR 0010 Consequences, CORE-130, CORE-220); a `-dev` or `-pr` installation of this chart — `docs/testing-strategy.md` states there is exactly one installation per provider account and no preview workflow, so the kind job is the only automated install this spec's CI ever runs.
 
 ## Design and contracts
 
@@ -84,13 +92,16 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.provider.filter.minCudaVersion` | `12.8` | `VKLLM_PROVIDER_FILTER_MIN_CUDA_VERSION` |
 | `config.provider.filter.geolocation` | `""` | `VKLLM_PROVIDER_FILTER_GEOLOCATION` |
 | `config.provider.apiKeyFile` | `/etc/vkllm/secrets/provider/VAST_API_KEY` | `VKLLM_PROVIDER_API_KEY_FILE` |
-| `config.lifecycle.provisioningMode` | `explicit` | `VKLLM_LIFECYCLE_PROVISIONING_MODE` — schema-restricted to `explicit` (ADR 0010 §1) |
+| `config.lifecycle.provisioningMode` | `explicit` | `VKLLM_LIFECYCLE_PROVISIONING_MODE` — schema enum `explicit` \| `on-demand` (ADR 0010 §1, ADR 0019 §1) |
 | `config.lifecycle.idleShutdown.enabled` | `true` | `VKLLM_LIFECYCLE_IDLE_SHUTDOWN_ENABLED` — `false` refused unless `maxLifetime` is set (ADR 0011 §5) |
 | `config.lifecycle.idleShutdown.timeout` | `30m` | `VKLLM_LIFECYCLE_IDLE_SHUTDOWN_TIMEOUT` (fixed form, architecture §9) |
 | `config.lifecycle.shutdown.drainTimeout` | `60s` | `VKLLM_LIFECYCLE_SHUTDOWN_DRAIN_TIMEOUT` — manual stop, lifetime and budget drains alike |
 | `config.lifecycle.shutdown.allowForce` | `false` | `VKLLM_LIFECYCLE_SHUTDOWN_ALLOW_FORCE` — gates the future `force` stop (ADR 0011 §3) |
 | `config.lifecycle.startupTimeout` | `15m` | `VKLLM_LIFECYCLE_STARTUP_TIMEOUT` (was `gpu.startupDeadline`) |
 | `config.lifecycle.safety.maxHourlyPriceUSD` | `0.80` | `VKLLM_LIFECYCLE_SAFETY_MAX_HOURLY_PRICE_USD` |
+| `config.lifecycle.safety.maxDownloadPriceUSDPerGB` | `0.10` | `VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB` — an offer above this MUST NOT be created (CORE-210 R3) |
+| `config.lifecycle.safety.maxStoragePriceUSDPerGBMonth` | `1.00` | `VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH` — an offer above this MUST NOT be created (CORE-210 R3) |
+| `config.lifecycle.safety.maxDiskGB` | `200` | `VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB` — above this no search runs; `reason=model_too_large` (CORE-210 R8) |
 | `config.lifecycle.safety.maxLifetime` | `12h` | `VKLLM_LIFECYCLE_SAFETY_MAX_LIFETIME` (was `6h`; a deliberate change, ADR 0011 §5) |
 | `config.lifecycle.safety.maxInstanceSpendUSD` | `0` | `VKLLM_LIFECYCLE_SAFETY_MAX_INSTANCE_SPEND_USD` — `0` = off; otherwise bounds one instance's estimated spend |
 | `config.lifecycle.safety.maxProvisionAttemptsPerHour` | `3` | `VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR` |
@@ -112,25 +123,31 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.model.sha256` | no default, required | `VKLLM_MODEL_SHA256` |
 | `config.model.contextSize` | `32768` | `VKLLM_MODEL_CONTEXT_SIZE` |
 | `config.model.parallel` | `1` | `VKLLM_MODEL_PARALLEL` |
-| `config.model.generationTimeout` | `10m` | `VKLLM_MODEL_GENERATION_TIMEOUT` — upstream deadline per request; sizes the Envoy route timeout to 660s (architecture §9, ADR 0010 Consequences) |
+| `config.model.generationTimeout` | `10m` | `VKLLM_MODEL_GENERATION_TIMEOUT` — upstream deadline per request; sizes the Envoy route timeout to 660s in explicit mode, at least 1200s in on-demand mode (architecture §9, ADR 0010 Consequences, ADR 0019 §7) |
 | `config.worker.image` | no default, required | `VKLLM_WORKER_IMAGE` |
 | `config.worker.deadManTimeout` | `""` (empty → derives `lifecycle.idleShutdown.timeout + 10m`) | `VKLLM_WORKER_DEAD_MAN_TIMEOUT` |
 | `config.mgmt.rateLimitPerKeyRPM` | `60` | `VKLLM_MGMT_RATE_LIMIT_RPM` |
+| `config.onDemand.maxWait` | `600s` | `VKLLM_ONDEMAND_MAX_WAIT` — longest a held stream waits for `READY` (CORE-220, ADR 0019 §6) |
+| `config.onDemand.maxPending` | `32` | `VKLLM_ONDEMAND_MAX_PENDING` — held streams at once; the 33rd gets `429 queue_full` (CORE-220) |
+| `config.onDemand.heartbeatInterval` | `15s` | `VKLLM_ONDEMAND_HEARTBEAT_INTERVAL` — SSE keep-alive and demand-deadline refresh cadence (CORE-220) |
+| `config.onDemand.tickerInterval` | `30s` | `VKLLM_ONDEMAND_TICKER_INTERVAL` — silence before a ticker phrase (CORE-220) |
+| `config.onDemand.demandGrace` | `60s` | `VKLLM_ONDEMAND_DEMAND_GRACE` — how long an unattended `demand` start survives (CORE-220, ADR 0019 §6) |
+| `config.onDemand.tickerPhrases` | `[]` | `VKLLM_ONDEMAND_TICKER_PHRASES` — newline-joined (`join "\n"`); empty means the built-in set (CORE-220) |
 
 `config.model.url`, `config.model.sha256` and `config.worker.image` have no default: no production value exists anywhere in this repository yet; each is set at install time, the same category as `image.tag`.
 
 The management API reads the monthly budget from the controller snapshot, not from its own config; there is no separate management-side budget value (CORE-190).
 
-44 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
+53 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
 
 | Env var | Value | Why it is not a `config.*` row |
 |---|---|---|
 | `VKLLM_STATE_CONFIGMAP` | `{{ .Release.Name }}-state` | it names the object `internal/store`'s `configmap.InCluster` reads, the same literal name `role.yaml` and `state-configmap.yaml` use; it is wiring, not a tunable |
 | `VKLLM_INSTALLATION_ID` | `include "svc.installationId" .` | fixes the identity in the provider label `vkllm:<installation-id>:<generation>` to the release (ADR 0004 §6, amended) |
 
-### Future: on-demand mode and P2 cache are not rendered
+### Future: P2 cache is not rendered
 
-`onDemand.{maxWait,maxPending,heartbeatInterval}` (ADR 0007, ADR 0010 §4) and `storage.*` (P2 persistent volume cache, ADR 0014) are not `values.yaml` keys in this chart. Rendering them now, before any controller code consumes them, would let an operator believe setting them does something in the MVP. They are documented here, not in `values.yaml`, as the place a future chart revision adds them.
+`onDemand.*` now renders (CORE-220, ADR 0019); the table above is current. `storage.*` (P2 persistent volume cache, ADR 0014) is still not a `values.yaml` key in this chart — rendering it now, before any controller code consumes it, would let an operator believe setting it does something today. It is documented here, not in `values.yaml`, as the place a future chart revision adds it.
 
 ### Installation identity
 
@@ -155,7 +172,7 @@ Two checks beyond plain types, both load-bearing for safety (R-I):
   "properties": {
     "config": { "properties": { "lifecycle": {
       "properties": {
-        "provisioningMode": { "type": "string", "enum": ["explicit"] },
+        "provisioningMode": { "type": "string", "enum": ["explicit", "on-demand"] },
         "idleShutdown": { "properties": { "enabled": { "type": "boolean" } } },
         "safety": { "properties": { "maxLifetime": { "type": "string" } } }
       },
@@ -174,7 +191,7 @@ Two checks beyond plain types, both load-bearing for safety (R-I):
 }
 ```
 
-1. `config.lifecycle.provisioningMode` accepts only `explicit` in the MVP; `on-demand` fails schema validation naming the field (ADR 0010 §1 — `on-demand` is parsed by the Go binary but this chart never ships a value for it).
+1. `config.lifecycle.provisioningMode` accepts `explicit` (chart default) or `on-demand` (CORE-220, ADR 0019 §1); any other value fails schema validation naming the field.
 2. `config.lifecycle.idleShutdown.enabled: false` is refused unless `config.lifecycle.safety.maxLifetime` is a non-empty string, so no installation can rent a GPU with neither stop condition active (ADR 0011 §5, FR-3.12). With the default `maxLifetime: 12h` already set, disabling `idleShutdown` alone never trips this guard; only an installation that also clears `maxLifetime` does. The `pattern` requires at least one digit `1`-`9` somewhere in the string: a duration string with no such digit (`"0s"`, `"0h0m"`) always evaluates to zero, which is the same as having no lifetime bound at all.
 
 ### State ConfigMap shell
@@ -327,7 +344,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 - R10. `strategy.type` MUST be `Recreate`; the chart MUST fail its render when `replicaCount` is not exactly `1`. (source: ADR 0003 §1)
 - R11. Probes MUST target `/healthz` and `/readyz` on container port 9090, matching CORE-010 R6/R7, and MUST NOT depend on a GPU instance existing. (source: CORE-010 R6, R7, FR-1.7)
 - R12. Each `existingSecrets.*` Secret MUST be mounted as files — `provider` and `ssh` under `/etc/vkllm/secrets/{provider,ssh}`, `apiKeys` under `/etc/vkllm/api-keys/` — and MUST NOT be exposed through `env` or `envFrom`. (source: ADR 0009 §1)
-- R13. The rendered application `ConfigMap` MUST contain exactly the 44 `VKLLM_*` keys listed in this spec's `config.*` table plus the two fixed keys `VKLLM_STATE_CONFIGMAP` and `VKLLM_INSTALLATION_ID`, 46 total, with no other key. (source: architecture §9)
+- R13. The rendered application `ConfigMap` MUST contain exactly the 53 `VKLLM_*` keys listed in this spec's `config.*` table plus the two fixed keys `VKLLM_STATE_CONFIGMAP` and `VKLLM_INSTALLATION_ID`, 55 total, with no other key. (source: architecture §9, CORE-220)
 - R14. `values.yaml` MUST NOT contain a hostname, a domain, an `fqdn` value or a secret value anywhere in its defaults. (source: C-14, NFR-8.6)
 - R15. The chart MUST render without error, and without any `HTTPRoute` or `Ingress` object, when both `httpRoute.enabled` and `ingress.enabled` are `false`, and MUST install on any Kubernetes cluster with no ingress controller present. (source: NFR-9.2, C-23)
 - R16. `helm uninstall` MUST leave no `ConfigMap` behind, including the state document's `ConfigMap`; `helm upgrade` MUST leave the state document's content untouched. (source: NFR-9.1, ADR 0004 §1)
@@ -340,7 +357,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 - R23. `VKLLM_INSTALLATION_ID` MUST be deterministic for a given `(namespace, release)` pair across repeated renders and across `helm upgrade`, unless `installationId` is set explicitly. (source: ADR 0004 §6, amended; `docs/testing-strategy.md`)
 - R24. `serviceMonitor.enabled: true` MUST render exactly one `ServiceMonitor`. (CORE-090 adds the `PrometheusRule` and dashboard `ConfigMap` templates to this chart's `templates/` directory when it is implemented; this spec does not build them.) (source: NFR-10.6, CORE-090)
 - R25. `installationId`, when set, MUST match `^[a-z0-9][a-z0-9-]{0,31}$` in `values.schema.json`, the same pattern CORE-040's `NewDocument` enforces. (source: ADR 0004 §6, amended; `docs/testing-strategy.md`)
-- R26. `values.schema.json` MUST restrict `config.lifecycle.provisioningMode` to `explicit`; any other value MUST fail schema validation naming the field. (source: ADR 0010 §1)
+- R26. `values.schema.json` MUST restrict `config.lifecycle.provisioningMode` to `explicit` or `on-demand`; any other value MUST fail schema validation naming the field. (source: ADR 0010 §1, ADR 0019 §1, CORE-220)
 - R27. `values.schema.json` MUST refuse `config.lifecycle.idleShutdown.enabled: false` unless `config.lifecycle.safety.maxLifetime` is a non-empty string. (source: ADR 0011 §5, FR-3.12)
 
 ## Implementation steps
@@ -376,7 +393,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 - AC16. Setup: `--set config.tunnel.dialer=direct --set config.tunnel.directAddr=fake-worker.default.svc.cluster.local:8080`. Action: `helm template`. Expected: the `ConfigMap` contains `VKLLM_TUNNEL_DIALER: "direct"` and `VKLLM_TUNNEL_DIRECT_ADDR: "fake-worker.default.svc.cluster.local:8080"`. (R13)
 - AC17. Setup: `--set serviceMonitor.enabled=true`. Action: `helm template`. Expected: exactly one `ServiceMonitor`. (R24)
 - AC18. Setup: `--set installationId=Not_Valid!`. Action: `helm template` or `helm install --dry-run` (schema validation runs first). Expected: non-zero exit, the `values.schema.json` pattern error names `installationId`; `--set installationId=e2e-alice` succeeds. (R25)
-- AC19. Setup: `--set config.lifecycle.provisioningMode=on-demand`. Action: `helm template` or `helm install --dry-run`. Expected: non-zero exit, the schema error names `provisioningMode`. (R26)
+- AC19. Setup: `--set config.lifecycle.provisioningMode=on-demand`. Action: `helm template`. Expected: exit `0`, `VKLLM_LIFECYCLE_PROVISIONING_MODE: "on-demand"` in the output. Setup: `--set config.lifecycle.provisioningMode=auto`. Action: `helm template`. Expected: non-zero exit, the schema error names `provisioningMode`. (R26)
 - AC20. Setup: `--set config.lifecycle.idleShutdown.enabled=false --set config.lifecycle.safety.maxLifetime=""`. Action: `helm template` or `helm install --dry-run`. Expected: non-zero exit, the schema error names `maxLifetime`. A second run with the same `idleShutdown.enabled=false` and the default `maxLifetime: 12h` left in place succeeds. (R27, FR-3.12)
 - AC21. Action: `helm template` with defaults, extract the `Deployment`'s `apiKeys` volume. Expected: the Secret named by `existingSecrets.apiKeys` is mounted read-only at `/etc/vkllm/api-keys/`, `defaultMode: 0400`, with no `env`/`envFrom` reference to that Secret anywhere in the output. (R3, R12)
 
@@ -394,7 +411,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 | Vast publishes no IP range for its API or its SSH hosts (research §1.1, §1.6) | the egress NetworkPolicy for 443 and for SSH cannot be narrowed below `0.0.0.0/0` today | re-check research.md if Vast publishes one later | `networkPolicy.vastApiCidrs` empty; SSH rule stays protocol-only |
 | The platform's monitoring namespace name is not recorded in research §5 | the 9090 ingress rule cannot be scoped to it | CORE-130, when the platform integration spec reads the real namespace | 9090 ingress allowed from all in-cluster sources (not sensitive data) |
 | Whether `lookup`-based kube-apiserver `ipBlock`s resolve correctly across k3s and kind, and what CIDR CORE-130 should pass as `apiServerCidrs` for the platform's Argo-rendered install | a wrong `ipBlock` either over-permits (defeats the policy) or blocks the store entirely; Argo's client-side render means the platform install always needs `apiServerCidrs` set, never `lookup` | kind job AC12 for the `lookup` path; CORE-130 supplies the platform's `apiServerCidrs` | `lookup` for a direct `helm install`/`upgrade`; `fail` (not a silent `0.0.0.0/0`) when `networkPolicy.enabled` and neither resolves |
-| The Envoy route timeout object (660s in explicit mode, or disabled; 1080s reserved for a future on-demand install) has no object this chart renders | a platform install without it risks Envoy cutting a slow cold start or a long generation short | CORE-130 (a platform-side `BackendTrafficPolicy` or equivalent, out of this chart) | 660s (`model.generationTimeout + 60s`) or disabled (ADR 0010 Consequences) |
+| The Envoy route timeout object (660s in explicit mode, at least 1200s in on-demand mode) has no object this chart renders | a platform install without it risks Envoy cutting a slow cold start or a long generation short | CORE-130, CORE-220 (a platform-side `BackendTrafficPolicy` or equivalent, out of this chart) | 660s (`model.generationTimeout + 60s`) in explicit mode; at least 1200s (`onDemand.maxWait + model.generationTimeout`) in on-demand mode (ADR 0010 Consequences, ADR 0019 §7) |
 | No production `model.url`/`model.sha256`/`worker.image` value exists anywhere in this repository — settled by whoever first runs a real install | this chart must not invent a value | whoever first runs a real install | `required`, no chart default, matching `image.tag`'s own category |
 
 ## Evidence
