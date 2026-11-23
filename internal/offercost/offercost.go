@@ -42,9 +42,9 @@ func DiskGB(modelBytes int64, minDiskGB int) int {
 	return max(need, minDiskGB)
 }
 
-// Estimate rounds every money term up, so a ranking input never
-// understates what the session will be billed.
-func Estimate(o provider.Offer, in Inputs) Breakdown {
+// estimate rounds every money term up, so a ranking input never
+// understates what the session will be billed. Caller must guard InetDownMbps > 0.
+func estimate(o provider.Offer, in Inputs) Breakdown {
 	dlSec := int64(math.Ceil(float64(in.ModelBytes) * 8 / (o.InetDownMbps * 1e6)))
 	hours := (in.Horizon.Seconds() + float64(dlSec)) / 3600
 	dlUSD := provider.Money(math.Ceil(float64(in.ModelBytes) / 1e9 * float64(o.DownloadPerGB)))
@@ -67,7 +67,7 @@ func Rank(offers []provider.Offer, in Inputs) []Ranked {
 		if o.InetDownMbps <= 0 {
 			continue
 		}
-		out = append(out, Ranked{Offer: o, Breakdown: Estimate(o, in)})
+		out = append(out, Ranked{Offer: o, Breakdown: estimate(o, in)})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]

@@ -27,8 +27,8 @@ func TestEstimateMatchesHandComputedValues(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := Estimate(c.o, qwenIn); got != c.want {
-				t.Fatalf("Estimate =\n %+v\nwant\n %+v", got, c.want)
+			if got := estimate(c.o, qwenIn); got != c.want {
+				t.Fatalf("estimate =\n %+v\nwant\n %+v", got, c.want)
 			}
 		})
 	}
@@ -39,8 +39,25 @@ func TestRankPrefersCheaperSessionOverCheaperGPU(t *testing.T) {
 	if len(got) != 2 || got[0].Offer.MachineID != 117871 {
 		t.Fatalf("Rank first = %+v, want machine 117871", got[0].Offer)
 	}
-	if got[0].Breakdown != Estimate(run1, qwenIn) {
-		t.Fatalf("Rank breakdown differs from Estimate")
+	if got[0].Breakdown != estimate(run1, qwenIn) {
+		t.Fatalf("Rank breakdown differs from estimate")
+	}
+}
+
+func TestRankPutsLowerSessionBeforeLowerHourly(t *testing.T) {
+	a := provider.Offer{ID: 1, Hourly: 600000, DownloadPerGB: 39063, InetDownMbps: 1000}
+	b := provider.Offer{ID: 2, Hourly: 650000, DownloadPerGB: 0, InetDownMbps: 1000}
+	if a.Hourly >= b.Hourly {
+		t.Fatalf("fixture intent broken: a.Hourly %d >= b.Hourly %d", a.Hourly, b.Hourly)
+	}
+	aBreak := estimate(a, qwenIn)
+	bBreak := estimate(b, qwenIn)
+	if bBreak.SessionUSD >= aBreak.SessionUSD {
+		t.Fatalf("fixture intent broken: b.SessionUSD %d >= a.SessionUSD %d", bBreak.SessionUSD, aBreak.SessionUSD)
+	}
+	got := Rank([]provider.Offer{a, b}, qwenIn)
+	if len(got) != 2 || got[0].Offer.ID != 2 {
+		t.Fatalf("Rank first = %+v, want id 2", got[0].Offer)
 	}
 }
 
@@ -64,7 +81,7 @@ func TestRankTieBreaksByHourlyThenID(t *testing.T) {
 
 func TestEstimateWithoutDphBaseCountsAllAsGPU(t *testing.T) {
 	o := provider.Offer{ID: 1, Hourly: 600000, InetDownMbps: 1000}
-	got := Estimate(o, qwenIn)
+	got := estimate(o, qwenIn)
 	if got.GPUHourly != 600000 || got.StorageHourly != 0 {
 		t.Fatalf("GPU/storage = %d/%d, want 600000/0", got.GPUHourly, got.StorageHourly)
 	}
