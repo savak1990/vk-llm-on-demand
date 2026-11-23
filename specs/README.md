@@ -80,7 +80,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [180](core/180-P-persistent-volume-cache/spec.md) | P2: persistent-volume cache and preferred host (not in the initial release) | 020, 050 |
 | [190](core/190-D-runtime-budget-reconfiguration/spec.md) | Runtime-mutable budget cap, with a fixed ceiling | 055, 100, 150, 160 |
 | [200](core/200-P-per-start-parameters/spec.md) | Problem statement: model, quantization, GPU, idle timeout and price cap as per-start parameters (no design yet) | 055, 130, 150, 190 |
-| [210](core/210-P-offer-cost-model/spec.md) | Requirements: offer selection and cost estimates count bandwidth and storage, not GPU time alone (no design yet) | 020, 050, 100 |
+| [210](core/210-D-offer-cost-model/spec.md) | Offer selection by estimated session cost; caps on download, storage and disk | 020, 050, 070, 100 |
 | [220](core/220-P-automatic-gpu-start/spec.md) | Requirements: a chat-client user can get the GPU started without a management token (no design yet) | 050, 055, 060, 110, 130 |
 | [240](core/240-P-voice-input-output/spec.md) | Requirements: speech to text and text to speech in the chat front end (no design yet) | 060, 230 |
 | [250](core/250-P-code-execution/spec.md) | Requirements: sandboxed code execution in the chat front end (no design yet) | 060, 230 |
