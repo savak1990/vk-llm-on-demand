@@ -97,9 +97,10 @@ func (c *Controller) Demand(ctx context.Context, keyID string, until time.Time) 
 - State `Ready` or `Serving`: no-op.
 - State `Draining` or `Destroying`: returns `ErrDraining`.
 
-**Start origin.** `store.Instance.StartOrigin` is `explicit` or `demand`,
-written in the T5 transition. `Start` on an instance with origin `demand`
-rewrites it to `explicit`. Absent (old documents) reads as `explicit`.
+**Start origin.** `store.Document.StartOrigin` is `explicit` or `demand`,
+written when a start is accepted (T1, or the backoff row that records the
+desire). `Start` during a `demand` start rewrites it to `explicit`. Absent
+(old documents) reads as not `demand`, so nothing is cancelled.
 
 **Cancellation.** On every loop tick, if the state is `Searching`,
 `Creating`, `Booting` or `Loading`, the origin is `demand`, and now is past
@@ -112,16 +113,18 @@ because a restart drops every held request.
 A cancelled create still counts against `maxProvisionAttemptsPerHour`
 (the counter moves at T5). Accepted in ADR 0018.
 
-**Audit.** When T5 runs, the controller logs one `gpu_start` line with
-`origin` (`explicit` or `demand`), `key_id`, `generation` and `machine_id`.
-`Start` passes the management token's key id; `Demand` passes the
-inference key's id.
+**Audit.** When a start moves `Idle → Searching`, the controller logs one
+`gpu_start` line with `origin` (`explicit` or `demand`), `key_id` and
+`generation`. `Demand` passes the inference key's id. An explicit start
+logs an empty `key_id`; its management token is already in the
+`mgmt_request` line (`op=start`, `key_id`).
 
 **Offer.** `store.Offer` gains `Geo string` from
 `provider.Offer.Geolocation`; `Snapshot` gains `Geolocation`.
 
 **Download progress.** While the state is `Loading` and the dialer is SSH,
-the controller runs one command over the tunnel every 15 s:
+the controller runs one command over the tunnel on every readiness poll
+(5 s), through a new `Worker.Progress` method:
 
 ```sh
 cat /var/log/vkllm-stages.log 2>/dev/null
@@ -171,8 +174,8 @@ the longest measured cold start, rounded down to whole minutes.
 1. Write `200`, `Content-Type: text/event-stream`, flush.
 2. Call `Demand(key, now + demandGrace)`. On denial go to step 6.
 3. Loop until `READY`, denial, failure, `maxWait`, or client disconnect:
-   - one shared poller reads `Status()` every 2 s while the queue is not
-     empty and wakes every held request;
+   - every 2 s, read a `Status()` snapshot that is cached for 2 s and
+     shared by every held request;
    - a new milestone sends a checkpoint line;
    - every `heartbeatInterval`: write `: keep-alive` and call
      `Demand(key, now + demandGrace)`;
@@ -210,8 +213,8 @@ Checkpoints, each sent once, in this order:
 | stage `server_spawn` | Checksum OK; loading the model into the GPU… |
 | state `READY` | Ready. |
 
-A request that joins mid-start gets the latest milestone only, not the
-ones before it. Without `model.sizeBytes` the download lines show GB
+A request that joins mid-start gets only the milestones that are true at
+that moment. Without `model.sizeBytes` the download lines show GB
 downloaded at each 2 GB step instead. Built-in ticker phrases: "Still
 warming up the GPU…", "Almost there…", "The GPU is still getting ready…",
 "Still working on it…", "Hang on, nearly ready…".
@@ -259,8 +262,8 @@ message, which has already started the GPU, and `Demand` coalesces.
   the per-client table above MUST hold (ADR 0018 §7).
 - R5. Requests during a start MUST NOT create a second instance and MUST
   NOT move the idle deadline before `READY` (ADR 0011).
-- R6. Every start MUST log one `gpu_start` line naming its origin and key
-  id.
+- R6. Every start MUST log one `gpu_start` line naming its origin; a
+  demand start MUST also name the inference key id.
 - R7. The gateway MUST NOT be able to call `Start` or `Stop` or change
   the budget; it gets `Demand` only (ADR 0012, ADR 0018 §2).
 - R8. A background request MAY call `Demand`; the reason is stated under
@@ -319,7 +322,7 @@ message, which has already started the GPU, and `Demand` coalesces.
   `Demand` calls create one instance.
 - AC2. `Demand` with the budget spent returns `ErrGPUUnavailable` with
   `Unavailable == "budget_exhausted"` and makes no provider call.
-- AC3. The demand deadline passes in `Creating` with origin `demand`: state
+- AC3. The demand deadline passes in `Booting` with origin `demand`: state
   becomes `Destroying` and one `gpu_start_cancelled` line is logged. Same
   with origin `explicit`: no transition.
 - AC4. `Start` during a `demand` start sets origin `explicit`; the
@@ -336,8 +339,9 @@ message, which has already started the GPU, and `Demand` coalesces.
   `LOADING_MODEL` with bytes at 0 %, 30 % and 100 % → stages → `READY`)
   emits the checkpoint lines in order, each once, then the fake worker's
   chunks; every progress chunk has `reasoning_content` and no `content`.
-- AC10. No state change for 95 s (fake clock): 6 comments, 3 ticker
-  phrases, no phrase twice in a row.
+- AC10. No state change for 600 s (fake clock, 2 s polls): at least 30
+  comments, at least 15 ticker phrases, no phrase twice in a row, at least
+  30 demand refreshes, then the `maxWait` tail.
 - AC11. A `maxWait` expiry and a denial each end with a reason line, a
   `finish_reason` chunk with `error`, and `[DONE]`.
 - AC12. With 32 streams held, the 33rd gets `429 queue_full`.
