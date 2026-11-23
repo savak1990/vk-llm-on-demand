@@ -1,6 +1,7 @@
 package deploydev
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,9 +11,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// needsList accepts GitHub Actions' two spellings of `needs`: a bare job name
+// for one dependency, or a sequence for several.
+type needsList []string
+
+func (n *needsList) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		*n = needsList{node.Value}
+	case yaml.SequenceNode:
+		var list []string
+		if err := node.Decode(&list); err != nil {
+			return err
+		}
+		*n = needsList(list)
+	default:
+		return fmt.Errorf("needs: unexpected yaml node kind %v", node.Kind)
+	}
+	return nil
+}
+
 type deployWorkflow struct {
 	Jobs map[string]struct {
-		Needs          []string          `yaml:"needs"`
+		Needs          needsList         `yaml:"needs"`
 		Environment    string            `yaml:"environment"`
 		TimeoutMinutes int               `yaml:"timeout-minutes"`
 		Permissions    map[string]string `yaml:"permissions"`
@@ -39,11 +60,14 @@ func TestDeployDevJobShape(t *testing.T) {
 	if !ok {
 		t.Fatal("deploy.yml has no deploy-dev job")
 	}
-	if !slices.Equal(job.Needs, []string{"version", "publish"}) {
+	if !slices.Equal(job.Needs, needsList{"version", "publish"}) {
 		t.Errorf("needs = %v, want [version publish]", job.Needs)
 	}
 	if job.Environment != "gpu-control" {
 		t.Errorf("environment = %q, want gpu-control (the only Environment vk-llm-ci-role trusts)", job.Environment)
+	}
+	if job.TimeoutMinutes != 15 {
+		t.Errorf("timeout-minutes = %d, want 15", job.TimeoutMinutes)
 	}
 	if job.Permissions["contents"] != "read" || job.Permissions["id-token"] != "write" || len(job.Permissions) != 2 {
 		t.Errorf("permissions = %v, want {contents: read, id-token: write}", job.Permissions)
