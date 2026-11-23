@@ -33,18 +33,27 @@ dl() {
     pids+=($!)
   done
   for i in "${pids[@]}"; do wait "$i" || return 1; done
-  cat "$M".[0-7] >"$M" && rm -f "$M".[0-7]
+  : >"$M"
+  for i in 0 1 2 3 4 5 6 7; do
+    [ -f "$M.$i" ] || continue
+    cat "$M.$i" >>"$M" || return 1
+    rm -f "$M.$i"
+  done
 }
 
 boot() {
   mkdir -p /models
-  if ! command -v aria2c >/dev/null && command -v apt-get >/dev/null; then
-    { timeout 120 apt-get update -qq && DEBIAN_FRONTEND=noninteractive timeout 120 apt-get install -y -qq aria2; } >/dev/null 2>&1 || true
+  if [ -f "$M" ] && echo "$MODEL_SHA256  $M" | sha256sum -c --status; then
+    st download_skipped
+  else
+    if ! command -v aria2c >/dev/null && command -v apt-get >/dev/null; then
+      { timeout 120 apt-get update -qq && DEBIAN_FRONTEND=noninteractive timeout 120 apt-get install -y -qq aria2; } >/dev/null 2>&1 || true
+    fi
+    st download_begin
+    dl || dl || dl || fail fail_download 2
+    st download_end
+    echo "$MODEL_SHA256  $M" | sha256sum -c --status || fail fail_checksum 3
   fi
-  st download_begin
-  dl || dl || dl || fail fail_download 2
-  st download_end
-  echo "$MODEL_SHA256  $M" | sha256sum -c --status || fail fail_checksum 3
   st verified
   unset LLAMA_ARG_HOST LLAMA_ARG_PORT
   st server_spawn
