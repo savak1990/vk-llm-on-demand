@@ -3,6 +3,7 @@ package provider
 
 import (
 	"context"
+	"math"
 	"time"
 )
 
@@ -22,13 +23,14 @@ type Money int64
 
 func (m Money) USD() float64 { return float64(m) / 1e6 }
 
+func FromUSD(x float64) Money { return Money(math.Round(x * 1e6)) }
+
 type OfferFilter struct {
 	GPUName              string
 	NumGPUs              int
 	MinCPUCores          int
 	MinCPURAMGB          int
-	MinDiskGB            int
-	AllocatedStorageGB   int
+	MinDiskGB            int // also the disk created and the storage priced into dph_total
 	MinReliability       float64
 	MinInetDownMbps      float64
 	MinDiskBwMBps        float64

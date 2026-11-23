@@ -38,8 +38,8 @@ type Controller struct {
 }
 
 // ProviderFilter mirrors provider.OfferFilter minus the caps (set from
-// the Controller's safety fields), AllocatedStorageGB (set per search
-// from the model size) and ExcludeMachineIDs (from the live denylist).
+// the Controller's safety fields) and ExcludeMachineIDs (from the live
+// denylist); MinDiskGB is the floor that the per-search disk size starts from.
 type ProviderFilter struct {
 	GPUName         string
 	NumGPUs         int

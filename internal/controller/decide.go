@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
@@ -583,9 +582,9 @@ func searchFilter(f Facts) provider.OfferFilter {
 		MinDiskBwMBps:        pf.MinDiskBwMBps,
 		MinCUDA:              pf.MinCUDA,
 		Geolocation:          pf.Geolocation,
-		MaxHourly:            provider.Money(math.Round(f.Cfg.MaxHourlyPriceUSD * 1e6)),
-		MaxDownloadPerGB:     provider.Money(math.Round(f.Cfg.MaxDownloadPriceUSDPerGB * 1e6)),
-		MaxStoragePerGBMonth: provider.Money(math.Round(f.Cfg.MaxStoragePriceUSDPerGBMonth * 1e6)),
+		MaxHourly:            provider.FromUSD(f.Cfg.MaxHourlyPriceUSD),
+		MaxDownloadPerGB:     provider.FromUSD(f.Cfg.MaxDownloadPriceUSDPerGB),
+		MaxStoragePerGBMonth: provider.FromUSD(f.Cfg.MaxStoragePriceUSDPerGBMonth),
 		ExcludeMachineIDs:    excl,
 	}
 }

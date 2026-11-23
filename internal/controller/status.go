@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"math"
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
@@ -51,7 +50,7 @@ func (c *Controller) Status() Snapshot {
 	}
 	snap.GPUName = doc.Instance.Offer.GPU
 	snap.MachineID = doc.Instance.Offer.MachineID
-	snap.Hourly = provider.Money(math.Round(doc.Instance.Offer.DPH * 1_000_000))
+	snap.Hourly = provider.FromUSD(doc.Instance.Offer.DPH)
 	if id, ok := providerIDOf(doc); ok {
 		snap.ProviderID = id
 	}

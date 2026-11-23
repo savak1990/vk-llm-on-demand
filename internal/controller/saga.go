@@ -36,7 +36,7 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 		return
 	}
 	f := e.filter
-	f.MinDiskGB, f.AllocatedStorageGB = disk, disk
+	f.MinDiskGB = disk
 	offers, err := c.deps.Provider.SearchOffers(ctx, f)
 	if err != nil {
 		c.postEvent(Event{Kind: EvNoOffer, Err: err, Reason: "provider_error"})

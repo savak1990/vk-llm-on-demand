@@ -30,13 +30,19 @@ var ErrPriceTooHigh = errors.New("budget: offer price above lifecycle.safety.max
 // Allow checks the monthly cap before the balance floor and returns on
 // the first failure — never both reasons at once.
 func (c *Checker) Allow(doc store.Document, balance provider.Money, known bool) string {
-	if c.EstimatedMTD(doc) >= c.CapUSD(doc) {
+	if c.Exhausted(doc, 0) {
 		return "budget_exhausted"
 	}
 	if !known || balance.USD() < 2*c.cfg.MaxHourlyPriceUSD {
 		return "balance_low"
 	}
 	return ""
+}
+
+// Exhausted reports whether month-to-date spend plus a charge not yet on
+// the ledger (an offer's model download) reaches the monthly cap.
+func (c *Checker) Exhausted(doc store.Document, pendingUSD float64) bool {
+	return c.EstimatedMTD(doc)+pendingUSD >= c.CapUSD(doc)
 }
 
 // UsedRatio never denies by itself; it exists for a future metric.

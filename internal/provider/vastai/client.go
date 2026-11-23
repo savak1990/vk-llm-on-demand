@@ -251,13 +251,12 @@ func (c *Client) SearchOffers(ctx context.Context, f provider.OfferFilter) ([]pr
 		return nil, &provider.Error{Op: "search", Class: provider.Terminal, Err: fmt.Errorf("decode offers: %w", err)}
 	}
 	c.recordOutcome("search", "ok", status)
-	usd := func(x float64) provider.Money { return provider.Money(x*1e6 + 0.5) }
 	out := make([]provider.Offer, 0, len(decoded.Offers))
 	for _, o := range decoded.Offers {
 		out = append(out, provider.Offer{
 			ID: o.ID, MachineID: o.MachineID, GPUName: o.GPUName, Geolocation: o.Geolocation, NumGPUs: o.NumGPUs,
-			Hourly: usd(o.DphTotal), DphBase: usd(o.DphBase),
-			DownloadPerGB: usd(o.InetDownCost), UploadPerGB: usd(o.InetUpCost), StoragePerGBMonth: usd(o.StorageCost),
+			Hourly: provider.FromUSD(o.DphTotal), DphBase: provider.FromUSD(o.DphBase),
+			DownloadPerGB: provider.FromUSD(o.InetDownCost), UploadPerGB: provider.FromUSD(o.InetUpCost), StoragePerGBMonth: provider.FromUSD(o.StorageCost),
 			DiskSpaceGB: o.DiskSpace,
 			Reliability: o.Reliability, InetDownMbps: o.InetDown, DiskBwMBps: o.DiskBw, CUDAMaxGood: o.CudaMaxGood,
 		})
@@ -283,7 +282,7 @@ func (d instanceDTO) toInstance() provider.Instance {
 		ID: d.ID, Label: d.Label, StatusMsg: d.StatusMsg,
 		Status: provider.MapStatus(d.ActualStatus), RawStatus: d.ActualStatus,
 		MachineID: d.MachineID, PublicIP: d.PublicIP, SSHHost: d.SSHHost, SSHPort: d.SSHPort,
-		Hourly:    provider.Money(d.DphTotal*1e6 + 0.5),
+		Hourly:    provider.FromUSD(d.DphTotal),
 		StartedAt: time.Unix(int64(d.StartDate), 0),
 	}
 }
@@ -554,5 +553,5 @@ func (c *Client) Balance(ctx context.Context) (provider.Money, error) {
 	if decoded.Credit != nil {
 		amount = *decoded.Credit
 	}
-	return provider.Money(amount*1e6 + 0.5), nil
+	return provider.FromUSD(amount), nil
 }

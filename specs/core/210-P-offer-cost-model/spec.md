@@ -217,10 +217,13 @@ comment says so.
 - `Offer` adds `DphBase`, `DownloadPerGB`, `UploadPerGB`,
   `StoragePerGBMonth` (all `Money`) and `DiskSpaceGB float64`; renames
   `InetDownMBps` to `InetDownMbps`.
-- `OfferFilter` adds `AllocatedStorageGB`, `MaxDownloadPerGB`,
-  `MaxStoragePerGBMonth`. `MinDiskGB` now carries the computed `DiskGB`.
-- `buildFilterBody` adds `allocated_storage`, `inet_down_cost lte`,
-  `storage_cost lte`; `disk_space gte` uses the computed disk.
+- `OfferFilter` adds `MaxDownloadPerGB`, `MaxStoragePerGBMonth`.
+  `MinDiskGB` now carries the computed `DiskGB`.
+- `buildFilterBody` adds `inet_down_cost lte`, `storage_cost lte`; the
+  computed disk goes to both `disk_space gte` and `allocated_storage`.
+- Dollars become `Money` through one `provider.FromUSD` (rounded to the
+  micro-USD); the monthly-cap test is `budget.Checker.Exhausted(doc,
+  pendingUSD)`, used by `Allow` and by the offer gate.
 - The DTO decodes `dph_base`, `inet_down_cost`, `inet_up_cost`,
   `storage_cost`, `disk_space`.
 - `provider.Select` becomes `provider.Filter`: it keeps each offer for

@@ -34,7 +34,8 @@ func (allowAllBudget) Rollover(*store.Document, time.Time)                      
 func (allowAllBudget) RefreshOpenEntry(*store.Document, time.Time)                   {}
 func (allowAllBudget) UsedRatio(store.Document) float64                              { return 0 }
 func (allowAllBudget) EstimatedMTD(store.Document) float64                           { return 0 }
-func (allowAllBudget) CapUSD(store.Document) float64                                 { return 1e9 } // "no cap": must stay above the gate's spent+download check
+func (allowAllBudget) Exhausted(store.Document, float64) bool                        { return false }
+func (allowAllBudget) CapUSD(store.Document) float64                                 { return 0 }
 func (allowAllBudget) CeilingUSD() float64                                           { return 0 }
 
 var _ controller.Budget = allowAllBudget{}

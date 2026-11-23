@@ -11,9 +11,6 @@ func buildFilterBody(f provider.OfferFilter) map[string]any {
 		"rentable":       map[string]any{"eq": true},
 		"type":           "ondemand",
 	}
-	if f.AllocatedStorageGB != 0 {
-		b["allocated_storage"] = f.AllocatedStorageGB
-	}
 	if f.GPUName != "" {
 		b["gpu_name"] = map[string]any{"eq": f.GPUName}
 	}
@@ -28,6 +25,8 @@ func buildFilterBody(f provider.OfferFilter) map[string]any {
 	}
 	if f.MinDiskGB != 0 {
 		b["disk_space"] = map[string]any{"gte": f.MinDiskGB}
+		// dph_total includes storage only for the size asked for here, so ask for the disk we create.
+		b["allocated_storage"] = f.MinDiskGB
 	}
 	if f.MinReliability != 0 {
 		b["reliability"] = map[string]any{"gte": f.MinReliability}

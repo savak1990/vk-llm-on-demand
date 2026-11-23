@@ -306,52 +306,40 @@ func TestDispatchSearchRanksBySessionCostAndSizesDisk(t *testing.T) {
 	if !ok || ev.Kind != EvOfferChosen || ev.Offer.MachineID != 117871 {
 		t.Fatalf("event = %+v, ok=%v; want machine 117871 (cheaper session, dearer GPU)", ev, ok)
 	}
-	if ev.Breakdown.DiskGB != 49 || ev.Filter.MinDiskGB != 49 || ev.Filter.AllocatedStorageGB != 49 {
-		t.Fatalf("disk = %d / filter %d / allocated %d, want 49 (minDiskGB 0 in this config)", ev.Breakdown.DiskGB, ev.Filter.MinDiskGB, ev.Filter.AllocatedStorageGB)
+	if ev.Breakdown.DiskGB != 49 || ev.Filter.MinDiskGB != 49 {
+		t.Fatalf("disk = %d / filter %d, want 49 (minDiskGB 0 in this config)", ev.Breakdown.DiskGB, ev.Filter.MinDiskGB)
 	}
 	if ev.Breakdown.HorizonSeconds != 1800 {
 		t.Fatalf("horizon = %d, want the 30m idle timeout", ev.Breakdown.HorizonSeconds)
 	}
 }
 
-func TestDispatchSearchFiltersOfferAboveInstanceSpendCap(t *testing.T) {
-	c, prov, _, _, _ := newTestController(t)
-	c.deps.Config.MaxInstanceSpendUSD = 0.10
-	prov.SetOffers(
-		provider.Offer{ID: 1, Hourly: 100000, DownloadPerGB: 100000}, // cheaper session, download alone == $0.10 cap
-		provider.Offer{ID: 2, Hourly: 600000},
-	)
-	f := provider.OfferFilter{MaxHourly: 800000, MaxDownloadPerGB: 200000, MaxStoragePerGBMonth: 1000000}
-	dispatchSearch(context.Background(), c, effSearch{filter: f})
-	ev, ok := recvEvent(t, c)
-	if !ok || ev.Kind != EvOfferChosen || ev.Offer.ID != 2 {
-		t.Fatalf("event = %+v, ok=%v; want offer 2 (offer 1's download alone reaches maxInstanceSpendUSD)", ev, ok)
+func TestDispatchSearchInstanceSpendCap(t *testing.T) {
+	cheapSessionBigDownload := provider.Offer{ID: 1, Hourly: 100000, DownloadPerGB: 100000} // download alone == $0.10
+	plain := provider.Offer{ID: 2, Hourly: 600000}
+	cases := []struct {
+		name     string
+		capUSD   float64
+		offers   []provider.Offer
+		wantKind EventKind
+		wantID   int64
+	}{
+		{"download alone reaches the cap, next offer wins", 0.10, []provider.Offer{cheapSessionBigDownload, plain}, EvOfferChosen, 2},
+		{"every offer reaches the cap", 0.10, []provider.Offer{cheapSessionBigDownload}, EvNoOffer, 0},
+		{"cap 0 is off", 0, []provider.Offer{cheapSessionBigDownload, plain}, EvOfferChosen, 1},
 	}
-}
-
-func TestDispatchSearchAllOffersAboveInstanceSpendCapNoOffer(t *testing.T) {
-	c, prov, _, _, _ := newTestController(t)
-	c.deps.Config.MaxInstanceSpendUSD = 0.10
-	prov.SetOffers(provider.Offer{ID: 1, Hourly: 100000, DownloadPerGB: 100000})
-	f := provider.OfferFilter{MaxHourly: 800000, MaxDownloadPerGB: 200000, MaxStoragePerGBMonth: 1000000}
-	dispatchSearch(context.Background(), c, effSearch{filter: f})
-	ev, ok := recvEvent(t, c)
-	if !ok || ev.Kind != EvNoOffer || ev.Reason != "no_offer" {
-		t.Fatalf("event = %+v, ok=%v; want EvNoOffer no_offer when every offer's download alone reaches the cap", ev, ok)
-	}
-}
-
-func TestDispatchSearchInstanceSpendCapZeroDisablesFilter(t *testing.T) {
-	c, prov, _, _, _ := newTestController(t)
-	prov.SetOffers(
-		provider.Offer{ID: 1, Hourly: 100000, DownloadPerGB: 100000},
-		provider.Offer{ID: 2, Hourly: 600000},
-	)
-	f := provider.OfferFilter{MaxHourly: 800000, MaxDownloadPerGB: 200000, MaxStoragePerGBMonth: 1000000}
-	dispatchSearch(context.Background(), c, effSearch{filter: f})
-	ev, ok := recvEvent(t, c)
-	if !ok || ev.Kind != EvOfferChosen || ev.Offer.ID != 1 {
-		t.Fatalf("event = %+v, ok=%v; want offer 1 (cheaper session, maxInstanceSpendUSD is off)", ev, ok)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, prov, _, _, _ := newTestController(t)
+			c.deps.Config.MaxInstanceSpendUSD = tc.capUSD
+			prov.SetOffers(tc.offers...)
+			f := provider.OfferFilter{MaxHourly: 800000, MaxDownloadPerGB: 200000, MaxStoragePerGBMonth: 1000000}
+			dispatchSearch(context.Background(), c, effSearch{filter: f})
+			ev, ok := recvEvent(t, c)
+			if !ok || ev.Kind != tc.wantKind || ev.Offer.ID != tc.wantID || (tc.wantKind == EvNoOffer && ev.Reason != "no_offer") {
+				t.Fatalf("event = %+v, ok=%v; want kind %v offer %d", ev, ok, tc.wantKind, tc.wantID)
+			}
+		})
 	}
 }
 
