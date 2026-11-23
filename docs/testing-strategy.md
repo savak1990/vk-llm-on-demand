@@ -1,9 +1,10 @@
 # Testing strategy
 
-Unlike `vk-ahorro`, this project runs **one installation** per provider
-account. Every additional running copy is another process that can rent a
-GPU against the same account and the same monthly budget. There are no
-`-dev` or `-pr` installations and no preview workflow.
+Two installations share one provider account: production in `llm`, pinned
+by a gitops PR, and dev in `llm-dev`, installed by `deploy.yml` on every
+code merge to `main` (ADR 0019). Each lists and destroys only instances
+labelled with its own `installationId`. There are no `-pr` installations
+and no preview workflow.
 
 ## Tiers
 
@@ -11,7 +12,7 @@ GPU against the same account and the same monthly budget. There are no
 |---|---|---|---|---|
 | 1 Unit and simulation | `go test ./...` | fake provider, fake store, fake clock, fake dialer; deterministic scenarios for the whole lifecycle (spec 050) | $0 | every pull request |
 | 2 Chart on kind | CI job (spec 080) | `provider.name=fake` plus a fake worker: a small Go SSE server that imitates llama-server's `/health`, `/v1/models`, `/v1/chat/completions` and `/metrics`, reached through the `direct` dialer; `vk-llm` and `gpu-control.yml` run `status` against it | $0 | every pull request |
-| 3 Acceptance | the single platform installation, or a temporary kind install on a laptop with its own `installationId` | real Vast.ai, budget-capped (`VKLLM_E2E_BUDGET_USD`, default 10) | ≤ $10 per run | manual (`make e2e` or `workflow_dispatch` with an environment that holds the keys) |
+| 3 Acceptance | `llm-dev` or production, or a temporary kind install on a laptop with its own `installationId` | real Vast.ai, budget-capped (`VKLLM_E2E_BUDGET_USD`, default 10) | ≤ $10 per run | manual (`make e2e` or `workflow_dispatch` with an environment that holds the keys) |
 
 The spike (spec 030) is a one-off tier 3 run with a $5 cap.
 

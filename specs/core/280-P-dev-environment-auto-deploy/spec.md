@@ -134,8 +134,9 @@ same for both. `scripts/gpu-control.sh` does not change.
    ConfigMap get/update, which the deploy identity already holds.
 3. **Namespace `llm-dev`** with ExternalSecrets `vast-ai-api-key`,
    `vk-llm-api-token` and `vk-llm-ssh-key` reading production's SSM
-   parameters, and a `BackendTrafficPolicy` with a 660 s request timeout on
-   HTTPRoute `gpu-on-demand`. The root Application self-heals them.
+   parameters, and a `BackendTrafficPolicy` on HTTPRoute `gpu-on-demand`
+   with the same request timeout as production's policy, rendered from
+   the same template. The root Application self-heals them.
 4. **`vk-llm-ci-role`** gains `ssm:GetParameter` on
    `/*/cluster/llm-deploy/*` and `/*/persistent/llm/api_token`, and
    `kms:Decrypt` limited by `kms:EncryptionContext:PARAMETER_ARN` to those
@@ -172,8 +173,8 @@ same for both. `scripts/gpu-control.sh` does not change.
 - R7. Dev MUST run in explicit mode with production's budget, price cap and
   idle timeout (ADR 0019 §3).
 - R8. Dev MUST be reachable at `llm-dev.<fqdn>` with the existing wildcard
-  certificate and external-dns, with the same 660 s request timeout as
-  production.
+  certificate and external-dns, with the same request timeout as
+  production's policy, rendered from the same template.
 - R9. If a credential parameter is missing or the cluster does not answer,
   the job MUST end green with a warning (the vk-ahorro convention).
 - R10. A failed install MUST roll back to the previous dev release

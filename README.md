@@ -299,7 +299,9 @@ Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
    deploy against a different backend, point `gpu-control.yml`'s SSM step
    at it instead.
 3. Go to the Actions tab, select `gpu-control`, and run it with the
-   `action` input set to `start`, `status`, `stop`, or `budget`.
+   `action` input set to `start`, `status`, `stop`, or `budget`. Set
+   `target` to `prod` (default, installation `llm`) or `dev`
+   (installation `llm-dev`) to pick which one it acts on.
 
 To change the budget from the Actions tab, set `action` to `budget` and
 type the new amount in `monthly_usd`. Leave `monthly_usd` blank to show
