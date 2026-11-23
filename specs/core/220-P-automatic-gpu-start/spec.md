@@ -1,195 +1,375 @@
 ---
 id: "CORE-220"
-status: "DRAFT"
+status: "READY"
 updated: "2026-11-23"
-depends_on: ["CORE-050", "CORE-055", "CORE-060", "CORE-110", "CORE-130"]
-adrs: ["0007", "0010", "0011", "0012", "0015"]
+depends_on: ["CORE-050", "CORE-055", "CORE-060", "CORE-070", "CORE-100", "CORE-130"]
+adrs: ["0018", "0007", "0010", "0011", "0012", "0006"]
 ---
 
 # 220 — Automatic GPU start from a chat client
 
-**Status note:** DRAFT, problem and requirements, plus the agreed direction
-for progress feedback (2026-11-23). No full design and no
-decision yet. Written 2026-11-22 while designing a household chat front end
-(Open WebUI) for this service. That front end ships first with a manual
-start; this spec is the follow-up that removes the manual step.
+**Status note:** READY (2026-11-23). Problem written 2026-11-22 while
+designing the Open WebUI front end (CORE-230), which ships first with a
+manual start. Design agreed with the user on 2026-11-23 in a question-by-
+question review; the decisions are recorded in ADR 0018. Facts about the
+chat clients were read from their source code on 2026-11-23 (Open WebUI
+v0.13.4, OpenCode v2.3.2, Chatbox v1.24.4, Conduit v4.3.2; Msty is closed
+source).
 
-## Problem
+**Complexity:** L — a new controller method and start origin, a gateway
+wait queue with a progress writer, a history filter, download progress
+read over the SSH tunnel, and chart and platform changes.
+**Risk:** high — an inference request now spends money. A wrong cancel
+rule either leaks a GPU or kills a start the user still waits for.
+**Estimated effort:** 3–4 sessions (12–16 h)
+**Recommended model:** strong — the change crosses the controller/gateway
+boundary on the cost-critical start path.
+**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md),
+[CORE-055](../055-D-management-api/spec.md),
+[CORE-060](../060-D-gateway-openai-api/spec.md),
+[CORE-070](../070-D-worker-runtime/spec.md),
+[CORE-100](../100-D-cost-controls/spec.md),
+[CORE-130](../130-D-platform-integration/spec.md).
+Related, not required: [CORE-180](../180-P-persistent-volume-cache/spec.md)
+(a cached model shortens every wait).
 
-Only a holder of a management token can start the GPU (`vk-llm start`, the
-`gpu-control` workflow, or `POST /api/v1/gpu/start`). A household member who
-opens a chat app while the GPU is stopped gets `503 backend_unavailable`,
-and has no way to fix it. The operator must start the GPU before family use,
-every time, and restart it after each 30-minute idle shutdown.
+## Outcome
 
-Two facts make this worse in a chat app:
+With `config.lifecycle.provisioningMode: on-demand`, a household member
+sends a chat message while the GPU is stopped and, in the same chat
+bubble, sees a collapsible "thinking" block that reports the offer search,
+the rented GPU with its location, price and machine id, the model download
+percentage, the checksum and the model load, then reads the model's real
+answer. Nobody runs `vk-llm start` and nobody retries. If the user closes
+the app before the GPU is ready, the start is cancelled within about a
+minute. Explicit mode stays the chart default and behaves as today.
 
-- `GET /v1/models` answers from configuration with the GPU stopped, so the
-  app shows the model as available and only fails when a message is sent.
-- A cold start takes 3 to 6 minutes (measured 2026-11-22: 2m51s and
-  6m20s), longer than most clients wait for a first byte.
+## Scope
 
-## What exists today (verified 2026-11-22)
+Controller: `Demand`, the demand deadline and its cancellation, the
+persisted start origin, the `gpu_start` audit line, `Geolocation` in the
+stored offer, download progress over the tunnel. Gateway: the wait queue,
+the progress stream, the immediate `503 gpu_cold_start` for non-streaming
+requests, the history filter, the cold-start metrics. Tunnel: an exec
+session. Chart: the mode enum, the `onDemand` block, `model.sizeBytes`.
+Platform: one `vk-lab-platform` pull request.
 
-- Provisioning mode is `explicit` only. The chart schema enum allows only
-  `explicit` (`deploy/helm/gpu-on-demand/values.schema.json`); the
-  controller refuses any other value at start-up
-  (`internal/controller/controller.go`).
-- An **on-demand mode** is fully designed in ADR 0007 and never built: the
-  gateway registers demand, holds the request in a bounded queue
-  (`maxPending` 32) for up to `maxWait` 480 s, sends `: warming up <stage>`
-  SSE heartbeats every 15 s on streaming requests, and returns
-  `503 gpu_cold_start` with `Retry-After` on non-streaming timeouts. The
-  Envoy route timeout must then be at least 1080 s (480 + 600). The gateway
-  metrics for it (`vkllm_gateway_pending_requests`, `_wait_seconds`,
-  `_cold_start_outcomes_total`) are registered and always zero; there is no
-  `Demand` method, queue or heartbeat code.
-- ADR 0010 deferred on-demand mode for three reasons: it couples spend to
-  any authenticated request, it makes the first request of a session slow,
-  and the start decision was to stay with the user. A hybrid (explicit plus
-  auto-start on the first request) was rejected as "two triggers for one
-  expensive action". ADR 0010's own Risks section names this spec's problem:
-  "Users forget to start the GPU and see 503s."
-- Management tokens are unscoped: any token can `start`, `stop`, read
-  `status`/`cost`, and raise the monthly budget up to the Helm ceiling
-  (`POST /api/v1/gpu/budget`). A token handed to a chat app could do all of
-  that.
-- `start` is idempotent and coalesced; repeated calls never create a second
-  instance and never move the idle deadline (ADR 0011 §2).
-- Client keys are per line with a key id; logs carry `key_id`, metrics do
-  not. Keys hot-reload every 10 s without a restart.
-- Spend controls today: monthly budget ($30, runtime-mutable up to $100),
-  `maxHourlyPriceUSD` 0.80, `maxLifetime` 12h, 3 provision attempts per hour,
-  30-minute rolling idle timeout. There is no per-user or per-key quota.
+Excludes: the chat front end itself (CORE-230); per-key or per-user spend
+limits (accepted risk, ADR 0018); a per-key "may start" mark (rejected,
+ADR 0018); per-start model or GPU choice (CORE-200; an automatic start uses
+the chart defaults, and the one supported model is the one the chat app
+is configured with); an uncached worker image inside a held request (it
+surfaces as a `maxWait` expiry); multiple concurrent GPUs.
 
-## Candidate approaches (to evaluate, not chosen)
+## Design and contracts
 
-1. **On-demand mode per ADR 0007.** The first chat request starts the GPU
-   and waits. Largest change: gateway queue, heartbeats, controller
-   `Demand`, schema, Envoy timeout.
-2. **Start-only scope plus a "Start GPU" control in the chat app.** A new
-   token scope that can call `start` and `status` and nothing else, used by
-   an Open WebUI function or button. Smallest change to this service; the
-   user still waits and retries by hand.
-3. **Per-key auto-start opt-in.** Explicit mode stays the default; a client
-   key marked "may start" turns its first chat request into a `start` plus
-   an immediate, informative error ("starting, ready in about N minutes").
-   A hybrid, so it needs ADR 0010 amended.
+### Configuration
 
-## Progress feedback while the user waits (direction agreed 2026-11-23)
+| Chart value | Env | Default | Meaning |
+|---|---|---|---|
+| `config.lifecycle.provisioningMode` | `VKLLM_LIFECYCLE_PROVISIONING_MODE` | `explicit` | enum gains `on-demand` (schema and controller) |
+| `config.onDemand.maxWait` | `VKLLM_ONDEMAND_MAX_WAIT` | `600s` | longest a stream is held |
+| `config.onDemand.maxPending` | `VKLLM_ONDEMAND_MAX_PENDING` | `32` | held streams at once |
+| `config.onDemand.heartbeatInterval` | `VKLLM_ONDEMAND_HEARTBEAT_INTERVAL` | `15s` | SSE comment and demand refresh |
+| `config.onDemand.tickerInterval` | `VKLLM_ONDEMAND_TICKER_INTERVAL` | `30s` | silence before a ticker phrase |
+| `config.onDemand.demandGrace` | `VKLLM_ONDEMAND_DEMAND_GRACE` | `60s` | how long an unattended start survives |
+| `config.onDemand.tickerPhrases` | `VKLLM_ONDEMAND_TICKER_PHRASES` (newline-separated) | built-in set | empty means the built-in set |
+| `config.model.sizeBytes` | `VKLLM_MODEL_SIZE_BYTES` | `0` | model file size; `0` shows GB without a percentage |
 
-Whichever approach holds a request during a start, the gateway answers a
-streaming request at once with `200 text/event-stream` and keeps the user
-informed in the same stream, instead of returning `503`:
+`model.sizeBytes` sits next to `model.sha256` because both pin the one
+supported model file.
 
-1. **Checkpoint lines**, one per real milestone, built from the
-   controller's state and the chosen offer, for example:
-   - "Looking for a GPU offer…" (`ALLOCATING`)
-   - "Rented an RTX 6000Ada in Sweden at $0.55/h (machine 117871); booting the
-     worker…" (offer chosen; `Offer` already carries `GPUName`,
-     `Geolocation`, `Hourly`, `MachineID`)
-   - "Worker up; downloading and loading the model (28.6 GB)…"
-     (`LOADING_MODEL`)
-   - "Ready." (`READY`)
-2. **A ticker:** every 30 s with no checkpoint, one phrase chosen at random
-   from a predefined set ("Still warming up the GPU…", "Almost there…"),
-   never the same phrase twice in a row. The set is a chart value with a
-   built-in default.
-3. **Keep-alive:** an SSE comment line every 15 s, invisible to the user,
-   so no client or proxy closes an idle connection between ticker lines.
-4. **The real answer** follows in the same stream: at `READY` the gateway
-   forwards the original request to the worker and pipes the model's chunks
-   after the progress lines. The user never retries.
+### Controller
 
-Two kinds of timeout apply to a held stream, and the ticker fixes only the
-first:
+```go
+// Demand starts the GPU through the same gates as Start and extends the
+// in-memory demand deadline. It never moves the idle deadline.
+func (c *Controller) Demand(ctx context.Context, keyID string, until time.Time) (Snapshot, error)
+```
 
-- **Idle timeouts** ("no byte for N seconds"): in clients and proxies. The
-  15 s keep-alive and the 30 s ticker keep every byte gap short, so these
-  never fire.
-- **Total timeouts** ("the whole response must end within N seconds"):
-  bytes do not reset them. The gateway's own HTTP server sets none
-  (`WriteTimeout: 0`), and Open WebUI sets none by default. The Envoy route
-  does: `requestTimeout: 660s` (CORE-130). A held request can need the cold
-  start (up to about 6.5 min measured) plus generation (up to
-  `model.generationTimeout`, 10 min), so the route's total timeout MUST be
-  raised to at least 1080 s, as ADR 0007 §4 already states, or disabled.
+- Only in on-demand mode; in explicit mode it returns `ErrBackendUnavailable`.
+- State `Idle`: same path as `Start` (`gateReason`: budget, balance,
+  attempts, no-offer window, backoff). A denial returns `ErrGPUUnavailable`
+  with `Snapshot.Unavailable` set, as `Start` does today. Origin becomes
+  `demand`.
+- State `Searching` to `Loading`: coalesced, no second instance (ADR 0011
+  §2). The deadline becomes `max(deadline, until)`.
+- State `Ready` or `Serving`: no-op.
+- State `Draining` or `Destroying`: returns `ErrDraining`.
 
-Checkpoint and ticker lines go out as `reasoning_content` deltas (the
-"thinking" channel), never as `content`. OpenCode, Msty and Open WebUI show
-that channel as a collapsible thought; clients do not store it as the
-answer and do not resend it in the next turn, so the progress text never
-enters the conversation history; and in an agent loop (OpenCode) a thought
-does not end the turn, where `content` such as "Almost there…" would be
-taken as the final answer. Every line is a truthful service status,
-prefixed so it does not read as the model's own reasoning.
+**Start origin.** `store.Instance.StartOrigin` is `explicit` or `demand`,
+written in the T5 transition. `Start` on an instance with origin `demand`
+rewrites it to `explicit`. Absent (old documents) reads as `explicit`.
+
+**Cancellation.** On every loop tick, if the state is `Searching`,
+`Creating`, `Booting` or `Loading`, the origin is `demand`, and now is past
+the demand deadline, the controller processes `EvStop` (existing
+transitions: `Searching → Idle`, the others `→ Destroying`) and logs
+`gpu_start_cancelled reason=demand_expired`. The demand deadline lives in
+memory only: after a pod restart, recovery sets it to now + `demandGrace`,
+because a restart drops every held request.
+
+A cancelled create still counts against `maxProvisionAttemptsPerHour`
+(the counter moves at T5). Accepted in ADR 0018.
+
+**Audit.** When T5 runs, the controller logs one `gpu_start` line with
+`origin` (`explicit` or `demand`), `key_id`, `generation` and `machine_id`.
+`Start` passes the management token's key id; `Demand` passes the
+inference key's id.
+
+**Offer.** `store.Offer` gains `Geo string` from
+`provider.Offer.Geolocation`; `Snapshot` gains `Geolocation`.
+
+**Download progress.** While the state is `Loading` and the dialer is SSH,
+the controller runs one command over the tunnel every 15 s:
+
+```sh
+cat /var/log/vkllm-stages.log 2>/dev/null
+echo "VKLLM_BYTES $(du -cB1 /models/model.gguf /models/model.gguf.[0-9]* 2>/dev/null | tail -1 | cut -f1)"
+```
+
+`du` counts allocated blocks, which is correct because `onstart.sh.tmpl`
+already runs `aria2c --file-allocation=none` and the `curl` fallback writes
+part files; the apparent file size would be wrong for a sparse file. A new
+file `internal/worker/download.go` holds
+`ParseProgress(out []byte) (Progress, error)`, which reuses `ParseStages`
+for the stage lines and reads the `VKLLM_BYTES` line. `Snapshot` gains
+`DownloadedBytes`, `ModelBytes` (from `model.sizeBytes`) and
+`WorkerStages` (stage names seen so far). A failed read keeps the last
+value; it never changes the state.
+
+**Tunnel.** `tunnel.Conn` gains `Exec(ctx, cmd string) ([]byte, error)`,
+one `ssh.Session` per call on the existing `*ssh.Client`. The direct TCP
+dialer (kind job) returns `tunnel.ErrExecUnsupported`; progress lines then
+show no download figures.
+
+### Gateway
+
+The gateway's `Controller` interface gains `Demand` only; `Start` and
+`Stop` stay absent, so an inference key cannot stop the GPU or change the
+budget.
+
+**Admission in on-demand mode.** When `Admit` returns `ErrBackendUnavailable`:
+
+| Request | Answer |
+|---|---|
+| `stream: true`, queue not full | held: progress stream (below) |
+| `stream: true`, queue full | `429 queue_full`, `Retry-After: 15` |
+| `stream: false` | `Demand(key, now + retryAfter + demandGrace)`, then `503 gpu_cold_start`, `Retry-After: retryAfter` |
+| any, `Demand` denied | `503 gpu_unavailable` with the readable reason, no `Retry-After` |
+
+When `Admit` returns `ErrDraining`: `503 backend_unavailable` with the
+message "GPU is shutting down; try again in a minute" and
+`Retry-After: 60` (outcome `shutting_down`). In explicit mode nothing
+changes.
+
+`retryAfter` = max(30 s, 360 s − time since the start began). 360 s is
+the longest measured cold start, rounded down to whole minutes.
+
+**Held stream.** Lifecycle of one held request:
+
+1. Write `200`, `Content-Type: text/event-stream`, flush.
+2. Call `Demand(key, now + demandGrace)`. On denial go to step 6.
+3. Loop until `READY`, denial, failure, `maxWait`, or client disconnect:
+   - one shared poller reads `Status()` every 2 s while the queue is not
+     empty and wakes every held request;
+   - a new milestone sends a checkpoint line;
+   - every `heartbeatInterval`: write `: keep-alive` and call
+     `Demand(key, now + demandGrace)`;
+   - after `tickerInterval` with no line sent: send a ticker phrase, never
+     the one sent last.
+4. At `READY`: `Admit(gen)` and forward the original body. Response
+   headers are already sent, so the gateway pipes the upstream chunks only.
+5. Disconnect: leave the queue and stop refreshing demand (outcome
+   `client_gone`). The controller cancels after `demandGrace` if no other
+   request refreshes the deadline.
+6. Denial, failure or `maxWait`: send the reason as a progress line, then
+   `data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"error":{...}}`,
+   then `data: [DONE]`. After `maxWait` the line says the GPU is still
+   starting and to send the message again in a few minutes; the start
+   continues.
+
+**Progress line.** One SSE chunk per line:
+
+```json
+{"id":"vkllm-progress","object":"chat.completion.chunk","created":<unix>,
+ "model":"<alias>","choices":[{"index":0,
+ "delta":{"role":"assistant","reasoning_content":"[vk-llm] <text>\n\n"},
+ "finish_reason":null}]}
+```
+
+Checkpoints, each sent once, in this order:
+
+| Trigger | Text |
+|---|---|
+| held, state `ALLOCATING` | Looking for a GPU offer… |
+| `MachineID` set | Renting an `<GPU>` in `<Geolocation>` at $`<Hourly>`/h (machine `<MachineID>`); booting the worker… |
+| state `LOADING_MODEL` | Worker up; downloading the model (`<size>`)… |
+| downloaded bytes cross each 10 % | Downloading the model: `<p>`% (`<x>` of `<y>` GB) |
+| stage `download_end` | Download done; verifying the checksum… |
+| stage `server_spawn` | Checksum OK; loading the model into the GPU… |
+| state `READY` | Ready. |
+
+A request that joins mid-start gets the latest milestone only, not the
+ones before it. Without `model.sizeBytes` the download lines show GB
+downloaded at each 2 GB step instead. Built-in ticker phrases: "Still
+warming up the GPU…", "Almost there…", "The GPU is still getting ready…",
+"Still working on it…", "Hang on, nearly ready…".
+
+**History filter.** Before every forward (held or not), for each message
+with a string `reasoning_content`, delete each line that starts with
+`[vk-llm] ` and the blank line after it; drop the field when it becomes
+empty. Nothing else in the body changes.
+
+**Metrics.** `vkllm_gateway_pending_requests` (held streams),
+`vkllm_gateway_wait_seconds` (hold start to `READY`),
+`vkllm_gateway_cold_start_outcomes_total{outcome}` with the pre-seeded
+labels. `vkllm_gateway_ttft_seconds` starts at the forward in step 4, so
+it measures the model's first chunk, never a progress line.
+
+### Timeouts per client
+
+| Client | Total timeout | Idle timeout | How the design fits |
+|---|---|---|---|
+| Open WebUI | none (`AIOHTTP_CLIENT_TIMEOUT` unset) | none (`AIOHTTP_CLIENT_STREAM_IDLE_TIMEOUT` unset) | fits; if an operator sets an idle cap, 15 s comments stay below it |
+| Conduit | Open WebUI's (tokens arrive over Socket.IO) | Open WebUI's | same as Open WebUI |
+| OpenCode | none; `headerTimeout` 300 s | `chunkTimeout` 900 s | `200` is sent at once; byte gaps ≤ 15 s |
+| Chatbox | none found | none found | fits |
+| Msty | unconfirmed (closed source) | unconfirmed | manual test AC14 |
+| Envoy route | 1200 s (raised from 660 s) | n/a | 600 s `maxWait` + 600 s `model.generationTimeout` |
+
+### Background requests
+
+Open WebUI sends title, tag and follow-up requests with `stream: false`
+to the chat model; OpenCode and Chatbox stream their title request. Any of
+them can call `Demand`. This is acceptable: each one follows a user's chat
+message, which has already started the GPU, and `Demand` coalesces.
 
 ## Requirements
 
-- R1. A chat-client user who holds no management token MUST be able to get
-  the GPU started, but only through a client the operator explicitly
-  enabled for it. Explicit mode MUST remain available and stay the default.
-- R2. Every existing spend control MUST still apply to an automatic start:
-  monthly budget, `maxHourlyPriceUSD`, `maxLifetime`, attempts per hour. A
-  start denied by one of them MUST reach the user as a readable reason, not
-  a bare 503.
-- R3. The user MUST see that a start is in progress and roughly how long it
-  takes, in the chat app itself, instead of `backend_unavailable`.
-- R4. No client MUST fail a request because of the cold start's length
-  alone: the design MUST state, per supported client (Open WebUI, OpenCode,
-  Chatbox, Msty, Conduit), what timeout each applies and how the design
-  stays inside it, including the Envoy route timeout.
-- R5. Requests arriving during a start MUST NOT cause a second instance,
-  and MUST NOT count as activity before the GPU is `READY` (ADR 0011).
-- R6. Every automatic start MUST be attributable: the audit log MUST record
-  which key triggered it.
-- R7. A credential that can trigger a start MUST NOT also be able to stop
-  the GPU or change the budget.
-- R8. A background request (title, tag, follow-up generation) from a chat
-  app MUST NOT by itself start the GPU, or the design MUST explain why that
-  is acceptable.
-- R9. While a start is in progress, a streaming chat request MUST get
-  `200 text/event-stream` at once, then progress lines, then the model's
-  real answer in the same response.
-- R10. Progress lines MUST be sent only as `reasoning_content` deltas,
-  never as `content`, and MUST carry a prefix that marks them as service
-  status, not model output.
-- R11. The gateway MUST send a checkpoint line at each state change
-  (`ALLOCATING`, offer chosen, `LOADING_MODEL`, `READY`); the offer-chosen
-  line MUST name the GPU, its location, its hourly price and the machine id.
-- R12. Between checkpoints the gateway MUST send one phrase from a
-  configurable set every 30 s, chosen at random and never the same phrase
-  twice in a row, and an SSE comment every 15 s.
-- R13. If the start fails or is denied, the stream MUST end with the reason
-  as a progress line followed by an in-stream error and `[DONE]`.
-- R14. Time-to-first-token metrics MUST measure the model's first chunk,
-  not the first progress line; the wait MUST be measured separately
-  (`vkllm_gateway_wait_seconds` already exists).
-- R15. A non-streaming request MUST NOT receive progress lines; the design
-  MUST state whether it waits silently or is refused.
-- R16. The Envoy route's total request timeout MUST be at least the longest
-  expected cold start plus `model.generationTimeout` (at least 1080 s), or
-  disabled; keep-alive bytes do not reset a total timeout.
+- R1. With `provisioningMode: on-demand`, any valid inference key MUST be
+  able to start the GPU through a chat request. `explicit` MUST stay the
+  chart default and keep today's behaviour (ADR 0018 §1, ADR 0010).
+- R2. An automatic start MUST pass every gate `POST /api/v1/gpu/start`
+  passes: budget, balance, `maxHourlyPriceUSD`, attempts per hour,
+  backoff. A denial MUST reach the user as a readable reason (ADR 0018 §2).
+- R3. The user MUST see, in the chat app, that a start is in progress and
+  how far it has got (ADR 0018 §3).
+- R4. No supported client MUST fail because of the cold start's length;
+  the per-client table above MUST hold (ADR 0018 §7).
+- R5. Requests during a start MUST NOT create a second instance and MUST
+  NOT move the idle deadline before `READY` (ADR 0011).
+- R6. Every start MUST log one `gpu_start` line naming its origin and key
+  id.
+- R7. The gateway MUST NOT be able to call `Start` or `Stop` or change
+  the budget; it gets `Demand` only (ADR 0012, ADR 0018 §2).
+- R8. A background request MAY call `Demand`; the reason is stated under
+  Background requests.
+- R9. A streaming request held for a start MUST get `200
+  text/event-stream` at once, then progress lines, then the model's answer
+  in the same response.
+- R10. Progress lines MUST be `reasoning_content` deltas only, each
+  prefixed `[vk-llm] `.
+- R11. The gateway MUST send each checkpoint in the table at most once, in
+  order; the offer line MUST name the GPU, location, hourly price and
+  machine id.
+- R12. The gateway MUST send a ticker phrase after `tickerInterval` without
+  a line, never the same phrase twice in a row, and an SSE comment every
+  `heartbeatInterval`.
+- R13. A denied, failed or timed-out held stream MUST end with a reason
+  line, a chunk with `finish_reason` and an `error` object, and `[DONE]`.
+- R14. `ttft_seconds` MUST measure the model's first chunk;
+  `wait_seconds` MUST measure the hold.
+- R15. A non-streaming request with no Ready backend MUST call `Demand`
+  and get `503 gpu_cold_start` with `Retry-After` at once (ADR 0018 §5).
+- R16. The Envoy route total timeout MUST be at least 1200 s in on-demand
+  mode (ADR 0018 §7).
+- R17. A `demand`-origin start MUST be cancelled when the demand deadline
+  passes before `Ready`; an `explicit`-origin start MUST NOT be (ADR 0018 §6).
+- R18. The gateway MUST remove `[vk-llm] ` lines from incoming
+  `reasoning_content` before forwarding (ADR 0018 §4).
+
+## Implementation steps
+
+1. Config and chart: mode enum, `onDemand` block, `model.sizeBytes`,
+   schema. Check: config tests; `make helm-lint helm-template`.
+2. Store and snapshot: `Offer.Geo`, `Instance.StartOrigin`, snapshot
+   fields. Check: store round-trip test with an old document.
+3. Controller `Demand`, start origin, `gpu_start` log, demand deadline and
+   cancellation, recovery reset. Check: AC1–AC5 with the fake clock and
+   fake provider.
+4. Tunnel `Exec`; `internal/worker/download.go` `ParseProgress`; the 15 s
+   progress read in `Loading`. Check: AC6; an `Exec` test against an
+   in-process SSH server.
+5. Gateway admission table and the non-streaming `503 gpu_cold_start`.
+   Check: AC7, AC8.
+6. Gateway held stream: queue, shared poller, progress writer, ticker,
+   heartbeat, forward at `READY`, error tail. Check: AC9–AC12 with the
+   fake controller and fake clock.
+7. History filter. Check: AC13.
+8. Docs and platform: README on-demand section, spec 080 values table;
+   `vk-lab-platform` PR with `provisioningMode: on-demand` and the 1200 s
+   BackendTrafficPolicy. Check: `make specs-check`; platform PR merged.
+9. Live check on the lab with Open WebUI, Conduit and OpenCode. Check:
+   AC14–AC16.
+
+## Tests / acceptance criteria
+
+- AC1. `Demand` from `Idle` with budget left runs T5 once; ten concurrent
+  `Demand` calls create one instance.
+- AC2. `Demand` with the budget spent returns `ErrGPUUnavailable` with
+  `Unavailable == "budget_exhausted"` and makes no provider call.
+- AC3. The demand deadline passes in `Creating` with origin `demand`: state
+  becomes `Destroying` and one `gpu_start_cancelled` line is logged. Same
+  with origin `explicit`: no transition.
+- AC4. `Start` during a `demand` start sets origin `explicit`; the
+  deadline passing afterwards changes nothing.
+- AC5. `Demand` never changes `IdleDeadline`. A restart in `Loading` with
+  origin `demand` and no request cancels after `demandGrace`.
+- AC6. `ParseProgress` on fixture output returns the bytes and stages; a
+  missing `VKLLM_BYTES` line returns zero bytes and no error.
+- AC7. On-demand, GPU stopped, `stream:false`: `503`, code
+  `gpu_cold_start`, `Retry-After` ≥ 30, `Demand` called once.
+- AC8. Explicit mode: the `backend_unavailable` body is byte-identical to
+  today's.
+- AC9. A held stream with a scripted controller (`ALLOCATING` → offer →
+  `LOADING_MODEL` with bytes at 0 %, 30 % and 100 % → stages → `READY`)
+  emits the checkpoint lines in order, each once, then the fake worker's
+  chunks; every progress chunk has `reasoning_content` and no `content`.
+- AC10. No state change for 95 s (fake clock): 6 comments, 3 ticker
+  phrases, no phrase twice in a row.
+- AC11. A `maxWait` expiry and a denial each end with a reason line, a
+  `finish_reason` chunk with `error`, and `[DONE]`.
+- AC12. With 32 streams held, the 33rd gets `429 queue_full`.
+- AC13. An assistant message with `reasoning_content`
+  `"[vk-llm] A\n\nreal thought\n[vk-llm] B\n\n"` is forwarded as
+  `"real thought\n"`.
+- AC14. Live, lab, GPU stopped: one message from Open WebUI (desktop) and
+  from Conduit shows the thinking block and then the answer. Msty does the
+  same, or its result is recorded as unsupported in the README.
+- AC15. Live: OpenCode completes a turn after a cold start, and the next
+  turn's request to the worker carries no `[vk-llm] ` line.
+- AC16. Live: close the app during `ALLOCATING`; the instance is destroyed
+  within `demandGrace` + 60 s and no instance remains.
+
+## Definition of done
+
+- [ ] AC1–AC13 pass (tier 1/2); AC14–AC16 recorded under Evidence.
+- [ ] `make specs-check go-build go-test go-lint helm-lint helm-template`
+      all exit 0.
+- [ ] `vk-lab-platform` PR merged: `provisioningMode: on-demand`, route
+      timeout 1200 s.
+- [ ] README documents on-demand mode, its cost risk and Msty's result.
+- [ ] Status DONE, folder renamed `220-D-...`, Evidence filled.
 
 ## Open questions
 
-| Question | Why it matters |
-|---|---|
-| Hold the request (ADR 0007) or fail fast with a clear message and let the user retry? | Holding needs heartbeats and long timeouts end to end; failing fast is simpler but needs a retry |
-| Which clients tolerate a 3–6 minute held stream with SSE comments? | Open WebUI's backend, Conduit, OpenCode (which retries up to 5 times) behave differently |
-| Does a cold start with an uncached worker image (10–60 min) stay out of scope? | ADR 0007 §4 already excludes it from the wait |
-| Which model and GPU does an automatic start use? | CORE-200 (per-start parameters) may make them choosable; an automatic start needs a default |
-| Should CORE-180 (cached model volume) land first? | A shorter cold start makes every approach above better |
-| Per-key or per-user spend limits | An enabled household client can spend up to the monthly budget today |
-| Can the worker report download progress (bytes of 28.6 GB)? | A "42%" checkpoint is more useful than a ticker phrase; today only the controller state is known |
-| Does OpenCode's AI SDK provider tolerate SSE comment lines and a first chunk that carries only `reasoning_content`? | R9/R10; must be tried against a real stream |
-| Does Open WebUI's optional between-chunks idle cap stay off by default? | Its total upstream timeout is off by default in v0.13.4 (`AIOHTTP_CLIENT_TIMEOUT` unset) |
-
-## Out of scope
-
-The chat front end itself (Open WebUI deployment, a platform spec).
-Multiple concurrent GPUs. Uncached image pulls inside a held request.
+| Question | Why it matters | Settled by | Default |
+|---|---|---|---|
+| Does each client accept a chunk `id` change between the progress lines and the model's answer? | a strict client could drop the answer | AC14, AC15 | if one fails, the gateway rewrites upstream chunk ids to `vkllm-progress` |
+| Msty's timeouts and reasoning display | closed source | AC14 | documented as unsupported if it fails |
+| Should `retryAfter` use measured stage timings instead of 360 s? | accuracy of the hint | Evidence after AC14 | 360 s constant |
 
 ## Evidence
 
-None. Problem and requirements only.
+None yet.
