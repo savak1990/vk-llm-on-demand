@@ -1,6 +1,6 @@
 ---
 id: "CORE-210"
-status: "READY"
+status: "DONE"
 updated: "2026-11-23"
 depends_on: ["CORE-020", "CORE-050", "CORE-070", "CORE-100"]
 adrs: ["0018", "0004", "0005", "0011", "0014", "0015"]
@@ -8,7 +8,11 @@ adrs: ["0018", "0004", "0005", "0011", "0014", "0015"]
 
 # 210 — Offer selection by estimated session cost
 
-**Status note:** READY. Problem and requirements written 2026-11-22 from
+**Status note:** DONE (2026-11-23). Merged as PR #49 (squash commit
+`aaf1d7c`) after CI run 45165945330 went green; its `worker-script` job
+was re-run once after the stub `docker build` hung on the network. R12
+(estimate against the billing page) runs as spec 140 AC22 on the next
+acceptance run. Problem and requirements written 2026-11-22 from
 the first two real rentals (CORE-130 / Task 9); design agreed the same day
 after a read-only offer-search probe (Evidence). Decisions are recorded in
 [ADR 0018](../../../docs/adr/0018-offer-selection-by-session-cost.md).
@@ -437,7 +441,7 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
       all exit 0.
 - [x] ADR 0018 flipped to Accepted in the same PR.
 - [x] Amendments to spec 100, ADR 0005, specs 140, 180, 200 merged.
-- [ ] Status flipped to DONE; folder renamed `210-D-...`.
+- [x] Status flipped to DONE; folder renamed `210-D-...` (after PR #49 merged).
 - [x] Evidence section filled.
 
 ## Open questions
@@ -460,30 +464,10 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
     `storage_cost` 0.6667, `inet_down` 889.4, `inet_down_cost` 0.0390625.
   - `inet_down` across the sample: 416.0 to 3527.4.
 
-**Commits, `git log --oneline origin/main..HEAD`:**
-
-```
-c56296c chart, docs: minInetDownMBps unit comment; spec 210 rollover wording
-c5a33ac mgmt, vk-llm: CLI Download line shows the amount charged at create
-4da544a controller: drop offers whose download alone reaches the instance cap; refuse create below the model's disk need
-b0952e2 controller: New requires ModelSize and ModelURL
-b1d8449 modelsize: refactor head() to return header and contentlength, eliminate bodyclose lint errors
-7f969c4 docs: CORE-210 amendments to specs 100, 140, 180, 200 and ADR 0005; ADR 0017 accepted
-be520eb worker: clean stale model before downloading to prevent double-disk usage
-f55e3f0 worker: skip a verified model on disk; reassemble parts without twice the disk
-c8f4604 status, cost, CLI: show recorded prices, the cost breakdown and the selection estimate
-b8e06dc controller: size the model and disk, rank offers by session cost, record the estimate
-25193fd store, budget: record offer prices and estimate; charge a fixed download amount at open
-76747ad config: hard caps on download price, storage price and disk size
-4711f3e modelsize: reject Fixed with non-positive size
-ea9efc8 modelsize: resolve a model file's size by HTTP HEAD, cached per URL
-dd6936a offercost: unexport Estimate, add discriminating rank test
-560112d offercost: estimate session cost per offer and rank by it
-6511d1f provider: offer price fields, Admit/Filter without ranking, inet_down in Mbps
-dbbee38 CORE-210: Breakdown carries model size and horizon
-24e2dae CORE-210: align search reasons and cap check with the existing event paths
-72538d0 CORE-210: design — rank offers by estimated session cost
-```
+**Merged:** PR #49, squash commit `aaf1d7c` on `main` (29 branch
+commits: design, 9 implementation tasks with per-task review, a final
+whole-branch review fix wave, `/simplify`, `/code-review` and
+`/ponytail-review` fixes).
 
 **Validation, 2026-11-23:**
 
