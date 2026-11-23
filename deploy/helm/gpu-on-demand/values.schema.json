@@ -76,6 +76,9 @@
               "type": "object",
               "properties": {
                 "maxHourlyPriceUSD": { "type": "number" },
+                "maxDownloadPriceUSDPerGB": { "type": "number", "exclusiveMinimum": 0 },
+                "maxStoragePriceUSDPerGBMonth": { "type": "number", "exclusiveMinimum": 0 },
+                "maxDiskGB": { "type": "integer", "minimum": 1 },
                 "maxLifetime": { "type": "string" },
                 "maxInstanceSpendUSD": { "type": "number" },
                 "maxProvisionAttemptsPerHour": { "type": "integer" }

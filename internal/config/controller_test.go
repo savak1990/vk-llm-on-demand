@@ -18,6 +18,7 @@ func clearControllerEnv(t *testing.T) {
 		"VKLLM_LIFECYCLE_STARTUP_TIMEOUT", "VKLLM_LIFECYCLE_SAFETY_MAX_HOURLY_PRICE_USD",
 		"VKLLM_LIFECYCLE_SAFETY_MAX_LIFETIME", "VKLLM_LIFECYCLE_SAFETY_MAX_INSTANCE_SPEND_USD",
 		"VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR",
+		"VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB", "VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH", "VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB",
 		"VKLLM_CONTROLLER_RECONCILE_INTERVAL",
 		"VKLLM_TUNNEL_DIALER", "VKLLM_TUNNEL_DIRECT_ADDR",
 	} {
@@ -110,5 +111,33 @@ func TestLoadControllerMalformedDuration(t *testing.T) {
 	t.Setenv("VKLLM_LIFECYCLE_IDLE_SHUTDOWN_TIMEOUT", "not-a-duration")
 	if _, err := LoadController(); err == nil {
 		t.Fatal("LoadController: want error for malformed duration, got nil")
+	}
+}
+
+func TestLoadControllerCostCapDefaults(t *testing.T) {
+	clearControllerEnv(t)
+	c, err := LoadController()
+	if err != nil {
+		t.Fatalf("LoadController: %v", err)
+	}
+	if c.MaxDownloadPriceUSDPerGB != 0.10 || c.MaxStoragePriceUSDPerGBMonth != 1.00 || c.MaxDiskGB != 200 {
+		t.Fatalf("caps = %v %v %v, want 0.10 1.00 200", c.MaxDownloadPriceUSDPerGB, c.MaxStoragePriceUSDPerGBMonth, c.MaxDiskGB)
+	}
+}
+
+func TestLoadControllerRejectsBadCostCaps(t *testing.T) {
+	const dl, st, disk = "VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB", "VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH", "VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB"
+	for _, c := range []struct{ key, val string }{
+		{dl, "0"}, {dl, "-1"}, {dl, "NaN"}, {dl, "+Inf"},
+		{st, "0"}, {st, "-1"}, {st, "NaN"}, {st, "+Inf"},
+		{disk, "59"}, // below the default minDiskGB of 60
+	} {
+		t.Run(c.key+"="+c.val, func(t *testing.T) {
+			clearControllerEnv(t)
+			t.Setenv(c.key, c.val)
+			if _, err := LoadController(); err == nil {
+				t.Fatalf("LoadController accepted %s=%s", c.key, c.val)
+			}
+		})
 	}
 }

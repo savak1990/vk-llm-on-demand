@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -17,15 +18,18 @@ type Controller struct {
 
 	ProviderFilter ProviderFilter
 
-	IdleShutdownEnabled         bool
-	IdleShutdownTimeout         time.Duration
-	ShutdownDrainTimeout        time.Duration
-	ShutdownAllowForce          bool
-	StartupTimeout              time.Duration
-	MaxHourlyPriceUSD           float64
-	MaxLifetime                 time.Duration
-	MaxInstanceSpendUSD         float64
-	MaxProvisionAttemptsPerHour int
+	IdleShutdownEnabled          bool
+	IdleShutdownTimeout          time.Duration
+	ShutdownDrainTimeout         time.Duration
+	ShutdownAllowForce           bool
+	StartupTimeout               time.Duration
+	MaxHourlyPriceUSD            float64
+	MaxDownloadPriceUSDPerGB     float64
+	MaxStoragePriceUSDPerGBMonth float64
+	MaxDiskGB                    int
+	MaxLifetime                  time.Duration
+	MaxInstanceSpendUSD          float64
+	MaxProvisionAttemptsPerHour  int
 
 	ReconcileInterval time.Duration
 
@@ -33,9 +37,9 @@ type Controller struct {
 	TunnelDirectAddr string
 }
 
-// ProviderFilter mirrors provider.OfferFilter field-for-field, minus
-// MaxHourly (Controller.MaxHourlyPriceUSD) and ExcludeMachineIDs (set
-// per search from the live denylist, never from config).
+// ProviderFilter mirrors provider.OfferFilter minus the caps (set from
+// the Controller's safety fields), AllocatedStorageGB (set per search
+// from the model size) and ExcludeMachineIDs (from the live denylist).
 type ProviderFilter struct {
 	GPUName         string
 	NumGPUs         int
@@ -101,6 +105,24 @@ func LoadController() (Controller, error) {
 	}
 	if c.MaxHourlyPriceUSD, err = envFloat("VKLLM_LIFECYCLE_SAFETY_MAX_HOURLY_PRICE_USD", 0.80); err != nil {
 		return Controller{}, err
+	}
+	if c.MaxDownloadPriceUSDPerGB, err = envFloat("VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB", 0.10); err != nil {
+		return Controller{}, err
+	}
+	if c.MaxStoragePriceUSDPerGBMonth, err = envFloat("VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH", 1.00); err != nil {
+		return Controller{}, err
+	}
+	if c.MaxDiskGB, err = envInt("VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB", 200); err != nil {
+		return Controller{}, err
+	}
+	if !positiveFinite(c.MaxDownloadPriceUSDPerGB) {
+		return Controller{}, fmt.Errorf("config: VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB must be a positive finite number, got %v", c.MaxDownloadPriceUSDPerGB)
+	}
+	if !positiveFinite(c.MaxStoragePriceUSDPerGBMonth) {
+		return Controller{}, fmt.Errorf("config: VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH must be a positive finite number, got %v", c.MaxStoragePriceUSDPerGBMonth)
+	}
+	if c.MaxDiskGB < c.ProviderFilter.MinDiskGB {
+		return Controller{}, fmt.Errorf("config: VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB (%d) must be >= VKLLM_PROVIDER_FILTER_MIN_DISK_GB (%d)", c.MaxDiskGB, c.ProviderFilter.MinDiskGB)
 	}
 	if c.MaxLifetime, err = envDuration("VKLLM_LIFECYCLE_SAFETY_MAX_LIFETIME", 12*time.Hour); err != nil {
 		return Controller{}, err
@@ -194,3 +216,6 @@ func envDuration(key string, def time.Duration) (time.Duration, error) {
 	}
 	return d, nil
 }
+
+// positiveFinite also rejects NaN, which every comparison reports as false.
+func positiveFinite(v float64) bool { return v > 0 && !math.IsInf(v, 0) }
