@@ -90,6 +90,11 @@ tag="$(yq '.tag' gitops/values.yaml)"
   echo "gitops-check: dev host must be llm-dev.<fqdn>" >&2
   exit 1
 }
+[ "$(yq '.dashboard.enabled' "$tmp/dev-values.yaml")" = "false" ] &&
+  [ "$(yq '.prometheusRule.enabled' "$tmp/dev-values.yaml")" = "false" ] || {
+  echo "gitops-check: dev values must disable prometheusRule and dashboard" >&2
+  exit 1
+}
 strip='del(.host, .prometheusRule, .dashboard)'
 diff <(yq -P "$strip" "$tmp/values.yaml") <(yq -P "$strip" "$tmp/dev-values.yaml") || {
   echo "gitops-check: dev values may differ from production only in host, prometheusRule and dashboard" >&2
