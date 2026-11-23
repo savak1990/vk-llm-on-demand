@@ -70,7 +70,7 @@ Not in this spec:
 ```
 Phone (Conduit / home-screen app) ─┐
 Laptop browser ───────────────────┴─▶ https://chat.<fqdn>  (platform-gateway, wildcard TLS, external-dns)
-                                          │  660 s; /api/v1/auths/ also 20 req/s
+                                          │  1200 s; /api/v1/auths/ also 20 req/s
                                    Open WebUI  (namespace chat, 1 replica)
                                     │        │                 │
              lab-postgres database "openwebui"  SearXNG         http://gpu-on-demand.llm.svc/v1
@@ -79,12 +79,12 @@ Laptop browser ───────────────────┴─�
 
 | Component | Source | Notes |
 |---|---|---|
-| Open WebUI | Helm repo `https://helm.openwebui.com/`, chart `open-webui`, version **18.4.0** (app v0.13.4), pinned; image tag `v0.13.4-slim` | Argo `Application` in `argocd`, `project: default`, like Grafana and Loki. Ollama, Pipelines and Tika subcharts off; no Redis; `persistence.enabled: false` |
+| Open WebUI | Helm repo `https://helm.openwebui.com/`, chart `open-webui`, version **18.4.0** (app v0.13.4), pinned; image tag `v0.13.4-slim` | Argo `Application` in `argocd`, `project: default`, like Grafana and Loki. Ollama, Pipelines and Tika subcharts off; no Redis; `persistence.enabled: false`; strategy Recreate (one replica, one database), readiness and startup probes on /health |
 | SearXNG | upstream image, pinned by digest | `Deployment` + `Service` (ClusterIP, port 8080) + `ConfigMap` `settings.yml` with `search.formats: [html, json]` and the limiter off; `GRANIAN_WORKERS=1`; no `HTTPRoute` |
 | Database | `lab-postgres` (CNPG, `cnpg-system`) | `spec.managed.roles` gains `openwebui` (password from an ExternalSecret in `cnpg-system`); a CNPG `Database` `openwebui` owned by it |
 | Route | `HTTPRoute` `chat.<fqdn>` → Open WebUI service, parent `platform-gateway`/`envoy`/`https` | DNS and certificate come from the existing wildcard and external-dns |
-| Login route | `HTTPRoute` `open-webui-auth`, same hostname, `PathPrefix /api/v1/auths/` | the longer prefix wins over the main route; only sign-in and sign-up traffic matches |
-| Traffic policies | `BackendTrafficPolicy` on each route | main route: `timeout.http.requestTimeout: 660s`, the same bound as the GPU route; login route: local rate limit 20 req/s plus the same timeout |
+| Login route | `HTTPRoute` `open-webui-auth`, same hostname, `PathPrefix /api/v1/auths/` | the longer prefix wins over the main route; every `/api/v1/auths/*` endpoint matches, including the session check on page load |
+| Traffic policies | `BackendTrafficPolicy` on each route | main route: `timeout.http.requestTimeout: 1200s`, the same bound as the GPU route: in on-demand mode a request can wait up to 600 s for the GPU to start, then generate for up to 600 s; login route: local rate limit 20 req/s plus the same timeout |
 
 Why `chat` and not `llm`: either works (gpu-on-demand has its own
 ServiceAccount and no NetworkPolicy is active). A separate namespace keeps
@@ -255,7 +255,7 @@ deployed only after that session confirms room on the cluster.
 - R11. The gateway's output cap MUST be 16384 tokens.
 - R12. The platform's render check and aws golden MUST include the new
   objects.
-- R13. Both chat routes MUST carry a 660 s request timeout; only the login
+- R13. Both chat routes MUST carry a 1200 s request timeout; only the login
   route (`/api/v1/auths/`) MUST carry a 20 req/s local rate limit.
 - R14. File uploads and per-user API keys MUST be off.
 - R15. Prompts and completions MUST NOT appear in logs; the log level MUST
