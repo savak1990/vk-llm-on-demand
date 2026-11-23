@@ -14,6 +14,7 @@ func Admit(o Offer, f OfferFilter) bool {
 	return !slices.Contains(f.ExcludeMachineIDs, o.MachineID)
 }
 
+// Filter reuses offers' backing array; callers pass a slice they own.
 func Filter(offers []Offer, f OfferFilter) []Offer {
 	return slices.DeleteFunc(offers, func(o Offer) bool { return !Admit(o, f) })
 }
