@@ -17,6 +17,12 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 	// T3: a Start while already provisioning or serving, with
 	// desired already RUNNING, changes nothing — not even a no-op CAS.
 	case isProvisioningOrServing(state) && ev.Kind == EvStart && f.Doc.Desired == store.DesiredRunning:
+		if originOf(ev) == originExplicit && f.Doc.StartOrigin == originDemand {
+			return state, func(d *store.Document) error {
+				d.StartOrigin = originExplicit
+				return nil
+			}, nil
+		}
 		return state, nil, nil
 
 	// A backoff wait at Idle is a pacing delay, not a denial: a Tick
@@ -30,6 +36,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				return errStale
 			}
 			d.Desired = store.DesiredRunning
+			d.StartOrigin = originOf(ev)
 			return nil
 		}, nil
 
@@ -59,6 +66,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				return errStale
 			}
 			d.Desired = store.DesiredRunning
+			if ev.Kind == EvStart {
+				d.StartOrigin = originOf(ev)
+			}
 			return nil
 		}, []Effect{effSearch{filter: searchFilter(f)}}
 
@@ -75,6 +85,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				return errStale
 			}
 			d.Desired = store.DesiredRunning
+			d.StartOrigin = originOf(ev)
 			return nil
 		}, nil
 

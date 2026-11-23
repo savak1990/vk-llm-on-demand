@@ -114,6 +114,7 @@ const (
 	timerPoll
 	timerFlush
 	timerMetricsPull
+	timerDemand
 )
 
 // Note: the suspect probe (ReportUpstreamFailure) runs on its own
@@ -167,6 +168,9 @@ type Controller struct {
 
 	noOfferMu    sync.Mutex
 	noOfferUntil time.Time // armed by a no_offer transition; gateReason denies a Start inside it
+
+	demandMu    sync.Mutex
+	demandUntil time.Time
 
 	reconciling    atomic.Bool
 	reconcileMu    sync.Mutex

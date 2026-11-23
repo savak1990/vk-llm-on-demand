@@ -101,8 +101,10 @@ const (
 // Event is the loop's single input type; decide handles every (State,
 // Event) pair. Fields irrelevant to a given Kind are left zero.
 type Event struct {
-	Kind EventKind
-	Gen  int64
+	Kind   EventKind
+	Gen    int64
+	Origin string // "" means explicit; set to originDemand by Demand and by its own cancellation
+	KeyID  string
 
 	Offer      provider.Offer
 	Breakdown  offercost.Breakdown
