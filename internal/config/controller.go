@@ -155,6 +155,9 @@ func LoadController() (Controller, error) {
 	if c.DemandGrace, err = envDuration("VKLLM_ONDEMAND_DEMAND_GRACE", 60*time.Second); err != nil {
 		return Controller{}, err
 	}
+	if c.DemandGrace <= 0 {
+		return Controller{}, fmt.Errorf("config: VKLLM_ONDEMAND_DEMAND_GRACE must be positive, got %v", c.DemandGrace)
+	}
 	size, err := envInt("VKLLM_MODEL_SIZE_BYTES", 0)
 	if err != nil {
 		return Controller{}, err

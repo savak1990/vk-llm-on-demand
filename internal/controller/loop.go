@@ -130,6 +130,9 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 			gpuUptimeSecondsTotal.Add(now.Sub(doc.Instance.CreatedAt).Seconds())
 		}
 		doc = committed
+		if ev.Kind == EvStop && ev.Origin == originDemand && c.deps.Log != nil {
+			c.deps.Log.Info("gpu_start_cancelled", "reason", "demand_expired", "generation", doc.Generation, "state", state.String())
+		}
 		if reason, ok := shutdownReason(state, next, ev, inFlight, doc, c.deps.Config, now); ok {
 			shutdownsTotal.WithLabelValues(reason).Inc()
 		}
@@ -186,7 +189,13 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 
 	c.queueEffects(effects)
 	if state == Idle && next == Searching && c.deps.Log != nil {
-		c.deps.Log.Info("gpu_start", "origin", doc.StartOrigin, "key_id", ev.KeyID, "generation", doc.Generation)
+		keyID := ev.KeyID
+		if keyID == "" && doc.StartOrigin == originDemand {
+			c.demandMu.Lock()
+			keyID = c.demandKeyID
+			c.demandMu.Unlock()
+		}
+		c.deps.Log.Info("gpu_start", "origin", doc.StartOrigin, "key_id", keyID, "generation", doc.Generation)
 	}
 	if ev.Kind == EvStart && isDenial(ev.Reason) {
 		return ErrGPUUnavailable

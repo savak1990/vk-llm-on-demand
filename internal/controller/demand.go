@@ -34,6 +34,9 @@ func (c *Controller) Demand(ctx context.Context, keyID string, until time.Time) 
 	case state == Draining || state == Destroying:
 		return c.Status(), ErrDraining
 	}
+	c.demandMu.Lock()
+	c.demandKeyID = keyID
+	c.demandMu.Unlock()
 	c.extendDemand(until)
 	return c.callerEvent(ctx, Event{Kind: EvStart, Origin: originDemand, KeyID: keyID})
 }
@@ -78,9 +81,6 @@ func (c *Controller) cancelUnattendedStart(ctx context.Context) {
 	if state == Draining || state == Destroying {
 		c.armTimer(timerDemand, now.Add(requeueDelay))
 		return
-	}
-	if c.deps.Log != nil {
-		c.deps.Log.Info("gpu_start_cancelled", "reason", "demand_expired", "generation", doc.Generation, "state", state.String())
 	}
 	// No other path resends this stop, so even a stale CAS retries.
 	if err := c.processEvent(ctx, Event{Kind: EvStop, Gen: c.currentGen(), Origin: originDemand}); err != nil {

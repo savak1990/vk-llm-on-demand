@@ -125,6 +125,16 @@ func TestLoadControllerDemandGraceAndModelSize(t *testing.T) {
 	}
 }
 
+func TestLoadControllerRejectsNonPositiveDemandGrace(t *testing.T) {
+	for _, v := range []string{"0s", "-1s"} {
+		clearControllerEnv(t)
+		t.Setenv("VKLLM_ONDEMAND_DEMAND_GRACE", v)
+		if _, err := LoadController(); err == nil {
+			t.Fatalf("LoadController: want error for VKLLM_ONDEMAND_DEMAND_GRACE=%s, got nil", v)
+		}
+	}
+}
+
 func TestLoadControllerCostCapDefaults(t *testing.T) {
 	clearControllerEnv(t)
 	c, err := LoadController()

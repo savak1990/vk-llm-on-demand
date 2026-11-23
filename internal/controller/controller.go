@@ -171,6 +171,7 @@ type Controller struct {
 
 	demandMu    sync.Mutex
 	demandUntil time.Time
+	demandKeyID string // the latest Demand's key, for a start the backoff deferred to a later Tick
 
 	reconciling    atomic.Bool
 	reconcileMu    sync.Mutex
