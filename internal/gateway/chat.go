@@ -112,6 +112,8 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	rec.clamped = clamped
 	rec.maxTokensRequested = requested
 
+	stripProgress(body)
+
 	status := g.deps.Controller.Status()
 	gen := status.Generation
 	rt, err := g.deps.Controller.Admit(gen)
