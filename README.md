@@ -232,9 +232,9 @@ Everything above describes the chart default, `explicit` mode: you run
 `config.lifecycle.provisioningMode: on-demand` starts the GPU from a chat
 request instead; nobody runs `vk-llm start`, and a streaming chat client
 needs no retry — it stays on the same held connection until the answer
-arrives. Also set
-`config.model.sizeBytes` to the model file's size in bytes, so progress
-lines can show a download percentage instead of GB downloaded.
+arrives. Progress lines show a download percentage using the model size
+resolved automatically from the chosen offer, falling back to GB
+downloaded if the size is unknown.
 
 What a user sees depends on the request:
 

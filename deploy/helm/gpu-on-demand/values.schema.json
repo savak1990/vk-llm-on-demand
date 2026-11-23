@@ -44,7 +44,6 @@
             "alias": { "type": "string" },
             "url": { "type": "string", "pattern": "^https://" },
             "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-            "sizeBytes": { "type": "integer", "minimum": 0 },
             "contextSize": { "type": "integer", "minimum": 1 },
             "parallel": { "type": "integer", "minimum": 1 },
             "generationTimeout": { "type": "string" }

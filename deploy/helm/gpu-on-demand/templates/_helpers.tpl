@@ -118,7 +118,6 @@ VKLLM_AUTH_WORKER_SEED_FILE: {{ .Values.config.auth.workerSeedFile | quote }}
 VKLLM_MODEL_ALIAS: {{ .Values.config.model.alias | quote }}
 VKLLM_MODEL_URL: {{ required "config.model.url is required: no production value is pinned anywhere yet" .Values.config.model.url | quote }}
 VKLLM_MODEL_SHA256: {{ required "config.model.sha256 is required: no production value is pinned anywhere yet" .Values.config.model.sha256 | quote }}
-VKLLM_MODEL_SIZE_BYTES: {{ .Values.config.model.sizeBytes | int64 | quote }}
 VKLLM_MODEL_CONTEXT_SIZE: {{ .Values.config.model.contextSize | int64 | quote }}
 VKLLM_MODEL_PARALLEL: {{ .Values.config.model.parallel | int64 | quote }}
 VKLLM_MODEL_GENERATION_TIMEOUT: {{ .Values.config.model.generationTimeout | quote }}

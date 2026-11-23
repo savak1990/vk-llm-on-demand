@@ -55,7 +55,7 @@ requests, the history filter, the cold-start metrics; the milestone tracker
 moves to `internal/progress`, shared with the CLI. Management API: the
 status document gains `instance.geolocation` and a `progress` object.
 `vk-llm start` prints the same milestone lines on stderr. Tunnel: an exec
-session. Chart: the mode enum, the `onDemand` block, `model.sizeBytes`.
+session. Chart: the mode enum, the `onDemand` block.
 Platform: one `vk-lab-platform` pull request.
 
 Excludes: the chat front end itself (CORE-230); per-key or per-user spend
@@ -78,10 +78,12 @@ surfaces as a `maxWait` expiry); multiple concurrent GPUs.
 | `config.onDemand.tickerInterval` | `VKLLM_ONDEMAND_TICKER_INTERVAL` | `30s` | silence before a ticker phrase |
 | `config.onDemand.demandGrace` | `VKLLM_ONDEMAND_DEMAND_GRACE` | `60s` | how long an unattended start survives |
 | `config.onDemand.tickerPhrases` | `VKLLM_ONDEMAND_TICKER_PHRASES` (newline-separated) | built-in set | empty means the built-in set |
-| `config.model.sizeBytes` | `VKLLM_MODEL_SIZE_BYTES` | `0` | model file size; `0` shows GB without a percentage |
 
-`model.sizeBytes` sits next to `model.sha256` because both pin the one
-supported model file.
+The download percentage uses the model file size CORE-210's
+`internal/modelsize` resolver already puts on the chosen offer
+(`store.Offer.Estimate.ModelBytes`); there is no chart value for it. An
+offer chosen before that resolver ran, or one with no estimate, shows GB
+downloaded with no percentage.
 
 ### Controller
 
@@ -141,9 +143,9 @@ part files; the apparent file size would be wrong for a sparse file. A new
 file `internal/worker/download.go` holds
 `ParseProgress(out []byte) (Progress, error)`, which reuses `ParseStages`
 for the stage lines and reads the `VKLLM_BYTES` line. `Snapshot` gains
-`DownloadedBytes`, `ModelBytes` (from `model.sizeBytes`) and
-`WorkerStages` (stage names seen so far). A failed read keeps the last
-value; it never changes the state.
+`DownloadedBytes`, `ModelBytes` (from the chosen offer's resolved
+`Estimate.ModelBytes`, CORE-210) and `WorkerStages` (stage names seen so
+far). A failed read keeps the last value; it never changes the state.
 
 **Tunnel.** `tunnel.Conn` gains `Exec(ctx, cmd string) ([]byte, error)`,
 one `ssh.Session` per call on the existing `*ssh.Client`. The direct TCP
@@ -220,10 +222,10 @@ Checkpoints, each sent once, in this order:
 | state `READY` | Ready. |
 
 A request that joins mid-start gets only the milestones that are true at
-that moment. Without `model.sizeBytes` the download lines show GB
-downloaded at each 2 GB step instead. Built-in ticker phrases: "Still
-warming up the GPU…", "Almost there…", "The GPU is still getting ready…",
-"Still working on it…", "Hang on, nearly ready…".
+that moment. When the chosen offer has no resolved model size the
+download lines show GB downloaded at each 2 GB step instead. Built-in
+ticker phrases: "Still warming up the GPU…", "Almost there…", "The GPU is
+still getting ready…", "Still working on it…", "Hang on, nearly ready…".
 
 **History filter.** Before every forward (held or not), for each message
 with a string `reasoning_content`, delete each line that starts with
@@ -305,8 +307,8 @@ message, which has already started the GPU, and `Demand` coalesces.
 
 ## Implementation steps
 
-1. Config and chart: mode enum, `onDemand` block, `model.sizeBytes`,
-   schema. Check: config tests; `make helm-lint helm-template`.
+1. Config and chart: mode enum, `onDemand` block, schema. Check: config
+   tests; `make helm-lint helm-template`.
 2. Store and snapshot: `Offer.Geo`, `Instance.StartOrigin`, snapshot
    fields. Check: store round-trip test with an old document.
 3. Controller `Demand`, start origin, `gpu_start` log, demand deadline and

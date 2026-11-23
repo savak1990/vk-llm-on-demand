@@ -114,14 +114,13 @@ func TestLoadControllerMalformedDuration(t *testing.T) {
 	}
 }
 
-func TestLoadControllerDemandGraceAndModelSize(t *testing.T) {
-	t.Setenv("VKLLM_MODEL_SIZE_BYTES", "28600000000")
+func TestLoadControllerDemandGrace(t *testing.T) {
 	c, err := LoadController()
 	if err != nil {
 		t.Fatalf("LoadController: %v", err)
 	}
-	if c.DemandGrace != 60*time.Second || c.ModelSizeBytes != 28_600_000_000 {
-		t.Fatalf("DemandGrace %v ModelSizeBytes %d", c.DemandGrace, c.ModelSizeBytes)
+	if c.DemandGrace != 60*time.Second {
+		t.Fatalf("DemandGrace %v, want 60s", c.DemandGrace)
 	}
 }
 

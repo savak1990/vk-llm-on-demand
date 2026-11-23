@@ -75,7 +75,6 @@ config:
     alias: qwen3.6-35b-a3b
     url: ""
     sha256: ""
-    sizeBytes: 0
     contextSize: 32768
     parallel: 1
     generationTimeout: 10m

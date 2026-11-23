@@ -91,14 +91,27 @@ func TestStatusProviderBalanceUnknownUntilFirstRead(t *testing.T) {
 
 func TestStatusReportsGeolocationAndModelBytes(t *testing.T) {
 	c, _, _, _, _ := newTestController(t)
-	c.deps.Config.ModelSizeBytes = 1000
 	putDoc(t, c, func(d *store.Document) {
 		d.Generation = 1
-		d.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{MachineID: 7, GPU: "L40S", Geo: "Sweden"}}
+		d.Instance = &store.Instance{
+			State: Creating.String(), Label: "vkllm:iid:1",
+			Offer: store.Offer{MachineID: 7, GPU: "L40S", Geo: "Sweden", Estimate: &store.OfferEstimate{ModelBytes: 28_600_000_000}},
+		}
 	})
 	s := c.Status()
-	if s.Geolocation != "Sweden" || s.ModelBytes != 1000 {
+	if s.Geolocation != "Sweden" || s.ModelBytes != 28_600_000_000 {
 		t.Fatalf("Geolocation %q ModelBytes %d", s.Geolocation, s.ModelBytes)
+	}
+}
+
+func TestStatusModelBytesZeroWithNoEstimate(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 1
+		d.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{MachineID: 7, GPU: "L40S"}}
+	})
+	if s := c.Status(); s.ModelBytes != 0 {
+		t.Fatalf("ModelBytes = %d, want 0 with no estimate", s.ModelBytes)
 	}
 }
 

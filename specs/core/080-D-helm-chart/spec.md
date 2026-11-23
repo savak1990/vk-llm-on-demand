@@ -10,12 +10,13 @@ adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013", "0019"]
 
 **Status note:** DONE as of 2026-11-06. Amended against the `internal/config` env-var contract shipped in PRs #15/#16; the chart, its kind CI job and the Makefile targets are all built and validated (see Evidence).
 
-**2026-11-23 amendment (CORE-220):** the `onDemand` block and
-`model.sizeBytes` now render; `provisioningMode` accepts `on-demand` as
-well as `explicit`. The values table, the schema snippet and the rendered
-key count below are updated to match `deploy/helm/gpu-on-demand` as
-shipped; the Evidence section is left as the 2026-11-06 record and is not
-restated.
+**2026-11-23 amendment (CORE-220):** the `onDemand` block now renders;
+`provisioningMode` accepts `on-demand` as well as `explicit`. The download
+percentage uses the model size resolved automatically on the chosen offer
+(`internal/modelsize`), not a chart value — no `model.sizeBytes` key
+exists. The values table, the schema snippet and the rendered key count
+below are updated to match `deploy/helm/gpu-on-demand` as shipped; the
+Evidence section is left as the 2026-11-06 record and is not restated.
 
 **Complexity:** M — many small templates and a long values schema, no business logic.
 **Risk:** medium — a wrong RBAC verb, a wrong `config.*` → env-var mapping, or a schema guard that does not actually block `idleShutdown.enabled: false` breaks safety invisibly, because nothing here is unit-testable in Go.
@@ -98,6 +99,9 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.lifecycle.shutdown.allowForce` | `false` | `VKLLM_LIFECYCLE_SHUTDOWN_ALLOW_FORCE` — gates the future `force` stop (ADR 0011 §3) |
 | `config.lifecycle.startupTimeout` | `15m` | `VKLLM_LIFECYCLE_STARTUP_TIMEOUT` (was `gpu.startupDeadline`) |
 | `config.lifecycle.safety.maxHourlyPriceUSD` | `0.80` | `VKLLM_LIFECYCLE_SAFETY_MAX_HOURLY_PRICE_USD` |
+| `config.lifecycle.safety.maxDownloadPriceUSDPerGB` | `0.10` | `VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB` — caps an offer's download price when ranking by estimated session cost (CORE-210) |
+| `config.lifecycle.safety.maxStoragePriceUSDPerGBMonth` | `1.00` | `VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH` — caps an offer's storage price when ranking by estimated session cost (CORE-210) |
+| `config.lifecycle.safety.maxDiskGB` | `200` | `VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB` — ceiling on the disk size searched for and provisioned (CORE-210) |
 | `config.lifecycle.safety.maxLifetime` | `12h` | `VKLLM_LIFECYCLE_SAFETY_MAX_LIFETIME` (was `6h`; a deliberate change, ADR 0011 §5) |
 | `config.lifecycle.safety.maxInstanceSpendUSD` | `0` | `VKLLM_LIFECYCLE_SAFETY_MAX_INSTANCE_SPEND_USD` — `0` = off; otherwise bounds one instance's estimated spend |
 | `config.lifecycle.safety.maxProvisionAttemptsPerHour` | `3` | `VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR` |
@@ -117,7 +121,6 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.model.alias` | `qwen3.6-35b-a3b` | `VKLLM_MODEL_ALIAS` |
 | `config.model.url` | no default, required | `VKLLM_MODEL_URL` |
 | `config.model.sha256` | no default, required | `VKLLM_MODEL_SHA256` |
-| `config.model.sizeBytes` | `0` | `VKLLM_MODEL_SIZE_BYTES` — model file size in bytes; `0` shows GB downloaded with no percentage (CORE-220, ADR 0019 §3) |
 | `config.model.contextSize` | `32768` | `VKLLM_MODEL_CONTEXT_SIZE` |
 | `config.model.parallel` | `1` | `VKLLM_MODEL_PARALLEL` |
 | `config.model.generationTimeout` | `10m` | `VKLLM_MODEL_GENERATION_TIMEOUT` — upstream deadline per request; sizes the Envoy route timeout to 660s in explicit mode, at least 1200s in on-demand mode (architecture §9, ADR 0010 Consequences, ADR 0019 §7) |
@@ -135,7 +138,7 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 
 The management API reads the monthly budget from the controller snapshot, not from its own config; there is no separate management-side budget value (CORE-190).
 
-51 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
+53 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
 
 | Env var | Value | Why it is not a `config.*` row |
 |---|---|---|
@@ -144,7 +147,7 @@ The management API reads the monthly budget from the controller snapshot, not fr
 
 ### Future: P2 cache is not rendered
 
-`onDemand.*` and `model.sizeBytes` now render (CORE-220, ADR 0019); the table above is current. `storage.*` (P2 persistent volume cache, ADR 0014) is still not a `values.yaml` key in this chart — rendering it now, before any controller code consumes it, would let an operator believe setting it does something today. It is documented here, not in `values.yaml`, as the place a future chart revision adds it.
+`onDemand.*` now renders (CORE-220, ADR 0019); the table above is current. `storage.*` (P2 persistent volume cache, ADR 0014) is still not a `values.yaml` key in this chart — rendering it now, before any controller code consumes it, would let an operator believe setting it does something today. It is documented here, not in `values.yaml`, as the place a future chart revision adds it.
 
 ### Installation identity
 
@@ -341,7 +344,7 @@ One `Service`, one port, two public paths. `httproute.yaml` renders one `HTTPRou
 - R10. `strategy.type` MUST be `Recreate`; the chart MUST fail its render when `replicaCount` is not exactly `1`. (source: ADR 0003 §1)
 - R11. Probes MUST target `/healthz` and `/readyz` on container port 9090, matching CORE-010 R6/R7, and MUST NOT depend on a GPU instance existing. (source: CORE-010 R6, R7, FR-1.7)
 - R12. Each `existingSecrets.*` Secret MUST be mounted as files — `provider` and `ssh` under `/etc/vkllm/secrets/{provider,ssh}`, `apiKeys` under `/etc/vkllm/api-keys/` — and MUST NOT be exposed through `env` or `envFrom`. (source: ADR 0009 §1)
-- R13. The rendered application `ConfigMap` MUST contain exactly the 51 `VKLLM_*` keys listed in this spec's `config.*` table plus the two fixed keys `VKLLM_STATE_CONFIGMAP` and `VKLLM_INSTALLATION_ID`, 53 total, with no other key. (source: architecture §9, CORE-220)
+- R13. The rendered application `ConfigMap` MUST contain exactly the 53 `VKLLM_*` keys listed in this spec's `config.*` table plus the two fixed keys `VKLLM_STATE_CONFIGMAP` and `VKLLM_INSTALLATION_ID`, 55 total, with no other key. (source: architecture §9, CORE-220)
 - R14. `values.yaml` MUST NOT contain a hostname, a domain, an `fqdn` value or a secret value anywhere in its defaults. (source: C-14, NFR-8.6)
 - R15. The chart MUST render without error, and without any `HTTPRoute` or `Ingress` object, when both `httpRoute.enabled` and `ingress.enabled` are `false`, and MUST install on any Kubernetes cluster with no ingress controller present. (source: NFR-9.2, C-23)
 - R16. `helm uninstall` MUST leave no `ConfigMap` behind, including the state document's `ConfigMap`; `helm upgrade` MUST leave the state document's content untouched. (source: NFR-9.1, ADR 0004 §1)

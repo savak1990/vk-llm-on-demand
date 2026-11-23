@@ -31,7 +31,6 @@ type Controller struct {
 	MaxInstanceSpendUSD          float64
 	MaxProvisionAttemptsPerHour  int
 	DemandGrace                  time.Duration
-	ModelSizeBytes               int64
 
 	ReconcileInterval time.Duration
 
@@ -158,12 +157,6 @@ func LoadController() (Controller, error) {
 	if c.DemandGrace <= 0 {
 		return Controller{}, fmt.Errorf("config: VKLLM_ONDEMAND_DEMAND_GRACE must be positive, got %v", c.DemandGrace)
 	}
-	size, err := envInt("VKLLM_MODEL_SIZE_BYTES", 0)
-	if err != nil {
-		return Controller{}, err
-	}
-	c.ModelSizeBytes = int64(size)
-
 	return c, nil
 }
 
