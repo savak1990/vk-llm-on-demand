@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -85,5 +86,32 @@ func TestStatusProviderBalanceUnknownUntilFirstRead(t *testing.T) {
 	snap = c.Status()
 	if snap.ProviderBalanceUSD == nil || *snap.ProviderBalanceUSD != 12.5 {
 		t.Fatalf("ProviderBalanceUSD = %v, want 12.5", snap.ProviderBalanceUSD)
+	}
+}
+
+func TestStatusReportsGeolocationAndModelBytes(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	c.deps.Config.ModelSizeBytes = 1000
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 1
+		d.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{MachineID: 7, GPU: "L40S", Geo: "Sweden"}}
+	})
+	s := c.Status()
+	if s.Geolocation != "Sweden" || s.ModelBytes != 1000 {
+		t.Fatalf("Geolocation %q ModelBytes %d", s.Geolocation, s.ModelBytes)
+	}
+}
+
+func TestOfferChosenStoresGeolocation(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	c.state = Searching
+	putDoc(t, c, func(d *store.Document) { d.Desired = store.DesiredRunning })
+	ev := Event{Kind: EvOfferChosen, Offer: provider.Offer{ID: 1, MachineID: 7, GPUName: "L40S", Geolocation: "Sweden", Hourly: 500000}}
+	if err := c.processEvent(context.Background(), ev); err != nil {
+		t.Fatalf("processEvent: %v", err)
+	}
+	doc, _, _ := c.deps.Store.Load(context.Background())
+	if doc.Instance == nil || doc.Instance.Offer.Geo != "Sweden" {
+		t.Fatalf("stored offer = %+v", doc.Instance)
 	}
 }

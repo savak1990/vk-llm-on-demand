@@ -69,6 +69,12 @@ type Snapshot struct {
 	Hourly     provider.Money
 	ProviderID provider.InstanceID
 
+	Geolocation string
+
+	DownloadedBytes int64
+	ModelBytes      int64
+	WorkerStages    []string
+
 	CreatedAt               time.Time
 	ReadyAt                 *time.Time
 	LastInferenceFinishedAt *time.Time

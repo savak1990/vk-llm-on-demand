@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -50,5 +51,20 @@ func TestBudgetMonthUSDRoundTrip(t *testing.T) {
 	}
 	if back.BudgetMonthUSD == nil || *back.BudgetMonthUSD != 40 {
 		t.Fatalf("round trip = %v, want 40", back.BudgetMonthUSD)
+	}
+}
+
+func TestDocumentOldJSONHasNoOriginOrGeo(t *testing.T) {
+	var d Document
+	if err := json.Unmarshal([]byte(`{"schemaVersion":2,"installationId":"iid","instance":{"offer":{"machineId":1,"gpu":"L40S"}}}`), &d); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if d.StartOrigin != "" || d.Instance.Offer.Geo != "" {
+		t.Fatalf("StartOrigin %q Geo %q, want both empty", d.StartOrigin, d.Instance.Offer.Geo)
+	}
+	d.StartOrigin, d.Instance.Offer.Geo = "demand", "Sweden"
+	b, _ := json.Marshal(d)
+	if !bytes.Contains(b, []byte(`"startOrigin":"demand"`)) || !bytes.Contains(b, []byte(`"geo":"Sweden"`)) {
+		t.Fatalf("marshal lost fields: %s", b)
 	}
 }

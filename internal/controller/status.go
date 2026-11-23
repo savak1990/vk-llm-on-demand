@@ -23,6 +23,7 @@ func (c *Controller) Status() Snapshot {
 		Unavailable:    unavailable,
 	}
 	snap.BudgetCeilingUSD = c.deps.Budget.CeilingUSD()
+	snap.ModelBytes = c.deps.Config.ModelSizeBytes
 
 	doc, _, err := c.deps.Store.Load(c.effCtx())
 	if err != nil {
@@ -49,6 +50,7 @@ func (c *Controller) Status() Snapshot {
 		return snap
 	}
 	snap.GPUName = doc.Instance.Offer.GPU
+	snap.Geolocation = doc.Instance.Offer.Geo
 	snap.MachineID = doc.Instance.Offer.MachineID
 	snap.Hourly = provider.FromUSD(doc.Instance.Offer.DPH)
 	if id, ok := providerIDOf(doc); ok {
