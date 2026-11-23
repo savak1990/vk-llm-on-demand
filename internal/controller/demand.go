@@ -19,6 +19,14 @@ func originOf(ev Event) string {
 	return originExplicit
 }
 
+// setStartOrigin records who started the GPU, but a demand never downgrades
+// a start still pending at Idle, so an expired chat cannot cancel it.
+func setStartOrigin(d *store.Document, ev Event) {
+	if originOf(ev) == originExplicit || d.Desired != store.DesiredRunning {
+		d.StartOrigin = originOf(ev)
+	}
+}
+
 // Demand starts the GPU through the same gates as Start and keeps the
 // start alive until until; it never moves the idle deadline.
 func (c *Controller) Demand(ctx context.Context, keyID string, until time.Time) (Snapshot, error) {

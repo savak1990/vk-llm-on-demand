@@ -378,3 +378,70 @@ func TestDemandStopSkippedByOriginGuardLogsNothing(t *testing.T) {
 		t.Fatalf("state %v, gpu_start_cancelled lines = %q", c.stateNow(), got)
 	}
 }
+
+func pendingExplicitDoc(withBackoff bool, now time.Time) func(*store.Document) {
+	return func(d *store.Document) {
+		d.Generation = 1
+		d.Desired = store.DesiredRunning
+		d.StartOrigin = originExplicit
+		if withBackoff {
+			d.Ops = append(d.Ops, store.Op{Key: createOpKey(1), StartedAt: now, Outcome: "failed", FinishedAt: &now})
+		}
+	}
+}
+
+// A failed create leaves an explicit start pending at Idle; a chat must not take it over.
+func TestDemandKeepsPendingExplicitStart(t *testing.T) {
+	for name, backoff := range map[string]bool{"backoff": true, "T1": false} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := newOnDemandController(t)
+			now := c.deps.Clock.Now()
+			putDoc(t, c, pendingExplicitDoc(backoff, now))
+			if _, err := c.Demand(context.Background(), "k1", now); err != nil {
+				t.Fatalf("Demand: %v", err)
+			}
+			c.deps.Clock.(interface{ Advance(time.Duration) }).Advance(time.Second)
+			c.cancelUnattendedStart(context.Background())
+			doc, _, _ := c.deps.Store.Load(context.Background())
+			if doc.StartOrigin != originExplicit || doc.Desired != store.DesiredRunning {
+				t.Fatalf("origin %q desired %q, want explicit RUNNING", doc.StartOrigin, doc.Desired)
+			}
+		})
+	}
+}
+
+func TestExpiredDemandStopSparesReadyGPU(t *testing.T) {
+	c, _ := newOnDemandController(t)
+	c.state, c.generation = Ready, 3
+	putDoc(t, c, func(d *store.Document) {
+		bootingDoc(originDemand)(d)
+		d.Instance.State = Ready.String()
+	})
+	if err := c.processEvent(context.Background(), Event{Kind: EvStop, Gen: 3, Origin: originDemand}); err != nil {
+		t.Fatalf("processEvent: %v", err)
+	}
+	if c.stateNow() != Ready {
+		t.Fatalf("state = %v, want Ready", c.stateNow())
+	}
+}
+
+func TestDemandTimerCancelsUnattendedStartThroughLoop(t *testing.T) {
+	c, prov := newOnDemandController(t)
+	c.deps.Config.StartupTimeout = 15 * time.Minute
+	logs := captureLog(c)
+	prov.SetBalance(100_000_000)
+	prov.AddInstance(provider.Instance{ID: 9, Label: "vkllm:iid:3"})
+	c.state, c.generation = Booting, 3
+	putDoc(t, c, func(d *store.Document) {
+		bootingDoc(originDemand)(d)
+		d.Instance.CreatedAt = c.deps.Clock.Now()
+	})
+	runLoop(t, c)
+	waitFor(t, "demand timer armed", func() bool { _, ok := timerAt(c, timerDemand); return ok })
+	c.deps.Clock.(interface{ Advance(time.Duration) }).Advance(2 * time.Minute)
+	waitFor(t, "cancelled start", func() bool { return len(logs.lines("gpu_start_cancelled")) == 1 })
+	doc, _, _ := c.deps.Store.Load(context.Background())
+	if doc.Desired != store.DesiredStopped || (c.stateNow() != Destroying && c.stateNow() != Idle) {
+		t.Fatalf("state %v desired %q, want Destroying/Idle STOPPED", c.stateNow(), doc.Desired)
+	}
+}

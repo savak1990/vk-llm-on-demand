@@ -89,5 +89,8 @@ func LoadGateway() (Gateway, error) {
 	if g.OnDemand.MaxWait <= 0 || g.OnDemand.MaxPending <= 0 || g.OnDemand.HeartbeatInterval <= 0 || g.OnDemand.TickerInterval <= 0 || g.OnDemand.DemandGrace <= 0 {
 		return Gateway{}, fmt.Errorf("config: every VKLLM_ONDEMAND_* duration and count must be positive")
 	}
+	if g.OnDemand.HeartbeatInterval >= g.OnDemand.DemandGrace {
+		return Gateway{}, fmt.Errorf("config: VKLLM_ONDEMAND_HEARTBEAT_INTERVAL (%s) must be shorter than VKLLM_ONDEMAND_DEMAND_GRACE (%s)", g.OnDemand.HeartbeatInterval, g.OnDemand.DemandGrace)
+	}
 	return g, nil
 }

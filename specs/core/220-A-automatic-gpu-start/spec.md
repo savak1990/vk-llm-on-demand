@@ -312,9 +312,9 @@ message, which has already started the GPU, and `Demand` coalesces.
 3. Controller `Demand`, start origin, `gpu_start` log, demand deadline and
    cancellation, recovery reset. Check: AC1–AC5 with the fake clock and
    fake provider.
-4. Tunnel `Exec`; `internal/worker/download.go` `ParseProgress`; the 15 s
-   progress read in `Loading`. Check: AC6; an `Exec` test against an
-   in-process SSH server.
+4. Tunnel `Exec`; `internal/worker/download.go` `ParseProgress`; the
+   progress read on every 5 s readiness poll in `Loading`. Check: AC6; an
+   `Exec` test against an in-process SSH server.
 5. Gateway admission table and the non-streaming `503 gpu_cold_start`.
    Check: AC7, AC8.
 6. Gateway held stream: queue, shared poller, progress writer, ticker,

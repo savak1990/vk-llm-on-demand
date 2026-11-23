@@ -98,7 +98,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	if err != nil {
 		return err
 	}
-	if ev.Kind == EvStop && ev.Origin == originDemand && doc.StartOrigin != originDemand {
+	if ev.Kind == EvStop && ev.Origin == originDemand && (doc.StartOrigin != originDemand || inService(state)) {
 		return nil
 	}
 	if ev.Err != nil {

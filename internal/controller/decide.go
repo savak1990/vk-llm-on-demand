@@ -35,8 +35,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance != nil {
 				return errStale
 			}
+			setStartOrigin(d, ev)
 			d.Desired = store.DesiredRunning
-			d.StartOrigin = originOf(ev)
 			return nil
 		}, nil
 
@@ -65,10 +65,10 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if ev.Kind != EvStart && d.Desired != store.DesiredRunning {
 				return errStale
 			}
-			d.Desired = store.DesiredRunning
 			if ev.Kind == EvStart {
-				d.StartOrigin = originOf(ev)
+				setStartOrigin(d, ev)
 			}
+			d.Desired = store.DesiredRunning
 			return nil
 		}, []Effect{effSearch{filter: searchFilter(f)}}
 

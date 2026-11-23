@@ -115,6 +115,13 @@ func TestLoadGatewayOnDemandOverrides(t *testing.T) {
 	}
 }
 
+func TestLoadGatewayRejectsHeartbeatNotBelowGrace(t *testing.T) {
+	t.Setenv("VKLLM_ONDEMAND_HEARTBEAT_INTERVAL", "60s")
+	if _, err := LoadGateway(); err == nil {
+		t.Fatal("LoadGateway: want error for heartbeat equal to the 60s default grace")
+	}
+}
+
 func TestLoadGatewayRejectsUnknownMode(t *testing.T) {
 	t.Setenv("VKLLM_LIFECYCLE_PROVISIONING_MODE", "eager")
 	if _, err := LoadGateway(); err == nil {

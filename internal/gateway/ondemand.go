@@ -190,6 +190,7 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 		phrases = defaultTickerPhrases
 	}
 	var tr progress.Tracker
+	var gen int64
 	lastLine, lastBeat, lastPhrase := start, start, -1
 	tick := g.deps.Clock.NewTicker(pollEvery)
 	defer tick.Stop()
@@ -200,6 +201,10 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 			return
 		}
 		s := g.cachedStatus(now)
+		// A retried start is a new generation; its milestones must show again.
+		if s.Generation != 0 && s.Generation != gen {
+			tr, gen = progress.Tracker{}, s.Generation
+		}
 		for _, l := range tr.Lines(progressState(s)) {
 			if !send(progressChunk(alias, l, now)) {
 				return

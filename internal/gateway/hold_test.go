@@ -131,6 +131,41 @@ func TestHeldStreamProgressThenAnswer(t *testing.T) {
 	}
 }
 
+// A failed create retries under a new generation; its milestones must show again.
+func TestHeldStreamResetsProgressOnNewGeneration(t *testing.T) {
+	worker := fakeRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}},
+			Body: &chunkedBody{chunks: [][]byte{[]byte("data: [DONE]\n\n")}}}, nil
+	})
+	var admits atomic.Int32
+	fc := &fakeController{
+		demandSnap: controller.Snapshot{Public: "ALLOCATING", Desired: "RUNNING"},
+		admitFn: func(int64) (http.RoundTripper, error) {
+			if admits.Add(1) == 1 {
+				return nil, controller.ErrBackendUnavailable
+			}
+			return worker, nil
+		},
+	}
+	const gb = 1_000_000_000
+	fc.statusFn = scripted(
+		controller.Snapshot{Public: "STARTING", Desired: "RUNNING", Generation: 3, MachineID: 7, GPUName: "L40S"},
+		controller.Snapshot{Public: "LOADING_MODEL", Desired: "RUNNING", Generation: 3, MachineID: 7, GPUName: "L40S", ModelBytes: 10 * gb, DownloadedBytes: 9 * gb},
+		controller.Snapshot{Public: "STOPPED", Desired: "RUNNING", Generation: 3},
+		controller.Snapshot{Public: "STARTING", Desired: "RUNNING", Generation: 4, MachineID: 8, GPUName: "L40S"},
+		controller.Snapshot{Public: "LOADING_MODEL", Desired: "RUNNING", Generation: 4, MachineID: 8, GPUName: "L40S", ModelBytes: 10 * gb, DownloadedBytes: 3 * gb},
+		controller.Snapshot{Public: "READY", Desired: "RUNNING", Ready: true, Generation: 4},
+	)
+	h := startHold(t, fc)
+	body := h.run(t, 30*time.Second)
+	i7 := strings.Index(body, "(machine 7)")
+	i8 := strings.Index(body, "(machine 8)")
+	i30 := strings.Index(body, "Downloading the model: 30%")
+	if i7 < 0 || i8 < i7 || i30 < i8 || strings.Count(body, "Worker up") != 2 {
+		t.Fatalf("milestones not repeated for generation 4: %d %d %d\n%s", i7, i8, i30, body)
+	}
+}
+
 func TestHeldStreamHeartbeatAndTicker(t *testing.T) {
 	fc := &fakeController{admitErr: controller.ErrBackendUnavailable, demandSnap: controller.Snapshot{Public: "ALLOCATING", Desired: "RUNNING"}}
 	fc.statusFn = scripted(controller.Snapshot{Public: "ALLOCATING", Desired: "RUNNING"})
