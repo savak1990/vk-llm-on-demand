@@ -77,6 +77,12 @@ func TestHTTPCachesSuccessOnly(t *testing.T) {
 
 func TestFixed(t *testing.T) {
 	if n, err := Fixed(7).Bytes(context.Background(), "any"); n != 7 || err != nil {
-		t.Fatalf("Fixed = %d, %v", n, err)
+		t.Fatalf("Fixed(7) = %d, %v; want 7, nil", n, err)
+	}
+	if n, err := Fixed(0).Bytes(context.Background(), "any"); err == nil {
+		t.Fatalf("Fixed(0) = %d, nil; want error", n)
+	}
+	if n, err := Fixed(-1).Bytes(context.Background(), "any"); err == nil {
+		t.Fatalf("Fixed(-1) = %d, nil; want error", n)
 	}
 }

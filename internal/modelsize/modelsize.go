@@ -18,7 +18,12 @@ type Resolver interface {
 // Fixed returns one size for every URL.
 type Fixed int64
 
-func (f Fixed) Bytes(context.Context, string) (int64, error) { return int64(f), nil }
+func (f Fixed) Bytes(context.Context, string) (int64, error) {
+	if f <= 0 {
+		return 0, errors.New("modelsize: fixed size must be positive")
+	}
+	return int64(f), nil
+}
 
 type HTTP struct {
 	noRedirect *http.Client
