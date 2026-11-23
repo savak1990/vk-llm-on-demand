@@ -55,4 +55,33 @@ appns="$(yq 'select(.kind == "Application") | .metadata.namespace' "$tmp/outer.y
   exit 1
 }
 
+helm lint chat "${SET[@]}"
+helm template vk-llm-chat chat --namespace chat "${SET[@]}" > "$tmp/chat.yaml"
+"${KC[@]}" "$tmp/chat.yaml"
+if helm template vk-llm-chat chat --namespace chat >/dev/null 2>&1; then
+  echo "gitops-check: a chat render without fqdn must fail" >&2
+  exit 1
+fi
+alias="$(yq '.model.alias' gitops/values.yaml)"
+for v in DEFAULT_MODELS TASK_MODEL_EXTERNAL; do
+  [ "$(yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$v\") | .value" "$tmp/chat.yaml")" = "$alias" ] || {
+    echo "gitops-check: chat must render $v=$alias (gitops/values.yaml model.alias)" >&2
+    exit 1
+  }
+done
+for r in open-webui open-webui-auth; do
+  [ "$(yq "select(.kind == \"HTTPRoute\" and .metadata.name == \"$r\") | .spec.rules[0].backendRefs[0].name" "$tmp/chat.yaml")" = "open-webui" ] || {
+    echo "gitops-check: HTTPRoute $r must target Service open-webui (the platform traffic policies name these routes)" >&2
+    exit 1
+  }
+done
+[ "$(yq 'select(.kind == "Service" and .metadata.name == "open-webui") | .spec.ports[0].port' "$tmp/chat.yaml")" = "80" ] || {
+  echo "gitops-check: chat must render Service open-webui on port 80" >&2
+  exit 1
+}
+if yq -e 'select(.kind == "PersistentVolumeClaim" or .kind == "StatefulSet")' "$tmp/chat.yaml" >/dev/null 2>&1; then
+  echo "gitops-check: chat must not render a PVC or StatefulSet (no Redis, no volume)" >&2
+  exit 1
+fi
+
 echo "gitops-check: ok (chart $version)"

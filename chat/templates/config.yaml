@@ -1,0 +1,8 @@
+# Open WebUI loads this with envFrom; a change needs
+# `kubectl -n chat rollout restart deploy/open-webui`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: open-webui-config
+data:
+  WEBUI_URL: {{ printf "https://%s.%s" .Values.hostPrefix (required "fqdn is required" .Values.fqdn) | quote }}
