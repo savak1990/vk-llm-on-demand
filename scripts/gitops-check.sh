@@ -84,4 +84,23 @@ if yq -e 'select(.kind == "PersistentVolumeClaim" or .kind == "StatefulSet")' "$
   exit 1
 fi
 
+tag="$(yq '.tag' gitops/values.yaml)"
+./scripts/dev-values.sh "$version" "$tag" lab.example.com > "$tmp/dev-values.yaml"
+[ "$(yq '.host' "$tmp/dev-values.yaml")" = "llm-dev.lab.example.com" ] || {
+  echo "gitops-check: dev host must be llm-dev.<fqdn>" >&2
+  exit 1
+}
+strip='del(.host, .prometheusRule, .dashboard)'
+diff <(yq -P "$strip" "$tmp/values.yaml") <(yq -P "$strip" "$tmp/dev-values.yaml") || {
+  echo "gitops-check: dev values may differ from production only in host, prometheusRule and dashboard" >&2
+  exit 1
+}
+helm template gpu-on-demand oci://ghcr.io/savak1990/vk-llm-on-demand/charts/gpu-on-demand \
+  --version "$version" --namespace llm-dev -f "$tmp/dev-values.yaml" > "$tmp/dev.yaml"
+kinds="$(yq -N '.kind' "$tmp/dev.yaml" | sort -u | tr '\n' ' ')"
+[ "$kinds" = "ConfigMap Deployment HTTPRoute Role RoleBinding Service ServiceAccount ServiceMonitor " ] || {
+  echo "gitops-check: dev renders kinds '$kinds'; update the platform's llm-deploy Role before adding one" >&2
+  exit 1
+}
+
 echo "gitops-check: ok (chart $version)"

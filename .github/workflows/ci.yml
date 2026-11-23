@@ -49,6 +49,7 @@ jobs:
               - 'gitops/**'
               - 'chat/**'
               - 'scripts/gitops-check.sh'
+              - 'scripts/dev-values.sh'
             workflows:
               - '.github/**'
               - 'scripts/gpu-control.sh'
