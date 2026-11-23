@@ -34,6 +34,7 @@ Short version, for orientation only:
 - Every GPU is destroyed 30 minutes after the last inference finished (rolling, from readiness if none); `stop` drains for 60 s and destroys at once; no leases (ADR 0011).
 - The management API `/api/v1/gpu/*` uses management tokens; the inference API `/v1/*` uses inference keys; `vk-llm` and `gpu-control.yml` are thin clients (ADR 0012).
 - gitleaks, govulncheck and trivy run as pinned binaries in the PR gate; the `vk-llm` CLI ships via GoReleaser on GitHub Releases (ADR 0013).
+- The chat front end (Open WebUI, SearXNG) is a second Argo app: this repository's `chat/` chart, rendered by its own platform pointer (ADR 0020).
 - Persistent-volume caching and preferred-host scheduling are P2 (ADR 0014, Proposed).
 - The pipeline and chart conventions copy `vk-ahorro` (ADR 0008).
 - Runtime secrets reach the cluster through the platform's KMS ciphertext → SSM → External Secrets path (ADR 0009, Proposed).
