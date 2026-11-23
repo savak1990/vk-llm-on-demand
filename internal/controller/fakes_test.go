@@ -52,6 +52,7 @@ type fakeWorker struct {
 	probeCalls int
 	keyCalls   int
 	buildCalls int
+	progress   DownloadProgress
 }
 
 func newFakeWorker() *fakeWorker { return &fakeWorker{} }
@@ -99,3 +100,9 @@ func (w *fakeWorker) probes() int {
 }
 
 func (w *fakeWorker) Scrape(context.Context, http.RoundTripper) error { return nil }
+
+func (w *fakeWorker) Progress(context.Context, func(context.Context, string) ([]byte, error)) (DownloadProgress, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.progress, nil
+}

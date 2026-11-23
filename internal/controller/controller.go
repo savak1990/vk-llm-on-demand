@@ -173,6 +173,10 @@ type Controller struct {
 	demandUntil time.Time
 	demandKeyID string // the latest Demand's key, for a start the backoff deferred to a later Tick
 
+	progressMu  sync.Mutex
+	progress    DownloadProgress
+	progressGen int64
+
 	reconciling    atomic.Bool
 	reconcileMu    sync.Mutex
 	orphanObserved map[provider.InstanceID]int // keyed by id, not label: a duplicate shares the active instance's label

@@ -65,6 +65,19 @@ func TestWorkerAdapterProbeMapsReadinessToProbeStatus(t *testing.T) {
 	}
 }
 
+func TestWorkerAdapterProgress(t *testing.T) {
+	var a workerAdapter
+	got, err := a.Progress(context.Background(), func(_ context.Context, cmd string) ([]byte, error) {
+		if cmd != worker.ProgressCommand {
+			t.Fatalf("cmd = %q", cmd)
+		}
+		return []byte("VKLLM_BYTES 42\n"), nil
+	})
+	if err != nil || got.Bytes != 42 {
+		t.Fatalf("got %+v err %v", got, err)
+	}
+}
+
 func TestWorkerAdapterScrapeUpdatesExporterOnSuccessAndMarksDownOnFailure(t *testing.T) {
 	exp := worker.NewExporter()
 	a := newWorkerAdapter(testWorkerCfg(), "qwen3.6-35b-a3b", 32768, exp)

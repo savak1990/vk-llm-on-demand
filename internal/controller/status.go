@@ -24,6 +24,12 @@ func (c *Controller) Status() Snapshot {
 	}
 	snap.BudgetCeilingUSD = c.deps.Budget.CeilingUSD()
 	snap.ModelBytes = c.deps.Config.ModelSizeBytes
+	c.progressMu.Lock()
+	if c.progressGen == gen {
+		snap.DownloadedBytes = c.progress.Bytes
+		snap.WorkerStages = append([]string(nil), c.progress.Stages...)
+	}
+	c.progressMu.Unlock()
 
 	doc, _, err := c.deps.Store.Load(c.effCtx())
 	if err != nil {

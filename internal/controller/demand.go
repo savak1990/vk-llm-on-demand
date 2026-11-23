@@ -88,6 +88,23 @@ func (c *Controller) cancelUnattendedStart(ctx context.Context) {
 	}
 }
 
+// readProgress keeps the last good reading; a failed read never changes state.
+func (c *Controller) readProgress(ctx context.Context, gen int64) {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	p, err := c.deps.Worker.Progress(ctx, conn.Exec)
+	if err != nil {
+		return
+	}
+	c.progressMu.Lock()
+	c.progress, c.progressGen = p, gen
+	c.progressMu.Unlock()
+}
+
 // rearmDemandAfterRecovery gives a demand start that survived a restart
 // one grace period, because the restart dropped every held request.
 func (c *Controller) rearmDemandAfterRecovery(ctx context.Context) {

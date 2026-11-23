@@ -552,6 +552,7 @@ func (c *Controller) pollTick(ctx context.Context) {
 	case Loading:
 		effCtx := c.effCtx()
 		c.spawn(func() { dispatchProbe(effCtx, c, effProbe{gen: gen}) })
+		c.spawn(func() { c.readProgress(effCtx, gen) })
 	}
 	if isCreatingBootingOrLoading(state) {
 		c.armTimer(timerPoll, c.deps.Clock.Now().Add(pollInterval))

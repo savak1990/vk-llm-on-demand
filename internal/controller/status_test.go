@@ -102,6 +102,22 @@ func TestStatusReportsGeolocationAndModelBytes(t *testing.T) {
 	}
 }
 
+func TestLoadingPollReadsDownloadProgress(t *testing.T) {
+	c, _, _, _, w := newTestController(t)
+	w.progress = DownloadProgress{Bytes: 500, Stages: []string{"download_begin"}}
+	c.state, c.generation = Loading, 3
+	c.conn = tunnelConnForTest(func() error { return nil })
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Loading.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+	})
+	c.pollTick(context.Background())
+	waitFor(t, "progress read", func() bool { return c.Status().DownloadedBytes == 500 })
+	if got := c.Status().WorkerStages; len(got) != 1 || got[0] != "download_begin" {
+		t.Fatalf("WorkerStages = %q", got)
+	}
+}
+
 func TestOfferChosenStoresGeolocation(t *testing.T) {
 	c, _, _, _, _ := newTestController(t)
 	c.state = Searching
