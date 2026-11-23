@@ -36,6 +36,8 @@ spec:
             contextSize: {{ .Values.model.contextSize | int }}
           worker:
             image: {{ .Values.worker.image | quote }}
+          lifecycle:
+            provisioningMode: {{ .Values.provisioningMode | quote }}
           gateway:
             maxTokensCap: {{ .Values.gateway.maxTokensCap | int }}
             rateLimitPerKeyRPM: {{ .Values.gateway.rateLimitPerKeyRPM | int }}

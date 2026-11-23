@@ -7,8 +7,8 @@ namespace: llm
 # chart and the image it runs always match.
 charts:
   registry: ghcr.io/savak1990/vk-llm-on-demand/charts
-chartVersion: "0.2.0"
-tag: "b886c35e35a15941618be08ff8cd4880e8527b96"
+chartVersion: "0.3.0"
+tag: "afe162490a9e08e96e01d2b8b41fb30928f98b5d"
 
 # Secrets the platform renders into namespace llm (vk-lab-platform
 # gitops/templates/platform/shared/llm/secrets.yaml). The chart mounts them
@@ -29,6 +29,11 @@ model:
   contextSize: 262144
 # Vast.ai gpu_name, exact string. 48 GB, same generation as L40S, cheaper median price.
 gpu: RTX 6000Ada
+
+# A chat message to a stopped GPU starts it, so any valid inference key can
+# spend up to the monthly budget. explicit restores manual start only.
+provisioningMode: on-demand
+
 worker:
   image: ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:0a9f6c7cfe5a6b90b6c048b7a86865bf55a88af34bada927482eab2ef5f25b4a
 
