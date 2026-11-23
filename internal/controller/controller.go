@@ -182,6 +182,9 @@ func New(d Deps) (*Controller, error) {
 	if d.Config.ProvisioningMode != "explicit" {
 		return nil, fmt.Errorf("controller: provisioningMode %q not supported", d.Config.ProvisioningMode)
 	}
+	if d.ModelSize == nil || d.ModelURL == "" {
+		return nil, errors.New("controller: ModelSize and ModelURL are required")
+	}
 	var since time.Time
 	if d.Clock != nil {
 		since = d.Clock.Now()
