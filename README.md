@@ -189,8 +189,11 @@ curl -s -X POST "$H/v1/chat/completions" \
   -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"Say hello."}]}'
 ```
 
-Expected: HTTP 503 with `"code": "backend_unavailable"`. This is the normal
-answer while the GPU is off; it costs nothing.
+Expected, in explicit mode (the default): HTTP 503 with
+`"code": "backend_unavailable"`. This is the normal answer while the GPU
+is off; it costs nothing. In on-demand mode the same request instead
+returns `503 gpu_cold_start` and starts the GPU — see
+["On-demand mode"](#on-demand-mode).
 
 Start the GPU. This rents an RTX 6000 Ada GPU on Vast.ai and costs money until you stop
 it or the 30-minute idle timeout stops it:
@@ -227,7 +230,9 @@ offer or a safety limit blocked the start; the `reason` field says which.
 Everything above describes the chart default, `explicit` mode: you run
 `vk-llm start` and the GPU stays off until you do. Setting
 `config.lifecycle.provisioningMode: on-demand` starts the GPU from a chat
-request instead; nobody runs `vk-llm start` and nobody retries. Also set
+request instead; nobody runs `vk-llm start`, and a streaming chat client
+needs no retry — it stays on the same held connection until the answer
+arrives. Also set
 `config.model.sizeBytes` to the model file's size in bytes, so progress
 lines can show a download percentage instead of GB downloaded.
 
