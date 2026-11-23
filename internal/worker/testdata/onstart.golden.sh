@@ -20,6 +20,7 @@ dl() {
     aria2c -q -c -x 16 -s 16 --file-allocation=none -d /models -o model.gguf "$MODEL_URL"
     return
   fi
+  rm -f "$M"
   local n s i a b f h pids=()
   n=$(curl -sfIL "$MODEL_URL" | tr -d '\r' | awk 'tolower($1)=="content-length:"{v=$2}END{print v}')
   [ -n "$n" ] || return 1
@@ -46,6 +47,7 @@ boot() {
   if [ -f "$M" ] && echo "$MODEL_SHA256  $M" | sha256sum -c --status; then
     st download_skipped
   else
+    rm -f "$M" "$M.aria2"
     if ! command -v aria2c >/dev/null && command -v apt-get >/dev/null; then
       { timeout 120 apt-get update -qq && DEBIAN_FRONTEND=noninteractive timeout 120 apt-get install -y -qq aria2; } >/dev/null 2>&1 || true
     fi
