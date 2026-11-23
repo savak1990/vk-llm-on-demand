@@ -1,153 +1,250 @@
 ---
 id: "CORE-280"
-status: "DRAFT"
+status: "READY"
 updated: "2026-11-23"
 depends_on: ["CORE-120", "CORE-130", "CORE-160"]
-adrs: ["0008", "0009", "0012"]
+adrs: ["0019", "0008", "0009", "0012", "0016", "0017"]
 ---
 
 # 280 — A dev environment that follows `main`
 
-**Status note:** DRAFT, problem and requirements, with the scope agreed
-2026-11-23: dev auto-deploy only, production stays a manual gitops change,
-no per-PR previews; one Vast.ai account for both. No full design yet.
+**Status note:** READY (2026-11-23). Requirements agreed earlier the same
+day; design agreed in a grilling session the same day. Decisions are
+recorded in [ADR 0019](../../../docs/adr/0019-dev-installation-follows-main.md).
+Part of the work lands in `vk-lab-platform` as its own pull request.
 
-## Problem
+**Complexity:** M — one new CI job and two scripts here; a generic deploy
+credential, one namespace and IAM rights in the platform.
+**Risk:** medium — a second controller rents GPUs on the same account; a
+wrong RBAC rule could reach production's namespace.
+**Estimated effort:** one to two sessions (5–8 h), across two repositories.
+**Recommended model:** strong — two repositories, RBAC and IAM.
+**Depends on:** [CORE-120](../120-D-release-pipeline/spec.md),
+[CORE-130](../130-D-platform-integration/spec.md),
+[CORE-160](../160-D-github-actions-remote-control/spec.md).
 
-The only installation is production (namespace `llm`). It moves only when
-someone pins a new chart version in `gitops/values.yaml`. Every merge to
-`main` publishes a chart and image (`0.x.y-main.<sha>`) but deploys them
-nowhere, so the first place a merged change runs is production.
+## Outcome
 
-## Agreed scope
+Every merge to `main` that changes code installs that commit's chart and
+image as release `gpu-on-demand` in namespace `llm-dev`, reachable at
+`llm-dev.<fqdn>`, with production's configuration, and proves it answers on
+three read-only endpoints. Production (`llm`) still changes only through a
+reviewed gitops PR. `gpu-control.yml` can start, stop and query either.
 
-| Environment | Namespace | How it changes |
+## Scope
+
+Includes: the `deploy-dev` job and its scripts in this repository; a
+`target` input on `gpu-control.yml`; doc updates; the platform pull request
+(generic deploy credential, `llm-dev` namespace and secrets, traffic policy,
+IAM).
+
+Excludes: per-PR preview environments; a dashboard namespace selector;
+separate dev secrets or a separate Vast.ai account; any Argo CD Application
+for `llm-dev`; changes to the controller or the chart.
+
+## Design and contracts
+
+### Environments
+
+| Environment | Namespace | Host | Owner of chart objects | How it changes |
+|---|---|---|---|---|
+| dev | `llm-dev` | `llm-dev.<fqdn>` | Helm, through `deploy.yml` | every code merge to `main` |
+| production | `llm` | `llm.<fqdn>` | Argo CD | a merged PR that pins a clean `0.x.y` in `gitops/values.yaml` |
+
+The release name is `gpu-on-demand` in both, so the HTTPRoute, the state
+ConfigMap and the traffic-policy target have the same names. The default
+`installationId` is derived from namespace and release, so the two differ.
+
+### Dev values
+
+`scripts/deploy-dev.sh` renders `gitops/` with `helm template`, overriding
+`namespace=llm-dev`, `hostPrefix=llm-dev`, `chartVersion=<version>`,
+`tag=<full sha>` and `fqdn=<from SSM>`, and takes
+`.spec.source.helm.valuesObject` from the rendered Application with `yq`.
+It then sets `prometheusRule.enabled=false` and `dashboard.enabled=false`.
+Every other value — model, GPU, worker image, gateway caps, secret names —
+is production's, so there is one place that pins them. Budget ($30/month),
+price cap ($0.80/h), idle timeout (30 min) and explicit mode are the chart
+defaults production also uses.
+
+### Deploy job
+
+`deploy.yml` gains `deploy-dev`, needing `[version, publish]`, with
+`environment: gpu-control`, `permissions: {contents: read, id-token: write}`
+and a 15-minute timeout. It assumes `vars.AWS_ROLE_ARN` and calls
+`scripts/deploy-dev.sh <version> <sha>` directly (not through make, which
+turns every failure into exit 2).
+
+`scripts/kubeconfig.sh` (from vk-ahorro) reads
+`/<project>/cluster/llm-deploy/{endpoint,ca,token}`, masks the token, writes
+the kubeconfig to `$RUNNER_TEMP`, and preflights with
+`kubectl version --request-timeout=10s`.
+
+Exit codes of `deploy-dev.sh`:
+
+| Code | Meaning | Job result |
 |---|---|---|
-| **dev** | `llm-dev` | automatically: every merge to `main` that changes code installs that commit's chart and image |
-| **production** | `llm` | only by hand: a reviewed PR that edits `chartVersion` and `tag` in `gitops/values.yaml`; Argo CD syncs it after the merge |
-| PR previews | — | out of scope (see below) |
+| 0 | deployed and smoke-checked | green |
+| 2 | a credential parameter is missing or the cluster does not answer | green, with a `::warning::` and a step-summary note |
+| other | AccessDenied, helm failure (rolled back), smoke failure | red |
 
-## What exists today (verified 2026-11-23)
+Helm: `helm upgrade --install gpu-on-demand oci://ghcr.io/savak1990/vk-llm-on-demand/charts/gpu-on-demand --version <version> --namespace llm-dev --rollback-on-failure --timeout 5m -f <values>`.
 
-- `deploy.yml` runs on every push to `main`, ignoring `docs/`, `specs/` and
-  `gitops/`; it computes `0.x.y-main.<sha7>` and calls `publish.yml`, which
-  pushes the image (`:<sha>` and `:<version>`) and the OCI chart. It writes
-  nothing to any cluster.
-- vk-ahorro already does exactly this for its own `ahorro-dev` namespace:
-  a `deploy-dev` job runs `helm upgrade --install` with the just-published
-  version, using a deploy credential the platform publishes to SSM
-  (`/<project>/cluster/ahorro-deploy/{endpoint,ca,token,fqdn}`), a service
-  account with Roles in its own namespaces only, and a CI role reached by
-  GitHub OIDC. A cluster that does not answer makes the job end green with a
-  warning, so a rebuilt or parked cluster does not turn every merge red.
-  All of these platform pieces are hard-coded to Ahorro.
-- This repository's CI role, `vk-llm-ci-role`, trusts only jobs that run in
-  the GitHub Environment `gpu-control`; that Environment holds no secrets or
-  variables and allows only protected branches (`main`). A job on a push to
-  `main` can run there; a PR branch cannot.
-- Production's route has a `BackendTrafficPolicy` with a 660 s request
-  timeout; it targets only the `gpu-on-demand` route in `llm`.
-- Every installation is a full controller that can rent its own GPU. The
-  default `installationId` is derived from namespace and release, so an
-  install in `llm-dev` gets its own id and its orphan sweep touches only its
-  own instances.
-- In explicit mode an installation costs nothing until someone starts its
-  GPU.
+### Smoke check
 
-## Decision: one Vast.ai account for dev and production (2026-11-23)
+After helm succeeds, the script reads the first line of
+`/<project>/persistent/llm/api_token` and `.../management_tokens`, masks
+both, and calls, against `https://llm-dev.<fqdn>`:
 
-Dev and production use the same Vast.ai account and API key (the existing
-`/<project>/persistent/llm/vast_ai_api_key`). Verified consequences:
+| Call | Token | Expect |
+|---|---|---|
+| `GET /v1/models` | client key | 200 |
+| `GET /api/v1/gpu/status` | management token | 200 |
+| `GET /api/v1/gpu/cost` | management token | 200 |
 
-- **Cleanup stays separate.** Each controller lists only instances whose
-  label starts with its own `vkllm:<installationId>:` prefix
-  (`internal/controller/reconcile.go`, `internal/provider/vastai/client.go`),
-  and the two namespaces give two different ids. Production never destroys
-  dev's GPU, nor the reverse.
-- **Spend limits stay separate; the balance does not.** Each installation's
-  monthly budget counts only its own instances, so the combined monthly
-  ceiling is production's budget plus dev's ($30 + $5 by default). The
-  account balance is shared: the "balance low" gate
-  (`balance < 2 × maxHourlyPriceUSD`, `internal/budget/checker.go`) sees
-  the same balance from both, and a running dev GPU drains the money
-  production also needs.
-- A second account can be introduced later by giving dev its own
-  `vast_ai_api_key` parameter; nothing else changes.
+Each call retries every 10 s for up to 5 min (DNS for a new host). The
+script never calls `start`, `stop`, `budget` or `chat/completions`: a chat
+request reaching a running dev GPU would reset its idle timer. A smoke
+failure fails the job and does not roll back; the failures only it finds
+(route, DNS, certificate, token) are not fixed by a code rollback.
+
+### `gpu-control.yml`
+
+A `target` choice input (`prod`, `dev`; default `prod`) selects the host
+prefix `llm` or `llm-dev`. The concurrency group becomes
+`gpu-control-<target>`, and `run-name` shows the target. The token is the
+same for both. `scripts/gpu-control.sh` does not change.
+
+### Platform (`vk-lab-platform`)
+
+1. **A generic deploy credential.** One template renders, for each app in a
+   values list, a ServiceAccount `<app>-deploy`, a Role and RoleBinding per
+   listed namespace with that app's own rules, and the namespace-read
+   ClusterRole. Ahorro's entry reproduces today's objects exactly (same
+   names, namespaces and rules), so its golden render does not change.
+   `scripts/lib/ahorro-deploy.sh` becomes one publisher and one cleanup
+   function taking the app name, writing
+   `/<project>/cluster/<app>-deploy/{endpoint,ca,token,fqdn}`; `argo-up.sh`
+   and `argo-down.sh` call them for each app.
+2. **The `llm` entry:** namespace `llm-dev`; rules for exactly the kinds the
+   dev values render — ConfigMap, Secret (Helm's release storage), Service,
+   ServiceAccount, Deployment, Role, RoleBinding, HTTPRoute, ServiceMonitor
+   with full verbs; ReplicaSet, Pod and Event read; `pods/log` get. No
+   `bind`, `escalate` or `impersonate`: the chart's own Role grants only
+   ConfigMap get/update, which the deploy identity already holds.
+3. **Namespace `llm-dev`** with ExternalSecrets `vast-ai-api-key`,
+   `vk-llm-api-token` and `vk-llm-ssh-key` reading production's SSM
+   parameters, and a `BackendTrafficPolicy` with a 660 s request timeout on
+   HTTPRoute `gpu-on-demand`. The root Application self-heals them.
+4. **`vk-llm-ci-role`** gains `ssm:GetParameter` on
+   `/*/cluster/llm-deploy/*` and `/*/persistent/llm/api_token`, and
+   `kms:Decrypt` limited by `kms:EncryptionContext:PARAMETER_ARN` to those
+   two SecureStrings plus the existing `management_tokens`.
+
+### Failure and cost rules
+
+- Dev rents nothing unless someone starts it; explicit mode, the $30 budget,
+  the $0.80 cap and the 30-minute idle timeout apply as in production.
+- The two installations cannot touch each other's instances: each lists only
+  labels prefixed `vkllm:<installationId>:`.
+- The deploy identity cannot read or write namespace `llm`: it has no
+  RoleBinding there and no ClusterRole beyond namespace read.
 
 ## Requirements
 
 - R1. Every merge to `main` that publishes a new version MUST install that
-  exact chart version and image into namespace `llm-dev`, with no manual
-  step.
+  exact chart version and image into `llm-dev`, with no manual step
+  (ADR 0019 §1).
 - R2. A merge that changes only `gitops/`, `docs/` or `specs/` MUST NOT
-  redeploy dev (today's `paths-ignore` already gives this).
-- R3. Production (`llm`) MUST change only through a merged PR that edits
-  `gitops/values.yaml`; no workflow MUST write to namespace `llm` or edit
-  that file. Argo CD MUST sync such a merge without a manual refresh, within
-  its normal polling interval.
-- R4. The dev deploy job MUST run inside the GitHub Environment
-  `gpu-control` and reach the cluster only through `vk-llm-ci-role` and
-  OIDC; no long-lived cluster credential MUST be stored in GitHub.
-- R5. The credential the job uses MUST be able to write only in `llm-dev`
-  and MUST NOT be able to read or write namespace `llm`. Its permissions
-  MUST cover every kind the chart renders there (including NetworkPolicy,
-  Role/RoleBinding, ServiceMonitor, PrometheusRule and ExternalSecret if
-  enabled).
-- R6. Dev MUST have its own client key, management token, worker seed and
-  SSH key, distinct from production's, so a dev credential can never start,
-  stop or reconfigure the production GPU.
-- R7. Dev MUST have its own monthly budget, lower than production's
-  (default $5), and MUST run in explicit mode.
+  redeploy dev (today's `paths-ignore`).
+- R3. Production MUST change only through a merged PR that edits
+  `gitops/values.yaml`, and MUST pin a clean `0.x.y` release; no workflow
+  MUST write to namespace `llm` or edit that file (ADR 0019 §1).
+- R4. The deploy job MUST run in the GitHub Environment `gpu-control` and
+  reach the cluster only through `vk-llm-ci-role` and OIDC; no long-lived
+  cluster credential MUST be stored in GitHub (ADR 0019 §2).
+- R5. The deploy credential MUST be able to write only in `llm-dev` and
+  MUST NOT read or write namespace `llm`; its rules MUST cover every kind
+  the dev values render and no other.
+- R6. Dev MUST use production's client key, management token, worker seed,
+  SSH key and Vast.ai API key. A dev token is a production token; this is
+  accepted (ADR 0019 §4).
+- R7. Dev MUST run in explicit mode with production's budget, price cap and
+  idle timeout (ADR 0019 §3).
 - R8. Dev MUST be reachable at `llm-dev.<fqdn>` with the existing wildcard
-  certificate and external-dns, and its route MUST get the same request
-  timeout policy as production's.
-- R9. If the cluster does not answer, the deploy job MUST end with a warning,
-  not a failure (the vk-ahorro convention).
+  certificate and external-dns, with the same 660 s request timeout as
+  production.
+- R9. If a credential parameter is missing or the cluster does not answer,
+  the job MUST end green with a warning (the vk-ahorro convention).
 - R10. A failed install MUST roll back to the previous dev release
-  (`helm upgrade --rollback-on-failure`) and MUST fail the job.
+  (`--rollback-on-failure`) and MUST fail the job.
 - R11. After a cluster rebuild, dev MUST be restorable by re-running the
   latest `deploy.yml` run, with no other step.
-- R12. Platform pieces MUST be parameterised by application where practical
-  (namespace list, SSM prefix, role ARNs), so vk-ahorro and this repository
-  do not keep two hand-copied variants.
-- R13. Dev MUST use production's Vast.ai API key (one account), and MUST
-  label every instance with its own installation id so neither installation
-  can see or destroy the other's instances.
+- R12. The platform's deploy credential MUST be one generic template and one
+  publisher parameterised by app, with Ahorro's objects and SSM paths
+  unchanged.
+- R13. Every dev instance MUST carry dev's own `installationId` in its
+  label, so neither installation can see or destroy the other's instances.
+- R14. After helm succeeds, the job MUST call the three read-only endpoints
+  and MUST fail on any non-200 after 5 minutes of retries; it MUST NOT call
+  any endpoint that starts, stops or reconfigures a GPU, nor send inference
+  (ADR 0019 §5).
+- R15. Dev MUST enable the ServiceMonitor and MUST NOT install a
+  PrometheusRule or dashboard; production's cover both namespaces.
+- R16. `gpu-control.yml` MUST take a `target` input (`prod` default, `dev`)
+  that selects the host, and MUST NOT run two actions on one target at once.
 
-## Facts the design needs
+## Implementation steps
 
-- Platform side: namespace `llm-dev` and a deploy service account with
-  Roles in it (like `shared/rbac/ahorro-deploy.yaml`); the credential
-  publisher (like `scripts/lib/ahorro-deploy.sh`, called from both
-  `argo-up.sh` paths and cleaned up by `argo-down.sh`); `vk-llm-ci-role`
-  gaining `ssm:GetParameter` on the new `cluster/llm-deploy/*` parameters and
-  `kms:Decrypt` limited to its token; ExternalSecrets in `llm-dev` for the four dev
-  secrets plus the shared Vast.ai key; render-check lists and the aws golden.
-- Repository side: a `deploy-dev` job in `deploy.yml`, a `kubeconfig.sh`
-  and a `deploy-dev.sh` mirroring vk-ahorro's, setting `host`,
-  `existingSecrets.*`, model/worker pins and the dev budget.
-- The model, GPU and context pins for dev come from the same
-  `gitops/values.yaml` as production, so dev runs what production would run
-  after a bump, plus the new code.
+1. Platform PR: generic deploy credential (template, publisher, callers),
+   Ahorro golden unchanged.
+2. Platform PR: `llm` entry, namespace `llm-dev`, ExternalSecrets, traffic
+   policy, `vk-llm-ci-role` permissions, render-check lists.
+3. This repo: `scripts/kubeconfig.sh`, `scripts/deploy-dev.sh` (values
+   render, helm, smoke), with a local dry run against `helm template`.
+4. This repo: `deploy-dev` job in `deploy.yml`.
+5. This repo: `target` input on `gpu-control.yml`.
+6. Docs: `docs/testing-strategy.md`, ADR 0008 status line, README index,
+   architecture if it names one installation.
+7. After both merge: one real merge to `main` deploys dev; one
+   `gpu-control` `status` run with `target=dev`.
+
+## Tests / acceptance criteria
+
+- AC1. The rendered dev values differ from production's only in `host`, the
+  image tag, the chart version, `prometheusRule` and `dashboard` (a diff in
+  the dry run of step 3).
+- AC2. With the credential parameters absent, `deploy-dev.sh` exits 2 and
+  the job is green with a warning.
+- AC3. A merge to `main` produces a `deploy-dev` job that is green within
+  10 minutes, and `helm -n llm-dev history gpu-on-demand` shows that
+  version.
+- AC4. `kubectl auth can-i --as=system:serviceaccount:<ns>:llm-deploy`
+  answers `no` for every verb in namespace `llm` and `yes` for
+  `create deployments` in `llm-dev`.
+- AC5. `GET https://llm-dev.<fqdn>/api/v1/gpu/status` returns 200 with
+  state "no GPU", and the Vast.ai instance list is unchanged by the deploy.
+- AC6. `gpu-control` with `target=dev, action=status` succeeds; with
+  `target=prod` it still reports production.
+- AC7. Ahorro's platform golden render is byte-identical before and after
+  the generic credential change.
+
+## Definition of done
+
+Both pull requests merged; AC1–AC7 recorded under Evidence; ADR 0019
+Accepted; `docs/testing-strategy.md` no longer says "one installation";
+status DONE and folder letter `D` in the same pull request.
 
 ## Open questions
 
-| Question | Why it matters |
+None. Closed on 2026-11-23:
+
+| Question | Answer |
 |---|---|
-| Does the deploy service account need `bind`/`escalate` to create the chart's Role? | Kubernetes refuses to grant permissions the creator does not hold |
-| Should production pin clean releases (`release.yml`, `0.x.y`) instead of `main` prereleases? | Today it pins `0.1.1-main.0ab826b` |
-| Should the `gpu-control` workflow and the `vk-llm` CLI get a dev target (`--endpoint`)? | Starting the dev GPU from Actions |
-
-## Out of scope
-
-Per-PR preview environments. If wanted later, the safe shape found on
-2026-11-23 is a preview workflow dispatched from `main` with a PR number:
-an unprivileged job builds the PR's image, and only `main`'s workflow code
-deploys it, inside `gpu-control`, into a separate namespace with its own
-small budget and keys. Running a preview from the PR's own branch would
-need the branch rule removed from `gpu-control`, which would let any pushed
-branch assume the role.
+| Does the deploy identity need `bind`/`escalate`? | No; the chart's Role grants only what the identity already holds (Platform §2) |
+| Should production pin clean releases? | Yes, clean `0.x.y` only, as vk-ahorro (R3) |
+| Should `gpu-control` get a dev target? | Yes, a `target` input (R16); the CLI already takes `--endpoint` |
 
 ## Evidence
 
-None. Problem and requirements only.
+None yet.
