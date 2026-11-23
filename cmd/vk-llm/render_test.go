@@ -145,6 +145,30 @@ func TestStatusGolden(t *testing.T) {
 			}`),
 		},
 		{
+			"ready_cost",
+			parseStatusDoc(t, `{
+				"provider": "vast.ai",
+				"state": "READY",
+				"instance": {
+					"gpu": "RTX 6000Ada", "machineId": 40508, "priceUSDPerHour": 0.6156,
+					"createdAt": "2026-11-22T10:30:00Z", "readyAt": "2026-11-22T10:40:00Z",
+					"prices": {"gpuUSDPerHour": 0.56, "storageUSDPerGBMonth": 0.667, "downloadUSDPerGB": 0.039, "uploadUSDPerGB": 0.039},
+					"inetDownMbps": 889.4
+				},
+				"model": {"alias": "qwen-35b", "contextSize": 32768},
+				"ready": true,
+				"uptimeSeconds": 1530,
+				"lastInferenceFinishedAt": null,
+				"secondsUntilIdleShutdown": 1800,
+				"cost": {
+					"estimatedInstanceUSD": 1.41, "estimatedMonthUSD": 4.2, "budgetMonthUSD": 30,
+					"breakdown": {"gpuUSD": 0.24, "storageUSD": 0.03, "downloadUSD": 1.14},
+					"selection": {"modelBytes": 29200000000, "horizonSeconds": 1800, "estimatedDownloadSeconds": 263, "estimatedSessionUSD": 1.49}
+				},
+				"unavailable": ""
+			}`),
+		},
+		{
 			"desired_mismatch",
 			parseStatusDoc(t, `{
 				"provider": "vast.ai",

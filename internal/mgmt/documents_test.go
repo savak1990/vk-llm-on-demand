@@ -1,12 +1,15 @@
 package mgmt
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
+	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
 func TestBuildStatusDocumentReadySnapshot(t *testing.T) {
@@ -97,6 +100,40 @@ func TestBuildCostDocumentNoInstance(t *testing.T) {
 	doc := buildCostDocument(controller.Snapshot{BudgetMonthUSD: 30}, config.Mgmt{}, time.Now())
 	if doc.PriceUSDPerHour != 0 || doc.EstimatedInstanceUSD != 0 || doc.ProviderBalanceUSD != nil {
 		t.Fatalf("doc = %+v", doc)
+	}
+}
+
+func TestStatusAndCostDocumentsCarryPricesBreakdownSelection(t *testing.T) {
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-25 * time.Minute)
+	snap := controller.Snapshot{
+		Provider: "vastai", Public: "READY", GPUName: "RTX 6000Ada", MachineID: 40508, Hourly: provider.Money(615556),
+		CreatedAt: created, InetDownMbps: 889.4,
+		Prices:           &store.OfferPrices{GPUUSDPerHour: 0.56, StorageUSDPerGBMonth: 0.667, DownloadUSDPerGB: 0.039, UploadUSDPerGB: 0.039},
+		Estimate:         &store.OfferEstimate{ModelBytes: 29_200_000_000, DiskGB: 60, HorizonSeconds: 1800, DownloadSeconds: 263, DownloadUSD: 1.14, SessionUSD: 1.49},
+		SpendInstanceUSD: 1.40, SpendGPUUSD: 0.24, SpendStorageUSD: 0.02, SpendDownloadUSD: 1.14,
+	}
+	for name, raw := range map[string]any{
+		"status": buildStatusDocument(snap, config.Mgmt{}, now),
+		"cost":   buildCostDocument(snap, config.Mgmt{}, now),
+	} {
+		b, _ := json.Marshal(raw)
+		for _, key := range []string{`"gpuUSD":0.24`, `"storageUSD":0.02`, `"downloadUSD":1.14`, `"estimatedDownloadSeconds":263`, `"estimatedSessionUSD":1.49`, `"modelBytes":29200000000`} {
+			if !strings.Contains(string(b), key) {
+				t.Fatalf("%s document lacks %s: %s", name, key, b)
+			}
+		}
+	}
+	sd := buildStatusDocument(snap, config.Mgmt{}, now)
+	if sd.Instance.Prices == nil || sd.Instance.Prices.DownloadUSDPerGB != 0.039 || sd.Instance.InetDownMbps != 889.4 {
+		t.Fatalf("instance = %+v", sd.Instance)
+	}
+}
+
+func TestStoppedDocumentHasNoBreakdown(t *testing.T) {
+	doc := buildStatusDocument(controller.Snapshot{Public: "STOPPED"}, config.Mgmt{}, time.Now())
+	if doc.Cost.Breakdown != nil || doc.Cost.Selection != nil {
+		t.Fatalf("stopped cost = %+v, want no breakdown or selection", doc.Cost)
 	}
 }
 

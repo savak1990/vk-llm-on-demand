@@ -84,6 +84,13 @@ type Snapshot struct {
 	BudgetCeilingUSD   float64
 	ProviderBalanceUSD *float64
 
+	Prices           *store.OfferPrices
+	Estimate         *store.OfferEstimate
+	InetDownMbps     float64
+	SpendGPUUSD      float64
+	SpendStorageUSD  float64
+	SpendDownloadUSD float64
+
 	Stages           map[string]time.Duration
 	LastError        string
 	AttemptsThisHour int
