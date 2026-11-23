@@ -17,6 +17,7 @@ dist/
 # Local kubeconfigs and key material never land in the tree.
 .kube/
 kubeconfig*
+!/scripts/kubeconfig.sh
 *.kubeconfig
 *.pem
 *.key

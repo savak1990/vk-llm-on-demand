@@ -14,7 +14,7 @@ VERSION ?= $(shell ./scripts/version.sh base)
 IMAGE_TAG ?= $(shell git rev-parse HEAD)
 IMAGE ?= ghcr.io/savak1990/vk-llm-on-demand/$(SVC):$(IMAGE_TAG)
 
-.PHONY: go-build go-test go-lint lint-worker-script lint-gpu-control-script test-worker-script test-worker-image require-svc image-build image-push helm-lint helm-template gitops-check helm-rbac-check helm-package helm-push version release buildx-init keygen repo-settings
+.PHONY: go-build go-test go-lint lint-worker-script lint-scripts test-worker-script test-worker-image require-svc image-build image-push helm-lint helm-template gitops-check helm-rbac-check helm-package helm-push version release buildx-init keygen repo-settings
 
 go-build: ## Build every cmd/ binary into bin/
 	go build -o bin/ ./cmd/...
@@ -28,8 +28,8 @@ go-lint: ## Run golangci-lint
 lint-worker-script: ## shellcheck the rendered worker onstart script
 	shellcheck -s bash internal/worker/testdata/onstart.golden.sh
 
-lint-gpu-control-script: ## shellcheck scripts/gpu-control.sh
-	shellcheck -s bash scripts/gpu-control.sh
+lint-scripts: ## shellcheck gpu-control.sh and the llm-dev deploy scripts
+	shellcheck -s bash scripts/gpu-control.sh scripts/kubeconfig.sh scripts/deploy-dev.sh scripts/dev-values.sh scripts/dev-smoke.sh
 
 test-worker-script: ## Run the worker's stub-container Docker tests (AC6/AC7)
 	go test -tags integration ./internal/worker/... -run TestWorkerScript -v

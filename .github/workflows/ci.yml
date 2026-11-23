@@ -42,6 +42,11 @@ jobs:
               - 'scripts/gpu-control.sh'
               - 'test/gpucontrol/**'
               - '.github/workflows/gpu-control.yml'
+              - 'scripts/kubeconfig.sh'
+              - 'scripts/deploy-dev.sh'
+              - 'scripts/dev-smoke.sh'
+              - 'test/deploydev/**'
+              - '.github/workflows/deploy.yml'
             helm:
               - 'deploy/helm/**'
               - 'test/kind/**'
@@ -53,6 +58,10 @@ jobs:
             workflows:
               - '.github/**'
               - 'scripts/gpu-control.sh'
+              - 'scripts/kubeconfig.sh'
+              - 'scripts/deploy-dev.sh'
+              - 'scripts/dev-values.sh'
+              - 'scripts/dev-smoke.sh'
             cli:
               - 'cmd/vk-llm/**'
               - '.goreleaser.yaml'
@@ -477,7 +486,7 @@ jobs:
 
       - run: actionlint -color
 
-      - run: make lint-gpu-control-script
+      - run: make lint-scripts
 
   repo:
     needs: changes
