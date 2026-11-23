@@ -24,6 +24,7 @@ jobs:
       helm: ${{ steps.filter.outputs.helm }}
       workflows: ${{ steps.filter.outputs.workflows }}
       cli: ${{ steps.filter.outputs.cli }}
+      worker: ${{ steps.filter.outputs.worker }}
     steps:
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
@@ -53,6 +54,10 @@ jobs:
             cli:
               - 'cmd/vk-llm/**'
               - '.goreleaser.yaml'
+            worker:
+              - 'internal/worker/**'
+              - 'Makefile'
+              - '.github/workflows/ci.yml'
 
   go:
     needs: changes
@@ -422,9 +427,9 @@ jobs:
 
   worker-script:
     needs: changes
-    if: needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.worker == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
     concurrency:
