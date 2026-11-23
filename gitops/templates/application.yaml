@@ -36,6 +36,9 @@ spec:
             contextSize: {{ .Values.model.contextSize | int }}
           worker:
             image: {{ .Values.worker.image | quote }}
+          gateway:
+            maxTokensCap: {{ .Values.gateway.maxTokensCap | int }}
+            rateLimitPerKeyRPM: {{ .Values.gateway.rateLimitPerKeyRPM | int }}
         httpRoute:
           enabled: true
         serviceMonitor:

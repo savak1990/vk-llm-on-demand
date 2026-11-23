@@ -42,6 +42,13 @@ route="$(yq 'select(.kind == "HTTPRoute") | .metadata.name' "$tmp/inner.yaml")"
   exit 1
 }
 
+cm='select(.kind == "ConfigMap" and .metadata.name == "gpu-on-demand") | .data'
+[ "$(yq "$cm | .VKLLM_GATEWAY_MAX_TOKENS_CAP" "$tmp/inner.yaml")" = "16384" ] &&
+  [ "$(yq "$cm | .VKLLM_GATEWAY_RATE_LIMIT_PER_KEY_RPM" "$tmp/inner.yaml")" = "100" ] || {
+  echo "gitops-check: gateway must render maxTokensCap 16384 and rateLimitPerKeyRPM 100 for Open WebUI" >&2
+  exit 1
+}
+
 appns="$(yq 'select(.kind == "Application") | .metadata.namespace' "$tmp/outer.yaml")"
 [ "$appns" = "llm" ] || {
   echo "gitops-check: child Application must live in namespace llm, not '$appns' (an Application in argocd may name any project)" >&2
