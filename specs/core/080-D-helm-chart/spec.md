@@ -12,11 +12,11 @@ adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013", "0019"]
 
 **2026-11-23 amendment (CORE-220):** the `onDemand` block now renders;
 `provisioningMode` accepts `on-demand` as well as `explicit`. The download
-percentage uses the model size resolved automatically on the chosen offer
-(`internal/modelsize`), not a chart value — no `model.sizeBytes` key
-exists. The values table, the schema snippet and the rendered key count
-below are updated to match `deploy/helm/gpu-on-demand` as shipped; the
-Evidence section is left as the 2026-11-06 record and is not restated.
+percentage uses the model size resolved automatically on the chosen
+offer, not a chart value. The values table, the schema snippet and the
+rendered key count below are updated to match `deploy/helm/gpu-on-demand`
+as shipped; the Evidence section is left as the 2026-11-06 record and is
+not restated.
 
 **Complexity:** M — many small templates and a long values schema, no business logic.
 **Risk:** medium — a wrong RBAC verb, a wrong `config.*` → env-var mapping, or a schema guard that does not actually block `idleShutdown.enabled: false` breaks safety invisibly, because nothing here is unit-testable in Go.
@@ -99,9 +99,9 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.lifecycle.shutdown.allowForce` | `false` | `VKLLM_LIFECYCLE_SHUTDOWN_ALLOW_FORCE` — gates the future `force` stop (ADR 0011 §3) |
 | `config.lifecycle.startupTimeout` | `15m` | `VKLLM_LIFECYCLE_STARTUP_TIMEOUT` (was `gpu.startupDeadline`) |
 | `config.lifecycle.safety.maxHourlyPriceUSD` | `0.80` | `VKLLM_LIFECYCLE_SAFETY_MAX_HOURLY_PRICE_USD` |
-| `config.lifecycle.safety.maxDownloadPriceUSDPerGB` | `0.10` | `VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB` — caps an offer's download price when ranking by estimated session cost (CORE-210) |
-| `config.lifecycle.safety.maxStoragePriceUSDPerGBMonth` | `1.00` | `VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH` — caps an offer's storage price when ranking by estimated session cost (CORE-210) |
-| `config.lifecycle.safety.maxDiskGB` | `200` | `VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB` — ceiling on the disk size searched for and provisioned (CORE-210) |
+| `config.lifecycle.safety.maxDownloadPriceUSDPerGB` | `0.10` | `VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB` — an offer above this MUST NOT be created (CORE-210 R3) |
+| `config.lifecycle.safety.maxStoragePriceUSDPerGBMonth` | `1.00` | `VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH` — an offer above this MUST NOT be created (CORE-210 R3) |
+| `config.lifecycle.safety.maxDiskGB` | `200` | `VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB` — above this no search runs; `reason=model_too_large` (CORE-210 R8) |
 | `config.lifecycle.safety.maxLifetime` | `12h` | `VKLLM_LIFECYCLE_SAFETY_MAX_LIFETIME` (was `6h`; a deliberate change, ADR 0011 §5) |
 | `config.lifecycle.safety.maxInstanceSpendUSD` | `0` | `VKLLM_LIFECYCLE_SAFETY_MAX_INSTANCE_SPEND_USD` — `0` = off; otherwise bounds one instance's estimated spend |
 | `config.lifecycle.safety.maxProvisionAttemptsPerHour` | `3` | `VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR` |
