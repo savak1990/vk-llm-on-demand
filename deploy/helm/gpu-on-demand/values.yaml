@@ -22,6 +22,7 @@ config:
       minCpuRamGB: 32
       minDiskGB: 60
       minReliability: 0.95
+      # megabits per second (Vast's inet_down), not megabytes
       minInetDownMBps: 500
       minDiskBwMBps: 500
       minCudaVersion: 12.8

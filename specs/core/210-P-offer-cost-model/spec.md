@@ -286,8 +286,8 @@ a download cost of $0.
 `EstUSD = FixedUSD + DPH × ceil(seconds) ÷ 3600`. `OpenEntry` takes the
 fixed amount; T8 and T11 pass `Instance.Offer.Estimate.DownloadUSD`. The
 budget gate and `maxInstanceSpendUSD` see the download at once. On a month
-rollover the fixed amount stays in the closed month, and the restarted open
-entry has `FixedUSD = 0`.
+rollover the restarted open entry has `FixedUSD = 0`, and the closed
+month's total is reset by the existing rollover.
 
 ### Status and cost documents
 
@@ -406,9 +406,10 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
 - AC7. `filter_default.json` contains `allocated_storage`,
   `inet_down_cost`, `storage_cost`; the fixture decodes all new fields.
 - AC8. `dispatchCreate` refuses an offer that passes `AssertPrice` but
-  fails `provider.Admit`.
+  fails `provider.Admit`, and refuses one that passes both when its
+  `DiskGB` is 0 or below the filter's `MinDiskGB`.
 - AC9. Ledger: `OpenEntry` with a fixed $1.14 makes `EstimatedMTD` rise by
-  $1.14 at once; rollover keeps it in the closed month.
+  $1.14 at once; on rollover the restarted open entry has `FixedUSD = 0`.
 - AC10. Config: each new cap rejects `0`, `-1`, and accepts the default.
 - AC11. Status and cost golden JSON carry `prices`, `breakdown`,
   `selection`; `breakdown` sums to `estimatedInstanceUSD`.
@@ -419,10 +420,13 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
   download cost 0).
 - AC15. The admission gate returns `budget_exhausted` for an offer whose
   `DownloadUSD` plus month-to-date spend reaches the cap.
+- AC16. `dispatchSearch` drops a ranked offer whose download alone
+  reaches `maxInstanceSpendUSD`; if none remain, `EvNoOffer{Reason:
+  "no_offer"}`; `maxInstanceSpendUSD = 0` filters nothing.
 
 ## Definition of done
 
-- [x] AC1–AC15 pass (tier 1/2).
+- [x] AC1–AC16 pass (tier 1/2).
 - [x] `make specs-check go-build go-test go-lint helm-lint helm-template`
       all exit 0.
 - [x] ADR 0017 flipped to Accepted in the same PR.
