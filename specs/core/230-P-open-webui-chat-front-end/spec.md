@@ -70,7 +70,7 @@ Not in this spec:
 ```
 Phone (Conduit / home-screen app) ─┐
 Laptop browser ───────────────────┴─▶ https://chat.<fqdn>  (platform-gateway, wildcard TLS, external-dns)
-                                          │  BackendTrafficPolicy: 20 req/s, 660 s
+                                          │  660 s; /api/v1/auths/ also 20 req/s
                                    Open WebUI  (namespace chat, 1 replica)
                                     │        │                 │
              lab-postgres database "openwebui"  SearXNG         http://gpu-on-demand.llm.svc/v1
@@ -83,7 +83,8 @@ Laptop browser ───────────────────┴─�
 | SearXNG | upstream image, pinned by digest | `Deployment` + `Service` (ClusterIP, port 8080) + `ConfigMap` `settings.yml` with `search.formats: [html, json]` and the limiter off; `GRANIAN_WORKERS=1`; no `HTTPRoute` |
 | Database | `lab-postgres` (CNPG, `cnpg-system`) | `spec.managed.roles` gains `openwebui` (password from an ExternalSecret in `cnpg-system`); a CNPG `Database` `openwebui` owned by it |
 | Route | `HTTPRoute` `chat.<fqdn>` → Open WebUI service, parent `platform-gateway`/`envoy`/`https` | DNS and certificate come from the existing wildcard and external-dns |
-| Traffic policy | `BackendTrafficPolicy` on that route | local rate limit 20 req/s (copied from `grafana-traffic-policy`) and `timeout.http.requestTimeout: 660s`, the same bound as the GPU route |
+| Login route | `HTTPRoute` `open-webui-auth`, same hostname, `PathPrefix /api/v1/auths/` | the longer prefix wins over the main route; only sign-in and sign-up traffic matches |
+| Traffic policies | `BackendTrafficPolicy` on each route | main route: `timeout.http.requestTimeout: 660s`, the same bound as the GPU route; login route: local rate limit 20 req/s plus the same timeout |
 
 Why `chat` and not `llm`: either works (gpu-on-demand has its own
 ServiceAccount and no NetworkPolicy is active). A separate namespace keeps
@@ -94,7 +95,9 @@ Why no volume: Hetzner volumes have no snapshots and are deleted on
 2-day retention). This version stores no uploads, so `DATA_DIR` on the
 container's own filesystem is enough.
 
-The rate limit is per Envoy instance, not per client: it slows a password
+The rate limit covers the login path only. On the whole route it would
+return 429 for part of a cold page load, which fetches dozens of assets in
+parallel. It is per Envoy instance, not per client: it slows a password
 guessing script, it does not stop one.
 
 ### Authorization
@@ -256,8 +259,8 @@ deployed only after that session confirms room on the cluster.
 - R11. The gateway's output cap MUST be 16384 tokens.
 - R12. The platform's render check and aws golden MUST include the new
   objects.
-- R13. The chat route MUST carry a 20 req/s local rate limit and a 660 s
-  request timeout.
+- R13. Both chat routes MUST carry a 660 s request timeout; only the login
+  route (`/api/v1/auths/`) MUST carry a 20 req/s local rate limit.
 - R14. File uploads and per-user API keys MUST be off.
 - R15. Prompts and completions MUST NOT appear in logs; the log level MUST
   be `INFO`.
@@ -278,7 +281,8 @@ deployed only after that session confirms room on the cluster.
 4. Same PR: namespace `chat`, ExternalSecrets, Open WebUI `Application`,
    SearXNG manifests, `HTTPRoute`, `BackendTrafficPolicy`; `client-keys`
    template with `mergePolicy: Merge`. Check: render check green, golden
-   updated; the rendered `vk-llm-api-token` keeps three keys.
+   updated; the rendered `vk-llm-api-token` keeps `management-tokens` and
+   `worker-seed`.
 5. This repository: `maxTokensCap` 16384, `rateLimitPerKeyRPM` 100,
    requirements §13. Check: `make gitops-check specs-check`.
 6. Wait for HETZ-176's confirmation of room on the cluster.
@@ -312,8 +316,9 @@ deployed only after that session confirms room on the cluster.
 - AC9. After a chat that contains a unique word, a Loki query for that word
   over the `chat` and `llm` namespaces returns no lines. (R15)
 - AC10. The upload control is absent or refused; the settings page offers
-  no API key; more than 20 req/s to the route gets 429 from Envoy. (R13,
-  R14)
+  no API key; more than 20 req/s to `/api/v1/auths/signin` gets 429 from
+  Envoy; a cold load of the start page in a private window shows no 429 in
+  the browser's network tab. (R13, R14)
 - AC11. A normal chat with web search gets no 429 from the gateway. (R16)
 
 ## Definition of done
