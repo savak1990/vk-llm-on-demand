@@ -297,7 +297,8 @@ month's total is reset by the existing rollover.
   "estimatedInstanceUSD": 1.41, "estimatedMonthUSD": 4.20, "budgetMonthUSD": 30,
   "breakdown": { "gpuUSD": 0.24, "storageUSD": 0.02, "downloadUSD": 1.14 },
   "selection": { "modelBytes": 29200000000, "horizonSeconds": 1800,
-                 "estimatedDownloadSeconds": 263, "estimatedSessionUSD": 1.49 }
+                 "estimatedDownloadSeconds": 263, "estimatedDownloadUSD": 1.14,
+                 "estimatedSessionUSD": 1.49 }
 }
 ```
 
@@ -457,6 +458,10 @@ Tier 1 and tier 2 only; R12 runs in the CORE-140 acceptance run.
 **Commits, `git log --oneline origin/main..HEAD`:**
 
 ```
+c56296c chart, docs: minInetDownMBps unit comment; spec 210 rollover wording
+c5a33ac mgmt, vk-llm: CLI Download line shows the amount charged at create
+4da544a controller: drop offers whose download alone reaches the instance cap; refuse create below the model's disk need
+b0952e2 controller: New requires ModelSize and ModelURL
 b1d8449 modelsize: refactor head() to return header and contentlength, eliminate bodyclose lint errors
 7f969c4 docs: CORE-210 amendments to specs 100, 140, 180, 200 and ADR 0005; ADR 0017 accepted
 be520eb worker: clean stale model before downloading to prevent double-disk usage
