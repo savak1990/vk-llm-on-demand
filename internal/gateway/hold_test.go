@@ -272,3 +272,66 @@ func TestHeldStreamWriteFailureIsClientGone(t *testing.T) {
 		t.Fatalf("client_gone outcomes = %v, want 1", got)
 	}
 }
+
+func TestHeldStreamWorker4xxKeepsMessage(t *testing.T) {
+	fc := readyAfterHold(fakeRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 400, Body: &chunkedBody{chunks: [][]byte{[]byte(`{"error":{"message":"context too long"}}`)}}}, nil
+	}))
+	h := startHold(t, fc)
+	body := h.run(t, 10*time.Second)
+	if !strings.Contains(body, `"code":"upstream_rejected"`) || !strings.Contains(body, "[vk-llm] context too long") || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+		t.Fatalf("body:\n%s", body)
+	}
+}
+
+func TestHeldStreamSurvivesTransientDemandError(t *testing.T) {
+	worker := fakeRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: &chunkedBody{chunks: [][]byte{[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")}}}, nil
+	})
+	fc := readyAfterHold(worker)
+	snaps := make([]controller.Snapshot, 12)
+	for i := range snaps {
+		snaps[i] = controller.Snapshot{Public: "ALLOCATING", Desired: "RUNNING"}
+	}
+	fc.statusFn = scripted(append(snaps, controller.Snapshot{Public: "READY", Desired: "RUNNING", Ready: true, Generation: 4})...)
+	h := startHold(t, fc)
+	h.settle(func() bool { _, ok := h.clk.NextDeadline(); return ok })
+	fc.mu.Lock()
+	fc.demandErr = errors.New("store: transient")
+	fc.mu.Unlock()
+	body := h.run(t, 40*time.Second)
+	if len(fc.demandCalls) < 2 {
+		t.Fatalf("Demand calls = %d, want a heartbeat refresh", len(fc.demandCalls))
+	}
+	if !strings.Contains(body, `"content":"hi"`) || strings.Contains(body, `"error"`) {
+		t.Fatalf("body:\n%s", body)
+	}
+}
+
+func TestHeldStreamShuttingDownSkipsDemand(t *testing.T) {
+	fc := &fakeController{admitErr: controller.ErrBackendUnavailable}
+	g, err := New(onDemandDeps(t, fc))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	g.shuttingDown.Store(true)
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[],"stream":true}`))
+	if len(fc.demandCalls) != 0 || !strings.Contains(rec.Body.String(), `"code":"shutting_down"`) || !strings.HasSuffix(rec.Body.String(), "data: [DONE]\n\n") {
+		t.Fatalf("demand calls %d body:\n%s", len(fc.demandCalls), rec.Body)
+	}
+}
+
+func TestColdStartRefusalShuttingDownSkipsDemand(t *testing.T) {
+	fc := &fakeController{admitErr: controller.ErrBackendUnavailable}
+	g, err := New(onDemandDeps(t, fc))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	g.shuttingDown.Store(true)
+	rec := httptest.NewRecorder()
+	g.Handler().ServeHTTP(rec, chatReq(`{"model":"qwen3.6-35b-a3b","messages":[]}`))
+	if len(fc.demandCalls) != 0 || rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), `"backend_unavailable"`) {
+		t.Fatalf("demand calls %d code %d body %s", len(fc.demandCalls), rec.Code, rec.Body)
+	}
+}

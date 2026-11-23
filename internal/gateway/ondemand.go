@@ -48,6 +48,10 @@ func unavailableMessage(reason string) string {
 }
 
 func (g *Gateway) refuseColdStart(w http.ResponseWriter, r *http.Request) {
+	if g.shuttingDown.Load() {
+		g.writeShuttingDownOnDemand(w)
+		return
+	}
 	now := g.deps.Clock.Now()
 	ra := retryAfter(g.deps.Controller.Status(), now)
 	snap, err := g.deps.Controller.Demand(r.Context(), keyIDOf(r), now.Add(ra+g.deps.Config.OnDemand.DemandGrace))
@@ -86,7 +90,8 @@ const pollEvery = 2 * time.Second
 func (g *Gateway) cachedStatus(now time.Time) controller.Snapshot {
 	g.statusMu.Lock()
 	defer g.statusMu.Unlock()
-	if now.Sub(g.statusAt) >= pollEvery || g.statusAt.IsZero() {
+	// Ticker jitter lands some polls just under pollEvery; the slack keeps them from reusing a stale snapshot.
+	if now.Sub(g.statusAt) >= pollEvery-pollEvery/4 || g.statusAt.IsZero() {
 		g.statusSn, g.statusAt = g.deps.Controller.Status(), now
 	}
 	return g.statusSn
@@ -155,15 +160,26 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 		g.writeHeldTail(w, rc, code, msg)
 	}
 
+	const restarting = "The service is restarting; send your message again in a minute."
+	if g.shuttingDown.Load() {
+		fail("shutting_down", "shutting_down", restarting)
+		return
+	}
 	key := keyIDOf(r)
 	start := g.deps.Clock.Now()
 	snap, err := g.deps.Controller.Demand(r.Context(), key, start.Add(cfg.DemandGrace))
 	switch {
+	case r.Context().Err() != nil:
+		gone()
+		return
 	case errors.Is(err, controller.ErrDraining):
 		fail("shutting_down", "backend_unavailable", "The GPU is shutting down; send your message again in a minute.")
 		return
-	case err != nil:
+	case errors.Is(err, controller.ErrGPUUnavailable):
 		fail("gpu_unavailable", "gpu_unavailable", unavailableMessage(snap.Unavailable))
+		return
+	case err != nil:
+		fail("gpu_unavailable", "gpu_unavailable", "The GPU could not start; send your message again in a minute.")
 		return
 	}
 	g.putStatus(start, snap)
@@ -179,7 +195,7 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 	for {
 		now := g.deps.Clock.Now()
 		if g.shuttingDown.Load() {
-			fail("shutting_down", "shutting_down", "The service is restarting; send your message again in a minute.")
+			fail("shutting_down", "shutting_down", restarting)
 			return
 		}
 		s := g.cachedStatus(now)
@@ -209,6 +225,10 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 		case now.Sub(start) >= cfg.MaxWait:
 			// The start continues after the stream ends, so keep it alive long enough for a resend.
 			_, _ = g.deps.Controller.Demand(r.Context(), key, now.Add(longestColdStart+cfg.DemandGrace))
+			if r.Context().Err() != nil {
+				gone()
+				return
+			}
 			fail("gpu_cold_start", "gpu_cold_start", "The GPU is still starting. Send your message again within 5 minutes.")
 			return
 		}
@@ -217,8 +237,14 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 				return
 			}
 			lastBeat = now
-			if _, err := g.deps.Controller.Demand(r.Context(), key, now.Add(cfg.DemandGrace)); err != nil && !errors.Is(err, controller.ErrDraining) {
-				fail("gpu_unavailable", "gpu_unavailable", unavailableMessage(g.deps.Controller.Status().Unavailable))
+			// Any other error is transient; the next heartbeat retries.
+			hs, err := g.deps.Controller.Demand(r.Context(), key, now.Add(cfg.DemandGrace))
+			switch {
+			case r.Context().Err() != nil:
+				gone()
+				return
+			case errors.Is(err, controller.ErrGPUUnavailable):
+				fail("gpu_unavailable", "gpu_unavailable", unavailableMessage(hs.Unavailable))
 				return
 			}
 		}

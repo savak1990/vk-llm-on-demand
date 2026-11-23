@@ -178,9 +178,7 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 	start := g.deps.Clock.Now() // captured before the round trip, so ttft_seconds measures the real wait, not just time inside streamUpstream
 	resp, err := client.Do(upstreamReq)
 	if err != nil {
-		// No response headers have been sent to the client yet, so
-		// this is always a plain status — never SSE, regardless of
-		// stream — even for a request that asked to stream.
+		// Outside held mode no headers have gone out yet, so this is a plain status even for stream:true.
 		outcome := g.classify(r, err)
 		if outcome == outcomeUpstreamError {
 			g.deps.Controller.ReportUpstreamFailure(gen)
@@ -197,9 +195,7 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden, resp.StatusCode >= 500,
 		resp.StatusCode >= 300 && resp.StatusCode < 400:
-		// The upstream answered, but with a status this gateway never
-		// forwards as-is. Headers still haven't been sent to the
-		// client, so this is plain too, regardless of stream.
+		// A status never forwarded as-is; outside held mode no headers have gone out, so it is plain.
 		g.deps.Controller.ReportUpstreamFailure(gen)
 		if held {
 			g.writeHeldTail(w, http.NewResponseController(w), "upstream_error", "the worker rejected the request")
@@ -208,7 +204,8 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 		writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "the worker rejected the request")
 	case resp.StatusCode >= 400:
 		if held {
-			g.writeHeldTail(w, http.NewResponseController(w), "upstream_error", "the worker rejected the request")
+			_, message, _ := g.readUpstream4xx(resp)
+			g.writeHeldTail(w, http.NewResponseController(w), "upstream_rejected", message)
 			return
 		}
 		g.copyUpstream4xx(w, resp)
@@ -286,20 +283,26 @@ func isJSONString(raw json.RawMessage) bool {
 // already has all three fields as non-empty strings; anything else is
 // normalized, keeping the upstream message where there is one.
 func (g *Gateway) copyUpstream4xx(w http.ResponseWriter, resp *http.Response) {
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, g.deps.Config.MaxBodyBytes))
-	var probe upstream4xxProbe
-	if json.Unmarshal(raw, &probe) == nil && probe.Error.Message != "" &&
-		isJSONString(probe.Error.Type) && isJSONString(probe.Error.Code) {
+	raw, message, complete := g.readUpstream4xx(resp)
+	if complete {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(raw)
 		return
 	}
-	message := probe.Error.Message
+	writeError(w, resp.StatusCode, "invalid_request_error", "upstream_rejected", message)
+}
+
+// readUpstream4xx returns the body, its message (or a fallback), and whether all three fields are strings.
+func (g *Gateway) readUpstream4xx(resp *http.Response) (raw []byte, message string, complete bool) {
+	raw, _ = io.ReadAll(io.LimitReader(resp.Body, g.deps.Config.MaxBodyBytes))
+	var probe upstream4xxProbe
+	ok := json.Unmarshal(raw, &probe) == nil
+	message = probe.Error.Message
 	if message == "" {
 		message = "the worker rejected the request"
 	}
-	writeError(w, resp.StatusCode, "invalid_request_error", "upstream_rejected", message)
+	return raw, message, ok && probe.Error.Message != "" && isJSONString(probe.Error.Type) && isJSONString(probe.Error.Code)
 }
 
 type upstreamOutcome int
