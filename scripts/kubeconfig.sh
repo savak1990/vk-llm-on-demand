@@ -24,9 +24,13 @@ param() {
       echo "kubeconfig: not allowed to read $PREFIX/$1. Grant vk-llm-ci-role ssm:GetParameter and kms:Decrypt in vk-lab-platform, then 'make account-up'." >&2
       exit 1
       ;;
-    *)
+    *ParameterNotFound*)
       echo "kubeconfig: no SSM parameter $PREFIX/$1; the cluster is gone. Run 'make up' in vk-lab-platform, then retry." >&2
       exit "$UNREACHABLE"
+      ;;
+    *)
+      echo "kubeconfig: could not read $PREFIX/$1: ${err%%$'\n'*}" >&2
+      exit 1
       ;;
   esac
 }

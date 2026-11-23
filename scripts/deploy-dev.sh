@@ -24,8 +24,11 @@ status=0
 
 ssm() {
   local value
-  value="$(aws ssm get-parameter --region "$REGION" --with-decryption \
-    --name "/$PROJECT_NAME/$1" --query Parameter.Value --output text)"
+  if ! value="$(aws ssm get-parameter --region "$REGION" --with-decryption \
+    --name "/$PROJECT_NAME/$1" --query Parameter.Value --output text)"; then
+    echo "deploy-dev: could not read /$PROJECT_NAME/$1" >&2
+    exit 1
+  fi
   printf '%s' "${value%%$'\n'*}"
 }
 

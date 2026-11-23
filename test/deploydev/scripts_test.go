@@ -73,6 +73,14 @@ func TestKubeconfigAccessDeniedFails(t *testing.T) {
 	}
 }
 
+func TestKubeconfigOtherAWSErrorFails(t *testing.T) {
+	dir := stubAWS(t, "Unable to locate credentials")
+	code, _ := run(t, dir, repoScript(t, "kubeconfig.sh"))
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+}
+
 func TestDeployDevPassesUnreachableThrough(t *testing.T) {
 	dir := stubAWS(t, "An error occurred (ParameterNotFound)")
 	code, stderr := run(t, dir, repoScript(t, "deploy-dev.sh"), "0.2.1-main.abc1234", strings.Repeat("a", 40))
