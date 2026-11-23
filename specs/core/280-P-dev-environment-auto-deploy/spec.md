@@ -10,7 +10,7 @@ adrs: ["0008", "0009", "0012"]
 
 **Status note:** DRAFT, problem and requirements, with the scope agreed
 2026-11-23: dev auto-deploy only, production stays a manual gitops change,
-no per-PR previews. No full design yet.
+no per-PR previews; one Vast.ai account for both. No full design yet.
 
 ## Problem
 
@@ -54,6 +54,26 @@ nowhere, so the first place a merged change runs is production.
 - In explicit mode an installation costs nothing until someone starts its
   GPU.
 
+## Decision: one Vast.ai account for dev and production (2026-11-23)
+
+Dev and production use the same Vast.ai account and API key (the existing
+`/<project>/persistent/llm/vast_ai_api_key`). Verified consequences:
+
+- **Cleanup stays separate.** Each controller lists only instances whose
+  label starts with its own `vkllm:<installationId>:` prefix
+  (`internal/controller/reconcile.go`, `internal/provider/vastai/client.go`),
+  and the two namespaces give two different ids. Production never destroys
+  dev's GPU, nor the reverse.
+- **Spend limits stay separate; the balance does not.** Each installation's
+  monthly budget counts only its own instances, so the combined monthly
+  ceiling is production's budget plus dev's ($30 + $5 by default). The
+  account balance is shared: the "balance low" gate
+  (`balance < 2 × maxHourlyPriceUSD`, `internal/budget/checker.go`) sees
+  the same balance from both, and a running dev GPU drains the money
+  production also needs.
+- A second account can be introduced later by giving dev its own
+  `vast_ai_api_key` parameter; nothing else changes.
+
 ## Requirements
 
 - R1. Every merge to `main` that publishes a new version MUST install that
@@ -90,6 +110,9 @@ nowhere, so the first place a merged change runs is production.
 - R12. Platform pieces MUST be parameterised by application where practical
   (namespace list, SSM prefix, role ARNs), so vk-ahorro and this repository
   do not keep two hand-copied variants.
+- R13. Dev MUST use production's Vast.ai API key (one account), and MUST
+  label every instance with its own installation id so neither installation
+  can see or destroy the other's instances.
 
 ## Facts the design needs
 
@@ -98,8 +121,8 @@ nowhere, so the first place a merged change runs is production.
   publisher (like `scripts/lib/ahorro-deploy.sh`, called from both
   `argo-up.sh` paths and cleaned up by `argo-down.sh`); `vk-llm-ci-role`
   gaining `ssm:GetParameter` on the new `cluster/llm-deploy/*` parameters and
-  `kms:Decrypt` limited to its token; ExternalSecrets for the four dev
-  secrets in `llm-dev`; render-check lists and the aws golden.
+  `kms:Decrypt` limited to its token; ExternalSecrets in `llm-dev` for the four dev
+  secrets plus the shared Vast.ai key; render-check lists and the aws golden.
 - Repository side: a `deploy-dev` job in `deploy.yml`, a `kubeconfig.sh`
   and a `deploy-dev.sh` mirroring vk-ahorro's, setting `host`,
   `existingSecrets.*`, model/worker pins and the dev budget.
@@ -111,7 +134,6 @@ nowhere, so the first place a merged change runs is production.
 
 | Question | Why it matters |
 |---|---|
-| Should dev share the Vast.ai API key with production? | One account balance pays for both; a second Vast.ai account isolates spend fully |
 | Does the deploy service account need `bind`/`escalate` to create the chart's Role? | Kubernetes refuses to grant permissions the creator does not hold |
 | Should production pin clean releases (`release.yml`, `0.x.y`) instead of `main` prereleases? | Today it pins `0.1.1-main.0ab826b` |
 | Should the `gpu-control` workflow and the `vk-llm` CLI get a dev target (`--endpoint`)? | Starting the dev GPU from Actions |
