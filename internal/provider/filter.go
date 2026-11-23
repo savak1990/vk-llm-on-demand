@@ -1,4 +1,3 @@
-// internal/provider/filter.go
 package provider
 
 import "slices"
@@ -16,11 +15,5 @@ func Admit(o Offer, f OfferFilter) bool {
 }
 
 func Filter(offers []Offer, f OfferFilter) []Offer {
-	out := make([]Offer, 0, len(offers))
-	for _, o := range offers {
-		if Admit(o, f) {
-			out = append(out, o)
-		}
-	}
-	return out
+	return slices.DeleteFunc(offers, func(o Offer) bool { return !Admit(o, f) })
 }

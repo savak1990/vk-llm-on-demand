@@ -15,7 +15,6 @@ type Resolver interface {
 	Bytes(ctx context.Context, url string) (int64, error)
 }
 
-// Fixed returns one size for every URL.
 type Fixed int64
 
 func (f Fixed) Bytes(context.Context, string) (int64, error) {
@@ -57,10 +56,8 @@ func (h *HTTP) Bytes(ctx context.Context, url string) (int64, error) {
 	}
 	n = parseSize(hdr.Get("X-Linked-Size"))
 	if n <= 0 {
-		if hdr, contentLen, err := head(ctx, h.follow, url); err != nil {
+		if _, n, err = head(ctx, h.follow, url); err != nil {
 			return 0, err
-		} else if n = parseSize(hdr.Get("Content-Length")); n <= 0 {
-			n = contentLen
 		}
 	}
 	if n <= 0 {

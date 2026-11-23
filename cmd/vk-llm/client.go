@@ -43,10 +43,7 @@ type statusDoc struct {
 		EstimatedInstanceUSD float64 `json:"estimatedInstanceUSD"`
 		EstimatedMonthUSD    float64 `json:"estimatedMonthUSD"`
 		BudgetMonthUSD       float64 `json:"budgetMonthUSD"`
-		Breakdown            *struct {
-			DownloadUSD float64 `json:"downloadUSD"`
-		} `json:"breakdown"`
-		Selection *struct {
+		Selection            *struct {
 			ModelBytes               int64   `json:"modelBytes"`
 			EstimatedDownloadSeconds int64   `json:"estimatedDownloadSeconds"`
 			EstimatedDownloadUSD     float64 `json:"estimatedDownloadUSD"`

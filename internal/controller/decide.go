@@ -589,8 +589,6 @@ func searchFilter(f Facts) provider.OfferFilter {
 	}
 }
 
-// storeOffer is the state document's copy of the chosen offer and the
-// estimate that ranked it.
 func storeOffer(ev Event) store.Offer {
 	o, b := ev.Offer, ev.Breakdown
 	return store.Offer{

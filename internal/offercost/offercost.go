@@ -3,8 +3,9 @@
 package offercost
 
 import (
+	"cmp"
 	"math"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
@@ -69,15 +70,12 @@ func Rank(offers []provider.Offer, in Inputs) []Ranked {
 		}
 		out = append(out, Ranked{Offer: o, Breakdown: estimate(o, in)})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		if a.Breakdown.SessionUSD != b.Breakdown.SessionUSD {
-			return a.Breakdown.SessionUSD < b.Breakdown.SessionUSD
-		}
-		if a.Offer.Hourly != b.Offer.Hourly {
-			return a.Offer.Hourly < b.Offer.Hourly
-		}
-		return a.Offer.ID < b.Offer.ID
+	slices.SortFunc(out, func(a, b Ranked) int {
+		return cmp.Or(
+			cmp.Compare(a.Breakdown.SessionUSD, b.Breakdown.SessionUSD),
+			cmp.Compare(a.Offer.Hourly, b.Offer.Hourly),
+			cmp.Compare(a.Offer.ID, b.Offer.ID),
+		)
 	})
 	return out
 }

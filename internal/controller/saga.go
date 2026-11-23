@@ -25,13 +25,13 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 	cfg := c.deps.Config
 	bytes, err := c.deps.ModelSize.Bytes(ctx, c.deps.ModelURL)
 	if err != nil {
-		c.warn("offer search skipped", "reason", "model_size_unknown", "err", err)
+		c.warn("controller: offer search skipped", "reason", "model_size_unknown", "err", err)
 		c.postEvent(Event{Kind: EvNoOffer, Err: err, Reason: "provider_error"})
 		return
 	}
 	disk := offercost.DiskGB(bytes, cfg.ProviderFilter.MinDiskGB)
 	if disk > cfg.MaxDiskGB {
-		c.warn("offer search skipped", "reason", "model_too_large", "diskGB", disk, "maxDiskGB", cfg.MaxDiskGB)
+		c.warn("controller: offer search skipped", "reason", "model_too_large", "diskGB", disk, "maxDiskGB", cfg.MaxDiskGB)
 		c.postEvent(Event{Kind: EvNoOffer, Reason: "no_offer"})
 		return
 	}
@@ -55,7 +55,6 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 	c.postEvent(Event{Kind: EvOfferChosen, Offer: ranked[0].Offer, Breakdown: ranked[0].Breakdown, Filter: f})
 }
 
-// horizon is the session length the ranking assumes.
 func horizon(cfg config.Controller) time.Duration {
 	if cfg.IdleShutdownEnabled {
 		return cfg.IdleShutdownTimeout

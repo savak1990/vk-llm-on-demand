@@ -29,6 +29,8 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
 )
 
+const fakeModelBytes = 29_200_000_000 // fake mode never downloads; size of the default model file
+
 // run starts both servers, blocks until ctx is done, then drains each for up to 30s total.
 func run(ctx context.Context, api, health *http.Server, gw *gateway.Gateway) error {
 	errs := make(chan error, 2)
@@ -150,7 +152,7 @@ func main() {
 	switch mgmtCfg.ProviderName {
 	case "fake":
 		prov = fakeprovider.NewSeeded(clk)
-		sizes = modelsize.Fixed(29_200_000_000)
+		sizes = modelsize.Fixed(fakeModelBytes)
 	case "vastai":
 		//nolint:gosec // backoff jitter, not a credential
 		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
