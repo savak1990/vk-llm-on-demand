@@ -15,15 +15,19 @@ type result struct {
 	summary        string
 }
 
-func scriptPath(t *testing.T) string {
+func scriptPath(t *testing.T, name string) string {
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd: %v", err)
 	}
-	return filepath.Join(wd, "..", "..", "scripts", "gpu-control.sh")
+	return filepath.Join(wd, "..", "..", "scripts", name)
 }
 
 func runScript(t *testing.T, env map[string]string) result {
+	return runNamed(t, "gpu-control.sh", env)
+}
+
+func runNamed(t *testing.T, name string, env map[string]string) result {
 	summaryFile := filepath.Join(t.TempDir(), "summary")
 
 	// Seed defaults first so a caller-supplied override (e.g. a PATH that
@@ -42,7 +46,7 @@ func runScript(t *testing.T, env map[string]string) result {
 		merged[k] = v
 	}
 
-	cmd := exec.Command(scriptPath(t))
+	cmd := exec.Command(scriptPath(t, name))
 	for k, v := range merged {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -58,7 +62,7 @@ func runScript(t *testing.T, env map[string]string) result {
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
 		} else {
-			t.Fatalf("running gpu-control.sh: %v", err)
+			t.Fatalf("running %s: %v", name, err)
 		}
 	}
 
