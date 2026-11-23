@@ -87,6 +87,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [250](core/250-P-code-execution/spec.md) | Requirements: sandboxed code execution in the chat front end (no design yet) | 060, 230 |
 | [260](core/260-P-image-generation/spec.md) | Requirements: image generation and image understanding (no design yet) | 050, 060, 230 |
 | [270](core/270-P-google-sign-in/spec.md) | Requirements: "Sign in with Google" for the chat front end, household accounts only (no design yet) | 230 |
+| [280](core/280-P-dev-environment-auto-deploy/spec.md) | Requirements: every merge to main deploys to `llm-dev`; production stays a manual gitops change; no PR previews (no design yet) | 120, 130, 160 |
 
 ## Order of work
 
