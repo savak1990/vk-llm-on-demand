@@ -51,17 +51,16 @@ func (h *HTTP) Bytes(ctx context.Context, url string) (int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	resp, err := head(ctx, h.noRedirect, url)
+	hdr, _, err := head(ctx, h.noRedirect, url)
 	if err != nil {
 		return 0, err
 	}
-	n = parseSize(resp.Header.Get("X-Linked-Size"))
+	n = parseSize(hdr.Get("X-Linked-Size"))
 	if n <= 0 {
-		if resp, err = head(ctx, h.follow, url); err != nil {
+		if hdr, contentLen, err := head(ctx, h.follow, url); err != nil {
 			return 0, err
-		}
-		if n = parseSize(resp.Header.Get("Content-Length")); n <= 0 {
-			n = resp.ContentLength
+		} else if n = parseSize(hdr.Get("Content-Length")); n <= 0 {
+			n = contentLen
 		}
 	}
 	if n <= 0 {
@@ -73,20 +72,20 @@ func (h *HTTP) Bytes(ctx context.Context, url string) (int64, error) {
 	return n, nil
 }
 
-func head(ctx context.Context, c *http.Client, url string) (*http.Response, error) {
+func head(ctx context.Context, c *http.Client, url string) (http.Header, int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	_ = resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("modelsize: HEAD returned %s", resp.Status)
+		return nil, 0, fmt.Errorf("modelsize: HEAD returned %s", resp.Status)
 	}
-	return resp, nil
+	return resp.Header, resp.ContentLength, nil
 }
 
 func parseSize(v string) int64 {

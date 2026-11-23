@@ -16,7 +16,7 @@ func TestHTTPReadsLinkedSizeWithoutFollowingRedirect(t *testing.T) {
 		w.Header().Set("Location", "/cdn")
 		w.WriteHeader(http.StatusFound)
 	})
-	mux.HandleFunc("/cdn", func(w http.ResponseWriter, _ *http.Request) { cdnHits.Add(1) })
+	mux.HandleFunc("/cdn", func(_ http.ResponseWriter, _ *http.Request) { cdnHits.Add(1) })
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
