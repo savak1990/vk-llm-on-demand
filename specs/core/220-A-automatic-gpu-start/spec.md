@@ -8,7 +8,8 @@ adrs: ["0018", "0007", "0010", "0011", "0012", "0006"]
 
 # 220 — Automatic GPU start from a chat client
 
-**Status note:** READY (2026-11-23). Problem written 2026-11-22 while
+**Status note:** IN_PROGRESS (2026-11-23), implementation under way on
+branch core-220-design. Problem written 2026-11-22 while
 designing the Open WebUI front end (CORE-230), which ships first with a
 manual start. Design agreed with the user on 2026-11-23 in a question-by-
 question review; the decisions are recorded in ADR 0018. Facts about the

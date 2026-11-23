@@ -1,10 +1,12 @@
 # vk-llm-on-demand
 
 A self-hosted, Kubernetes-native control plane that exposes an
-OpenAI-compatible LLM API backed by GPU instances rented on demand. You
-start the GPU, use any OpenAI-compatible client, and the GPU is destroyed
-30 minutes after your last inference or the moment you stop it. The
-control plane is one small Go service in an existing cluster.
+OpenAI-compatible LLM API backed by GPU instances rented on demand. In the
+default mode, you start the GPU, use any OpenAI-compatible client, and
+the GPU is destroyed 30 minutes after your last inference or the moment
+you stop it. A chat client can also start the GPU itself — see
+["On-demand mode"](#on-demand-mode). The control plane is one small Go
+service in an existing cluster.
 
 ```bash
 vk-llm start      # rent one RTX 6000 Ada GPU on Vast.ai, load the model, wait for READY
@@ -56,8 +58,9 @@ starts and stops one NVIDIA RTX 6000 Ada GPU (48 GB) on Vast.ai. The GPU runs
 
 The inference API, at `/v1/*`, uses an inference key. It proxies
 OpenAI-compatible chat completions, streaming, and tool calls to the
-worker over an SSH tunnel. It returns `backend_unavailable` while no GPU
-runs.
+worker over an SSH tunnel. In explicit mode (the default) it returns
+`backend_unavailable` while no GPU runs; in on-demand mode it starts the
+GPU itself instead — see ["On-demand mode"](#on-demand-mode).
 
 The system stores state in one ConfigMap. A reconcile loop compares the
 provider's instance list with that state every minute. It destroys any
@@ -219,6 +222,61 @@ Common errors: `401` means the key is missing or wrong for that route.
 `"code": "gpu_unavailable"` on `start` means the provider had no matching
 offer or a safety limit blocked the start; the `reason` field says which.
 
+## On-demand mode
+
+Everything above describes the chart default, `explicit` mode: you run
+`vk-llm start` and the GPU stays off until you do. Setting
+`config.lifecycle.provisioningMode: on-demand` starts the GPU from a chat
+request instead; nobody runs `vk-llm start` and nobody retries. Also set
+`config.model.sizeBytes` to the model file's size in bytes, so progress
+lines can show a download percentage instead of GB downloaded.
+
+What a user sees depends on the request:
+
+- A **streaming** chat request gets `200 text/event-stream` at once. While
+  the GPU comes up, each progress checkpoint (offer found, GPU rented,
+  model downloading, checksum verified, model loading) arrives as a
+  `reasoning_content` delta prefixed `[vk-llm] `, which most chat clients
+  render as a collapsible "thinking" block. The model's real answer
+  follows in the same response.
+- A **non-streaming** request gets `503 gpu_cold_start` with a
+  `Retry-After` header at once; the client is expected to retry.
+- If 32 streams are already held, a 33rd streaming request gets
+  `429 queue_full`.
+
+**Cost risk.** Any valid inference key can start the GPU this way — there
+is no per-key "may start" permission. The monthly budget
+(`config.budget.monthlyUSD`) is the hard cap regardless of who or what
+triggered the start. Every start logs one `gpu_start` line naming its
+origin (`explicit` or `demand`) and, for a demand start, the inference
+key's id.
+
+**Cancellation.** A start triggered by a chat request is cancelled if
+nothing keeps waiting on it for `config.onDemand.demandGrace` (default
+60s) — for example, the user closes the app before the GPU is ready. A
+cancelled create still counts against the attempts-per-hour cap. A start
+triggered by `vk-llm start` or the management API is never cancelled this
+way.
+
+**Envoy route timeout.** In on-demand mode the Envoy route's total timeout
+must be at least 1200s (600s `config.onDemand.maxWait` + 600s
+`config.model.generationTimeout`), not the 660s that is enough in
+explicit mode.
+
+**Timeouts per client:**
+
+| Client | Total timeout | Idle timeout | How the design fits |
+|---|---|---|---|
+| Open WebUI | none (`AIOHTTP_CLIENT_TIMEOUT` unset) | none (`AIOHTTP_CLIENT_STREAM_IDLE_TIMEOUT` unset) | fits; if an operator sets an idle cap, 15s comments stay below it |
+| Conduit | Open WebUI's (tokens arrive over Socket.IO) | Open WebUI's | same as Open WebUI |
+| OpenCode | none; `headerTimeout` 300s | `chunkTimeout` 900s | `200` is sent at once; byte gaps ≤ 15s |
+| Chatbox | none found | none found | fits |
+| Msty | unconfirmed (closed source) | unconfirmed | manual test |
+| Envoy route | 1200s (raised from 660s) | n/a | 600s `maxWait` + 600s `model.generationTimeout` |
+
+See [ADR 0018](docs/adr/0018-on-demand-mode-progress-stream.md) for the
+full design and [`specs/`](specs/) for the implementation spec (`CORE-220`).
+
 ## Remote control from GitHub Actions
 
 Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
@@ -276,5 +334,7 @@ schedule — the workflow does not reset it.
 }
 ```
 
-Run `vk-llm start` first; while the GPU is stopped, requests return
-`backend_unavailable`.
+In explicit mode (the default), run `vk-llm start` first; while the GPU
+is stopped, requests return `backend_unavailable`. In on-demand mode,
+OpenCode's own request starts the GPU — see
+["On-demand mode"](#on-demand-mode).
