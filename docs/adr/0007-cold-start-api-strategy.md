@@ -3,7 +3,7 @@
 ## Status
 
 Accepted as the design of the **future `on-demand` provisioning mode**,
-implemented and amended (§2, §4) by [ADR 0018](0018-on-demand-mode-progress-stream.md);
+implemented and amended (§2, §4) by [ADR 0019](0019-on-demand-mode-progress-stream.md);
 **not in the MVP**. Superseded for the MVP by [ADR 0010](0010-explicit-provisioning-mode.md)
 (explicit mode). §3's `/admin/v1` endpoints are replaced by the management
 API of [ADR 0012](0012-management-api-cli-and-github-actions.md); the lease

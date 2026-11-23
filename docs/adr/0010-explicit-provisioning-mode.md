@@ -4,7 +4,7 @@
 
 Accepted (2026-11-01). Supersedes [ADR 0007](0007-cold-start-api-strategy.md)
 as the MVP behaviour. ADR 0007 remains the design of the future
-`on-demand` mode. §4 is implemented by [ADR 0018](0018-on-demand-mode-progress-stream.md) (2026-11-23).
+`on-demand` mode. §4 is implemented by [ADR 0019](0019-on-demand-mode-progress-stream.md) (2026-11-23).
 
 ## Context
 

@@ -1,4 +1,4 @@
-# ADR 0018: On-demand mode streams progress, refuses non-streaming waits, and cancels unattended starts
+# ADR 0019: On-demand mode streams progress, refuses non-streaming waits, and cancels unattended starts
 
 ## Status
 

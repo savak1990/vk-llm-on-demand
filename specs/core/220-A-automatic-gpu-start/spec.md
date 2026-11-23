@@ -3,7 +3,7 @@ id: "CORE-220"
 status: "IN_PROGRESS"
 updated: "2026-11-23"
 depends_on: ["CORE-050", "CORE-055", "CORE-060", "CORE-070", "CORE-100", "CORE-130"]
-adrs: ["0018", "0007", "0010", "0011", "0012", "0006"]
+adrs: ["0019", "0007", "0010", "0011", "0012", "0006"]
 ---
 
 # 220 — Automatic GPU start from a chat client
@@ -12,7 +12,7 @@ adrs: ["0018", "0007", "0010", "0011", "0012", "0006"]
 branch core-220-design. Problem written 2026-11-22 while
 designing the Open WebUI front end (CORE-230), which ships first with a
 manual start. Design agreed with the user on 2026-11-23 in a question-by-
-question review; the decisions are recorded in ADR 0018. Facts about the
+question review; the decisions are recorded in ADR 0019. Facts about the
 chat clients were read from their source code on 2026-11-23 (Open WebUI
 v0.13.4, OpenCode v2.3.2, Chatbox v1.24.4, Conduit v4.3.2; Msty is closed
 source).
@@ -59,8 +59,8 @@ session. Chart: the mode enum, the `onDemand` block, `model.sizeBytes`.
 Platform: one `vk-lab-platform` pull request.
 
 Excludes: the chat front end itself (CORE-230); per-key or per-user spend
-limits (accepted risk, ADR 0018); a per-key "may start" mark (rejected,
-ADR 0018); per-start model or GPU choice (CORE-200; an automatic start uses
+limits (accepted risk, ADR 0019); a per-key "may start" mark (rejected,
+ADR 0019); per-start model or GPU choice (CORE-200; an automatic start uses
 the chart defaults, and the one supported model is the one the chat app
 is configured with); an uncached worker image inside a held request (it
 surfaces as a `maxWait` expiry); multiple concurrent GPUs.
@@ -115,7 +115,7 @@ memory only: after a pod restart, recovery sets it to now + `demandGrace`,
 because a restart drops every held request.
 
 A cancelled create still counts against `maxProvisionAttemptsPerHour`
-(the counter moves at T5). Accepted in ADR 0018.
+(the counter moves at T5). Accepted in ADR 0019.
 
 **Audit.** When a start moves `Idle → Searching`, the controller logs one
 `gpu_start` line with `origin` (`explicit` or `demand`), `key_id` and
@@ -258,20 +258,20 @@ message, which has already started the GPU, and `Demand` coalesces.
 
 - R1. With `provisioningMode: on-demand`, any valid inference key MUST be
   able to start the GPU through a chat request. `explicit` MUST stay the
-  chart default and keep today's behaviour (ADR 0018 §1, ADR 0010).
+  chart default and keep today's behaviour (ADR 0019 §1, ADR 0010).
 - R2. An automatic start MUST pass every gate `POST /api/v1/gpu/start`
   passes: budget, balance, `maxHourlyPriceUSD`, attempts per hour,
-  backoff. A denial MUST reach the user as a readable reason (ADR 0018 §2).
+  backoff. A denial MUST reach the user as a readable reason (ADR 0019 §2).
 - R3. The user MUST see, in the chat app, that a start is in progress and
-  how far it has got (ADR 0018 §3).
+  how far it has got (ADR 0019 §3).
 - R4. No supported client MUST fail because of the cold start's length;
-  the per-client table above MUST hold (ADR 0018 §7).
+  the per-client table above MUST hold (ADR 0019 §7).
 - R5. Requests during a start MUST NOT create a second instance and MUST
   NOT move the idle deadline before `READY` (ADR 0011).
 - R6. Every start MUST log one `gpu_start` line naming its origin; a
   demand start MUST also name the inference key id.
 - R7. The gateway MUST NOT be able to call `Start` or `Stop` or change
-  the budget; it gets `Demand` only (ADR 0012, ADR 0018 §2).
+  the budget; it gets `Demand` only (ADR 0012, ADR 0019 §2).
 - R8. A background request MAY call `Demand`; the reason is stated under
   Background requests.
 - R9. A streaming request held for a start MUST get `200
@@ -290,15 +290,15 @@ message, which has already started the GPU, and `Demand` coalesces.
 - R14. `ttft_seconds` MUST measure the model's first chunk;
   `wait_seconds` MUST measure the hold.
 - R15. A non-streaming request with no Ready backend MUST call `Demand`
-  and get `503 gpu_cold_start` with `Retry-After` at once (ADR 0018 §5).
+  and get `503 gpu_cold_start` with `Retry-After` at once (ADR 0019 §5).
 - R16. The Envoy route total timeout MUST be at least 1200 s in on-demand
-  mode (ADR 0018 §7).
+  mode (ADR 0019 §7).
 - R17. A `demand`-origin start MUST be cancelled when the demand deadline
   passes before `Ready`; an `explicit`-origin start MUST NOT be. A
   `maxWait` expiry MUST extend the deadline by 360 s + `demandGrace`
-  (ADR 0018 §6).
+  (ADR 0019 §6).
 - R18. The gateway MUST remove `[vk-llm] ` lines from incoming
-  `reasoning_content` before forwarding (ADR 0018 §4).
+  `reasoning_content` before forwarding (ADR 0019 §4).
 - R19. `vk-llm start` MUST print the same milestone lines as the chat
   progress stream, on stderr, from the status document; `vk-llm stop` is
   unchanged.

@@ -170,6 +170,6 @@ and an operator, GPU nodes joining the cluster, OAuth or per-user quotas, a
 web dashboard, OpenHands integration. See [`roadmap.md`](roadmap.md).
 
 On-demand provisioning (ADR 0007) was out of scope for the initial release
-and ships after it as an opt-in mode (ADR 0018); explicit stays the default.
+and ships after it as an opt-in mode (ADR 0019); explicit stays the default.
 
 Open WebUI as a household chat front end moved into scope with CORE-230.

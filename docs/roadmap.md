@@ -17,7 +17,7 @@
 | **P0 core and safety** | Go control plane, Vast.ai client, provisioning and deletion, desired-state reconciliation, inference gateway with streaming and tool calls, separate management and inference auth, explicit mode, 30-minute rolling idle, immediate stop with drain, cost-safety controls, persisted lifecycle state, Helm chart, baseline scanning | 000, 010, 020, 030, 040, 050, 055, 060, 070, 080, 090, 100, 110, 170 |
 | **P1 initial-release developer experience** | `vk-llm` CLI with start/status/stop and readiness polling, GitHub Releases binaries, GitHub Actions remote control, OpenCode documentation, cost and lifecycle status reporting, README, security and release documentation, platform integration, acceptance run | 120, 130, 140, 150, 160 |
 | **P2 cold-start and storage** | Vast.ai persistent volume (40–50 GB), GGUF cache reuse, preferred-host scheduling with price premium and fallback, `vk-llm cache *` | 180 (ADR 0014, Proposed) |
-| **P3 future** | on-demand provisioning mode (ADR 0007), OpenHands, multiple models, multiple slots, more providers, advanced scheduling, stateful agent sessions, MCP, long-term memory, vLLM | none yet |
+| **P3 future** | OpenHands, multiple models, multiple slots, more providers, advanced scheduling, stateful agent sessions, MCP, long-term memory, vLLM | none yet |
 
 P0 and P1 together are the initial release. P2 and P3 do not move earlier
 without an explicit decision.

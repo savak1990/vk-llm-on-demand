@@ -279,7 +279,7 @@ explicit mode.
 | Msty | unconfirmed (closed source) | unconfirmed | manual test |
 | Envoy route | 1200s (raised from 660s) | n/a | 600s `maxWait` + 600s `model.generationTimeout` |
 
-See [ADR 0018](docs/adr/0018-on-demand-mode-progress-stream.md) for the
+See [ADR 0019](docs/adr/0019-on-demand-mode-progress-stream.md) for the
 full design and [`specs/`](specs/) for the implementation spec (`CORE-220`).
 
 ## Remote control from GitHub Actions
