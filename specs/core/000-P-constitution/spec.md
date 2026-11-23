@@ -84,7 +84,7 @@ subsystem's spec and cite the constitution.
 | Id | Rule |
 |---|---|
 | C-25 | Standard library first. Third-party modules are those listed in spec 010; adding one needs an ADR. |
-| C-26 | An interface exists only where a second implementation or a test fake exists: `Provider`, `Store`, `Dialer`, `Clock`. |
+| C-26 | An interface exists only where a second implementation or a test fake exists: `Provider`, `Store`, `Dialer`, `Clock`, `modelsize.Resolver`. |
 | C-27 | Every goroutine has an owner and a context; every external call has a timeout; bounded concurrency everywhere. |
 | C-28 | Errors are wrapped with `%w` and classified at the boundary into retryable, terminal and fatal. |
 | C-29 | Tests are deterministic: fake provider, fake store, fake clock; no sleeps; no network in unit tests. One acceptance spec (140) touches the real provider under a budget cap. |

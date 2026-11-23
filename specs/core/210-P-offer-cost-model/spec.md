@@ -319,10 +319,12 @@ counted." The CLI prints the lines in Outcome.
   (`: >"$M"` first). Peak disk is about 1.13 × the model. A failed append
   leaves a short file, and the existing checksum step fails it with
   `fail_checksum`, so a bad file is never served.
-- Before a download attempt, a stale `/models/model.gguf` (and its
-  `.aria2` control file) is deleted so a retry never leaves a partial
-  file doubling disk use; the curl fallback deletes a partial model file
-  before re-downloading parts for the same reason.
+- Once per boot, before the first download attempt, a stale
+  `/models/model.gguf` (and its `.aria2` control file) is deleted so a
+  stale file never doubles disk use; aria2 itself still resumes across
+  the `dl || dl || dl` retries. The curl fallback instead deletes a
+  partial model file at the start of each attempt, since it has no
+  resume state of its own to lose.
 
 ### Interactions
 
