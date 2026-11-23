@@ -323,8 +323,8 @@ counted." The CLI prints the lines in Outcome.
   `/models/model.gguf` (and its `.aria2` control file) is deleted so a
   stale file never doubles disk use; aria2 itself still resumes across
   the `dl || dl || dl` retries. The curl fallback instead deletes a
-  partial model file at the start of each attempt, since it has no
-  resume state of its own to lose.
+  partial model file at the start of each attempt, since its part files
+  carry their own resume state.
 
 ### Interactions
 
