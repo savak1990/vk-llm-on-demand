@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
+	"github.com/savak1990/vk-llm-on-demand/internal/progress"
 )
 
 const (
@@ -180,7 +181,9 @@ func cmdStart(cfg Config, c *client, clk clock.Clock, stdout, stderr io.Writer, 
 		return 0
 	}
 
+	var tracker progress.Tracker
 	last := printStateChange(stderr, clk, "", res.doc.State)
+	printProgress(stderr, clk, &tracker, res.doc)
 	wait := pollInterval
 	for first := true; ; first = false {
 		if !first {
@@ -217,6 +220,7 @@ func cmdStart(cfg Config, c *client, clk clock.Clock, stdout, stderr io.Writer, 
 			return 1
 		default:
 			last = printStateChange(stderr, clk, last, res.doc.State)
+			printProgress(stderr, clk, &tracker, res.doc)
 		}
 	}
 }
@@ -290,6 +294,36 @@ func printStateChange(stderr io.Writer, clk clock.Clock, last, state string) str
 	}
 	_, _ = fmt.Fprintf(stderr, "%s %s\n", clk.Now().Format("15:04:05"), state)
 	return state
+}
+
+func stateOf(doc statusDoc) progress.State {
+	s := progress.State{Public: doc.State, Ready: doc.Ready}
+	if doc.Instance != nil {
+		s.MachineID, s.GPUName, s.Geolocation, s.HourlyUSD = doc.Instance.MachineID, doc.Instance.GPU, doc.Instance.Geolocation, doc.Instance.PriceUSDPerHour
+	}
+	if doc.Progress != nil {
+		s.DownloadedBytes, s.ModelBytes, s.WorkerStages = doc.Progress.DownloadedBytes, doc.Progress.ModelBytes, doc.Progress.WorkerStages
+	}
+	return s
+}
+
+// printProgress prints each new milestone line from doc, after the
+// state-change line. A bare document (no instance, no progress) carries
+// nothing new, and a draining/deleting/failed one still carries the old
+// instance being torn down, so both are skipped rather than fed to the
+// tracker, which would otherwise print a stale offer and never print the
+// next one.
+func printProgress(stderr io.Writer, clk clock.Clock, tr *progress.Tracker, doc statusDoc) {
+	switch doc.State {
+	case "DRAINING", "DELETING", "FAILED":
+		return
+	}
+	if doc.Instance == nil && doc.Progress == nil {
+		return
+	}
+	for _, l := range tr.Lines(stateOf(doc)) {
+		_, _ = fmt.Fprintf(stderr, "%s %s\n", clk.Now().Format("15:04:05"), l)
+	}
 }
 
 func printTimeout(stderr io.Writer, timeout time.Duration, state string) {

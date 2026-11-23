@@ -51,7 +51,10 @@ Controller: `Demand`, the demand deadline and its cancellation, the
 persisted start origin, the `gpu_start` audit line, `Geolocation` in the
 stored offer, download progress over the tunnel. Gateway: the wait queue,
 the progress stream, the immediate `503 gpu_cold_start` for non-streaming
-requests, the history filter, the cold-start metrics. Tunnel: an exec
+requests, the history filter, the cold-start metrics; the milestone tracker
+moves to `internal/progress`, shared with the CLI. Management API: the
+status document gains `instance.geolocation` and a `progress` object.
+`vk-llm start` prints the same milestone lines on stderr. Tunnel: an exec
 session. Chart: the mode enum, the `onDemand` block, `model.sizeBytes`.
 Platform: one `vk-lab-platform` pull request.
 
@@ -296,6 +299,9 @@ message, which has already started the GPU, and `Demand` coalesces.
   (ADR 0018 §6).
 - R18. The gateway MUST remove `[vk-llm] ` lines from incoming
   `reasoning_content` before forwarding (ADR 0018 §4).
+- R19. `vk-llm start` MUST print the same milestone lines as the chat
+  progress stream, on stderr, from the status document; `vk-llm stop` is
+  unchanged.
 
 ## Implementation steps
 
@@ -360,10 +366,16 @@ message, which has already started the GPU, and `Demand` coalesces.
   turn's request to the worker carries no `[vk-llm] ` line.
 - AC16. Live: close the app during `ALLOCATING`; the instance is destroyed
   within `demandGrace` + 60 s and no instance remains.
+- AC17. `vk-llm start` with a scripted status walk whose documents carry
+  an instance (gpu, geolocation, price, machine id) and a progress object
+  at 0 %, 40 % and `download_end` prints the offer line, the 40 % download
+  line and the verifying-checksum line in order on stderr, and the final
+  line is still the `ready:` line; a walk with no instance or progress
+  fields prints exactly the state-change and `ready:` lines, unchanged.
 
 ## Definition of done
 
-- [ ] AC1–AC13 pass (tier 1/2); AC14–AC16 recorded under Evidence.
+- [ ] AC1–AC13 and AC17 pass (tier 1/2); AC14–AC16 recorded under Evidence.
 - [ ] `make specs-check go-build go-test go-lint helm-lint helm-template`
       all exit 0.
 - [ ] `vk-lab-platform` PR merged: `provisioningMode: on-demand`, route

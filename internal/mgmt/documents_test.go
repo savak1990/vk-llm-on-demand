@@ -154,6 +154,39 @@ func TestResultFor(t *testing.T) {
 	}
 }
 
+func TestBuildStatusDocumentGeolocationAndProgress(t *testing.T) {
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	snap := controller.Snapshot{
+		Public: "LOADING_MODEL", CreatedAt: now, Geolocation: "Sweden",
+		DownloadedBytes: 500, ModelBytes: 1000, WorkerStages: []string{"download_begin"},
+	}
+	doc := buildStatusDocument(snap, config.Mgmt{}, now)
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, want := range []string{`"geolocation":"Sweden"`, `"progress":{"downloadedBytes":500,"modelBytes":1000,"workerStages":["download_begin"]}`} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("doc = %s, want it to contain %s", raw, want)
+		}
+	}
+}
+
+func TestBuildStatusDocumentNoGeolocationOrProgress(t *testing.T) {
+	now := time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)
+	snap := controller.Snapshot{Public: "READY", CreatedAt: now}
+	doc := buildStatusDocument(snap, config.Mgmt{}, now)
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, unwanted := range []string{`"geolocation"`, `"progress"`} {
+		if strings.Contains(string(raw), unwanted) {
+			t.Fatalf("doc = %s, want no %s key", raw, unwanted)
+		}
+	}
+}
+
 func TestStatusDocumentBudgetFromSnapshot(t *testing.T) {
 	doc := buildStatusDocument(controller.Snapshot{BudgetMonthUSD: 40}, config.Mgmt{}, time.Now())
 	if doc.Cost.BudgetMonthUSD != 40 {

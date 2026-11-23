@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/progress"
 )
 
 const longestColdStart = 360 * time.Second
@@ -188,7 +189,7 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 	if len(phrases) == 0 {
 		phrases = defaultTickerPhrases
 	}
-	var tr progressTracker
+	var tr progress.Tracker
 	lastLine, lastBeat, lastPhrase := start, start, -1
 	tick := g.deps.Clock.NewTicker(pollEvery)
 	defer tick.Stop()
@@ -199,7 +200,7 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 			return
 		}
 		s := g.cachedStatus(now)
-		for _, l := range tr.lines(s) {
+		for _, l := range tr.Lines(progressState(s)) {
 			if !send(progressChunk(alias, l, now)) {
 				return
 			}

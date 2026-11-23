@@ -15,10 +15,17 @@ type instanceDoc struct {
 	GPU             string             `json:"gpu"`
 	MachineID       int64              `json:"machineId"`
 	PriceUSDPerHour float64            `json:"priceUSDPerHour"`
+	Geolocation     string             `json:"geolocation,omitempty"`
 	CreatedAt       time.Time          `json:"createdAt"`
 	ReadyAt         *time.Time         `json:"readyAt"`
 	Prices          *store.OfferPrices `json:"prices,omitempty"`
 	InetDownMbps    float64            `json:"inetDownMbps"`
+}
+
+type progressDoc struct {
+	DownloadedBytes int64    `json:"downloadedBytes,omitempty"`
+	ModelBytes      int64    `json:"modelBytes,omitempty"`
+	WorkerStages    []string `json:"workerStages,omitempty"`
 }
 
 type modelDoc struct {
@@ -66,6 +73,7 @@ type statusDocument struct {
 	InstallationID           string       `json:"installationId"`
 	LabelPrefix              string       `json:"labelPrefix"`
 	Result                   string       `json:"result,omitempty"`
+	Progress                 *progressDoc `json:"progress,omitempty"`
 }
 
 type costDocument struct {
@@ -93,10 +101,15 @@ func buildStatusDocument(snap controller.Snapshot, cfg config.Mgmt, now time.Tim
 	if !snap.CreatedAt.IsZero() {
 		doc.Instance = &instanceDoc{
 			GPU: snap.GPUName, MachineID: snap.MachineID, PriceUSDPerHour: snap.Hourly.USD(),
-			CreatedAt: snap.CreatedAt, ReadyAt: snap.ReadyAt,
+			Geolocation: snap.Geolocation, CreatedAt: snap.CreatedAt, ReadyAt: snap.ReadyAt,
 			Prices: snap.Prices, InetDownMbps: snap.InetDownMbps,
 		}
 		doc.UptimeSeconds = int64(now.Sub(snap.CreatedAt).Seconds())
+	}
+	if snap.DownloadedBytes != 0 || snap.ModelBytes != 0 || len(snap.WorkerStages) != 0 {
+		doc.Progress = &progressDoc{
+			DownloadedBytes: snap.DownloadedBytes, ModelBytes: snap.ModelBytes, WorkerStages: snap.WorkerStages,
+		}
 	}
 	doc.Cost.Breakdown, doc.Cost.Selection = breakdownOf(snap), selectionOf(snap)
 	doc.LastInferenceFinishedAt = snap.LastInferenceFinishedAt
