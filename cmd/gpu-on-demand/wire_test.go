@@ -17,6 +17,7 @@ import (
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/gateway"
+	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
 	fakestore "github.com/savak1990/vk-llm-on-demand/internal/store/fake"
@@ -67,10 +68,10 @@ func TestWireServesInferenceAndManagementThroughOneMux(t *testing.T) {
 
 	d := wireDeps{
 		Ctx: ctx, Clock: clk, Provider: prov, Store: st,
-		Dialer: tunnel.NewDirect("unused:0"), Keys: keys,
+		Dialer: tunnel.NewDirect("unused:0"), ModelSize: modelsize.Fixed(1_000_000_000), Keys: keys,
 		Seed: seed, WorkerSeedFunc: func() ([]byte, error) { return seed.Bytes(), nil },
 		InstallationID: "test-iid", ModelAlias: "qwen3.6-35b-a3b",
-		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3},
+		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3, MaxDiskGB: 200},
 		Budget:     config.Budget{MonthlyUSD: 30, WarnFraction: 0.8, MaxHourlyPriceUSD: 0.80},
 		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
 		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, RateLimitPerKeyRPM: 60},
@@ -167,10 +168,10 @@ func TestWireCostShowsBudgetMonthlyUSD(t *testing.T) {
 
 	d := wireDeps{
 		Ctx: ctx, Clock: clk, Provider: prov, Store: st,
-		Dialer: tunnel.NewDirect("unused:0"), Keys: keys,
+		Dialer: tunnel.NewDirect("unused:0"), ModelSize: modelsize.Fixed(1_000_000_000), Keys: keys,
 		Seed: seed, WorkerSeedFunc: func() ([]byte, error) { return seed.Bytes(), nil },
 		InstallationID: "test-iid", ModelAlias: "qwen3.6-35b-a3b",
-		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3},
+		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3, MaxDiskGB: 200},
 		Budget:     config.Budget{MonthlyUSD: 42, WarnFraction: 0.8, MaxHourlyPriceUSD: 0.80},
 		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
 		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, RateLimitPerKeyRPM: 60},
@@ -230,10 +231,10 @@ func TestWireMetricsCatalogComplete(t *testing.T) {
 	reg := obs.NewRegistry()
 	d := wireDeps{
 		Ctx: ctx, Clock: clk, Provider: prov, Store: st,
-		Dialer: tunnel.NewDirect("unused:0"), Keys: keys,
+		Dialer: tunnel.NewDirect("unused:0"), ModelSize: modelsize.Fixed(1_000_000_000), Keys: keys,
 		Seed: seed, WorkerSeedFunc: func() ([]byte, error) { return seed.Bytes(), nil },
 		InstallationID: "test-iid", ModelAlias: "qwen3.6-35b-a3b",
-		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3},
+		Controller: config.Controller{ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80, MaxLifetime: 12 * time.Hour, IdleShutdownTimeout: 30 * time.Minute, ReconcileInterval: 60 * time.Second, MaxProvisionAttemptsPerHour: 3, MaxDiskGB: 200},
 		Budget:     config.Budget{MonthlyUSD: 30, WarnFraction: 0.8, MaxHourlyPriceUSD: 0.80},
 		Gateway:    config.Gateway{ModelAlias: "qwen3.6-35b-a3b", MaxBodyBytes: 1 << 20, MaxTokensCap: 8192, RateLimitPerKeyRPM: 60, GenerationTimeout: 10 * time.Minute},
 		Mgmt:       config.Mgmt{ProviderName: "fake", ModelAlias: "qwen3.6-35b-a3b", ModelContextSize: 32768, RateLimitPerKeyRPM: 60},

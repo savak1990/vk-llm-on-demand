@@ -116,7 +116,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			d.Generation++
 			d.Instance = &store.Instance{
 				State: Creating.String(), Label: label,
-				Offer:     store.Offer{MachineID: ev.Offer.MachineID, GPU: ev.Offer.GPUName, DPH: ev.Offer.Hourly.USD(), InetDown: ev.Offer.InetDownMbps},
+				Offer:     storeOffer(ev),
 				CreatedAt: f.Now,
 			}
 			d.Ops = append(d.Ops, store.Op{Key: fmt.Sprintf("create-%d", d.Generation), StartedAt: f.Now})
@@ -127,7 +127,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				d.AttemptsThisHour = store.Attempts{Hour: hour, Count: 1}
 			}
 			return nil
-		}, []Effect{effCreate{offer: ev.Offer, gen: nextGen, label: label}}
+		}, []Effect{effCreate{offer: ev.Offer, breakdown: ev.Breakdown, filter: ev.Filter, gen: nextGen, label: label}}
 
 	// T8: the provider confirmed creation — adopt the id and open the
 	// ledger entry; Destroying instead of Booting if Stop/budget beat
@@ -151,7 +151,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			}
 			d.Instance.ProviderID = providerIDString(ev.ProviderID)
 			if f.Budget != nil {
-				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, 0)
+				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, downloadUSD(d.Instance.Offer))
 			}
 			if dest {
 				d.Instance.State = Destroying.String()
@@ -194,7 +194,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				return errStale
 			}
 			if f.Budget != nil {
-				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, 0)
+				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, downloadUSD(d.Instance.Offer))
 			}
 			d.Instance.State = Destroying.String()
 			finishOp(d, createOpKey(d.Generation), "duplicate_label", f.Now)
@@ -573,17 +573,43 @@ func searchFilter(f Facts) provider.OfferFilter {
 		}
 	}
 	return provider.OfferFilter{
-		GPUName:           pf.GPUName,
-		NumGPUs:           pf.NumGPUs,
-		MinCPUCores:       pf.MinCPUCores,
-		MinCPURAMGB:       pf.MinCPURAMGB,
-		MinDiskGB:         pf.MinDiskGB,
-		MinReliability:    pf.MinReliability,
-		MinInetDownMbps:   pf.MinInetDownMbps,
-		MinDiskBwMBps:     pf.MinDiskBwMBps,
-		MinCUDA:           pf.MinCUDA,
-		Geolocation:       pf.Geolocation,
-		MaxHourly:         provider.Money(math.Round(f.Cfg.MaxHourlyPriceUSD * 1e6)),
-		ExcludeMachineIDs: excl,
+		GPUName:              pf.GPUName,
+		NumGPUs:              pf.NumGPUs,
+		MinCPUCores:          pf.MinCPUCores,
+		MinCPURAMGB:          pf.MinCPURAMGB,
+		MinDiskGB:            pf.MinDiskGB,
+		MinReliability:       pf.MinReliability,
+		MinInetDownMbps:      pf.MinInetDownMbps,
+		MinDiskBwMBps:        pf.MinDiskBwMBps,
+		MinCUDA:              pf.MinCUDA,
+		Geolocation:          pf.Geolocation,
+		MaxHourly:            provider.Money(math.Round(f.Cfg.MaxHourlyPriceUSD * 1e6)),
+		MaxDownloadPerGB:     provider.Money(math.Round(f.Cfg.MaxDownloadPriceUSDPerGB * 1e6)),
+		MaxStoragePerGBMonth: provider.Money(math.Round(f.Cfg.MaxStoragePriceUSDPerGBMonth * 1e6)),
+		ExcludeMachineIDs:    excl,
 	}
+}
+
+// storeOffer is the state document's copy of the chosen offer and the
+// estimate that ranked it.
+func storeOffer(ev Event) store.Offer {
+	o, b := ev.Offer, ev.Breakdown
+	return store.Offer{
+		MachineID: o.MachineID, GPU: o.GPUName, DPH: o.Hourly.USD(), InetDown: o.InetDownMbps,
+		Prices: &store.OfferPrices{
+			GPUUSDPerHour: b.GPUHourly.USD(), StorageUSDPerGBMonth: o.StoragePerGBMonth.USD(),
+			DownloadUSDPerGB: o.DownloadPerGB.USD(), UploadUSDPerGB: o.UploadPerGB.USD(),
+		},
+		Estimate: &store.OfferEstimate{
+			ModelBytes: b.ModelBytes, DiskGB: b.DiskGB, HorizonSeconds: b.HorizonSeconds,
+			DownloadSeconds: b.DownloadSeconds, DownloadUSD: b.DownloadUSD.USD(), SessionUSD: b.SessionUSD.USD(),
+		},
+	}
+}
+
+func downloadUSD(o store.Offer) float64 {
+	if o.Estimate == nil {
+		return 0
+	}
+	return o.Estimate.DownloadUSD
 }

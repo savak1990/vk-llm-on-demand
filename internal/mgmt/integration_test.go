@@ -12,6 +12,7 @@ import (
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
@@ -33,7 +34,7 @@ func (allowAllBudget) Rollover(*store.Document, time.Time)                      
 func (allowAllBudget) RefreshOpenEntry(*store.Document, time.Time)                   {}
 func (allowAllBudget) UsedRatio(store.Document) float64                              { return 0 }
 func (allowAllBudget) EstimatedMTD(store.Document) float64                           { return 0 }
-func (allowAllBudget) CapUSD(store.Document) float64                                 { return 0 }
+func (allowAllBudget) CapUSD(store.Document) float64                                 { return 1e9 } // "no cap": must stay above the gate's spent+download check
 func (allowAllBudget) CeilingUSD() float64                                           { return 0 }
 
 var _ controller.Budget = allowAllBudget{}
@@ -43,8 +44,8 @@ var _ controller.Budget = allowAllBudget{}
 type readyWorker struct{}
 
 func (readyWorker) WorkerKey([]byte, string, int64) string { return "ac6-key" }
-func (readyWorker) BuildCreate(offer provider.Offer, label, workerKey string) provider.CreateRequest {
-	return provider.CreateRequest{OfferID: offer.ID, Label: label, Env: map[string]string{"WORKER_KEY": workerKey}}
+func (readyWorker) BuildCreate(offer provider.Offer, diskGB int, label, workerKey string) provider.CreateRequest {
+	return provider.CreateRequest{OfferID: offer.ID, DiskGB: diskGB, Label: label, Env: map[string]string{"WORKER_KEY": workerKey}}
 }
 func (readyWorker) Probe(context.Context, http.RoundTripper, string, string) (controller.ProbeStatus, error) {
 	return controller.ProbeReady, nil
@@ -85,10 +86,11 @@ func TestAC6_RealControllerThroughMgmt(t *testing.T) {
 		Budget: allowAllBudget{}, Worker: readyWorker{},
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
 		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
+		ModelSize: modelsize.Fixed(1_000_000_000), ModelURL: "https://example.invalid/model.gguf",
 		Config: config.Controller{
 			ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80,
 			IdleShutdownEnabled: true, IdleShutdownTimeout: 1800 * time.Second,
-			ReconcileInterval: 60 * time.Second,
+			ReconcileInterval: 60 * time.Second, MaxDiskGB: 200,
 		},
 	})
 	if err != nil {

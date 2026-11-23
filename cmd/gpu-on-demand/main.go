@@ -19,6 +19,7 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/gateway"
+	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 	"github.com/savak1990/vk-llm-on-demand/internal/obs"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	fakeprovider "github.com/savak1990/vk-llm-on-demand/internal/provider/fake"
@@ -144,10 +145,12 @@ func main() {
 	}
 	readinessChecks = append(readinessChecks, store.Ready(storeClient))
 
+	var sizes modelsize.Resolver
 	var prov provider.Provider
 	switch mgmtCfg.ProviderName {
 	case "fake":
 		prov = fakeprovider.NewSeeded(clk)
+		sizes = modelsize.Fixed(29_200_000_000)
 	case "vastai":
 		//nolint:gosec // backoff jitter, not a credential
 		rnd := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -156,6 +159,7 @@ func main() {
 				b, err := os.ReadFile(workerCfg.ProviderAPIKeyFile)
 				return strings.TrimSpace(string(b)), err
 			}, clk, rnd, slog.Default(), reg)
+		sizes = modelsize.NewHTTP(&http.Client{})
 	default:
 		slog.Error("config error", "err", fmt.Errorf("unrecognized VKLLM_PROVIDER_NAME %q", mgmtCfg.ProviderName))
 		os.Exit(1)
@@ -180,7 +184,7 @@ func main() {
 	readinessChecks = append(readinessChecks, seed.Loaded)
 
 	apiMux, ctl, gw, err := wire(wireDeps{
-		Ctx: ctx, Clock: clk, Provider: prov, Store: storeClient, Dialer: dialer,
+		Ctx: ctx, Clock: clk, Provider: prov, Store: storeClient, Dialer: dialer, ModelSize: sizes,
 		Keys: keys, Seed: seed, WorkerSeedFunc: func() ([]byte, error) { return seed.Bytes(), nil },
 		InstallationID: topCfg.InstallationID, ModelAlias: gatewayCfg.ModelAlias,
 		Controller: controllerCfg, Budget: budgetCfg, Gateway: gatewayCfg, Mgmt: mgmtCfg, Worker: workerCfg,

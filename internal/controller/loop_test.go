@@ -169,7 +169,7 @@ func TestGenerationChangeResetsInFlightAndSuspect(t *testing.T) {
 	c.suspect = true
 	putDoc(t, c, func(d *store.Document) { d.Desired = store.DesiredRunning })
 
-	if err := c.processEvent(context.Background(), Event{Kind: EvOfferChosen, Offer: provider.Offer{ID: 11, MachineID: 42, Hourly: 600000}}); err != nil {
+	if err := c.processEvent(context.Background(), Event{Kind: EvOfferChosen, Offer: provider.Offer{ID: 11, MachineID: 42, Hourly: 600000}, Filter: provider.OfferFilter{MaxHourly: 800000}}); err != nil {
 		t.Fatalf("processEvent: %v", err)
 	}
 	if ev, ok := recvEvent(t, c); !ok || ev.Kind != EvCreated {

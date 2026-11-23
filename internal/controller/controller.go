@@ -13,6 +13,7 @@ import (
 
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/modelsize"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 	"github.com/savak1990/vk-llm-on-demand/internal/tunnel"
@@ -40,6 +41,8 @@ type Deps struct {
 	WorkerSeed     func() ([]byte, error)
 	InstallationID string
 	ModelAlias     string // e.g. "qwen3.6-35b-a3b"; owned by model.* config, not config.Controller
+	ModelSize      modelsize.Resolver
+	ModelURL       string
 	Config         config.Controller
 	Reg            prometheus.Registerer
 	Log            *slog.Logger

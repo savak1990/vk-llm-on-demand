@@ -7,6 +7,7 @@ import (
 
 	"github.com/savak1990/vk-llm-on-demand/internal/budget"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
+	"github.com/savak1990/vk-llm-on-demand/internal/offercost"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
@@ -326,8 +327,9 @@ func TestTransitionTable(t *testing.T) {
 	t.Run("T5_offer_chosen_commits_before_create", func(t *testing.T) {
 		doc, _ := store.NewDocument("iid")
 		doc.Desired = store.DesiredRunning
-		offer := provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"}
-		next, mutate, effects := decide(Searching, Event{Kind: EvOfferChosen, Offer: offer}, Facts{Now: now, Doc: doc})
+		offer := provider.Offer{ID: 11, MachineID: 42, Hourly: 615556, GPUName: "L40S", DphBase: 560000, DownloadPerGB: 39063, UploadPerGB: 39063, StoragePerGBMonth: 666667, InetDownMbps: 889.4}
+		bd := offercost.Breakdown{DiskGB: 60, ModelBytes: 29_200_000_000, HorizonSeconds: 1800, DownloadSeconds: 263, GPUHourly: 560000, StorageHourly: 55556, DownloadUSD: 1140640, SessionUSD: 1493388}
+		next, mutate, effects := decide(Searching, Event{Kind: EvOfferChosen, Offer: offer, Breakdown: bd}, Facts{Now: now, Doc: doc})
 		if next != Creating || mutate == nil || len(effects) != 1 {
 			t.Fatalf("T5: next=%v mutate=%v effects=%v", next, mutate != nil, effects)
 		}
@@ -343,6 +345,16 @@ func TestTransitionTable(t *testing.T) {
 		}
 		if len(got.Ops) != 1 || got.Ops[0].Key != "create-1" {
 			t.Fatalf("T5 ops = %+v", got.Ops)
+		}
+		o := got.Instance.Offer
+		if o.Prices == nil || o.Prices.GPUUSDPerHour != 0.56 || o.Prices.DownloadUSDPerGB != 0.039063 || o.Prices.StorageUSDPerGBMonth != 0.666667 || o.Prices.UploadUSDPerGB != 0.039063 {
+			t.Fatalf("T5 prices = %+v", o.Prices)
+		}
+		if o.Estimate == nil || o.Estimate.DiskGB != 60 || o.Estimate.DownloadUSD != 1.14064 || o.Estimate.SessionUSD != 1.493388 || o.Estimate.DownloadSeconds != 263 {
+			t.Fatalf("T5 estimate = %+v", o.Estimate)
+		}
+		if ce := effects[0].(effCreate); ce.breakdown.DiskGB != 60 {
+			t.Fatalf("T5 effCreate breakdown = %+v", ce.breakdown)
 		}
 	})
 
@@ -372,7 +384,7 @@ func TestTransitionTable(t *testing.T) {
 		doc, _ := store.NewDocument("iid")
 		doc.Generation = 1
 		doc.Desired = store.DesiredRunning
-		doc.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{DPH: 0.6}, CreatedAt: now}
+		doc.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{DPH: 0.6, Estimate: &store.OfferEstimate{DownloadUSD: 1.14}}, CreatedAt: now}
 		doc.Ops = []store.Op{{Key: "create-1", StartedAt: now}}
 		b := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.5})
 		next, mutate, effects := decide(Creating, Event{Kind: EvCreated, Gen: 1, ProviderID: provider.InstanceID(99)}, Facts{Now: now, Doc: doc, Budget: b})
@@ -391,6 +403,9 @@ func TestTransitionTable(t *testing.T) {
 		}
 		if len(got.Ledger.Entries) != 1 || got.Ledger.Entries[0].Gen != 1 {
 			t.Fatalf("T8: OpenEntry not called, entries = %+v", got.Ledger.Entries)
+		}
+		if got.Ledger.Entries[0].FixedUSD != 1.14 || got.Ledger.Entries[0].EstUSD != 1.14 {
+			t.Fatalf("T8: ledger entry = %+v, want FixedUSD and EstUSD 1.14", got.Ledger.Entries[0])
 		}
 	})
 
