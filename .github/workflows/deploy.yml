@@ -97,7 +97,6 @@ jobs:
         run: |
           set -uo pipefail
           status=0
-          echo "deploy-dev: PROJECT_NAME=$PROJECT_NAME VERSION=$VERSION"
           ./scripts/deploy-dev.sh "$VERSION" "$SHA" || status=$?
           if [ "$status" -eq 0 ]; then
             echo "### llm-dev is at \`$VERSION\`" >> "$GITHUB_STEP_SUMMARY"
@@ -105,7 +104,7 @@ jobs:
           fi
           if [ "$status" -eq 2 ]; then
             echo "### llm-dev was not updated: the cluster is not reachable" >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::llm-dev was not updated: the cluster is not reachable. Bring the lab up in vk-lab-platform, then re-run this job."
+            echo "::warning::llm-dev was not updated: the cluster is not reachable. Run 'make up' in vk-lab-platform, then re-run this job."
             exit 0
           fi
           exit "$status"

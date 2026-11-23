@@ -49,23 +49,30 @@ func TestDeployDevJobShape(t *testing.T) {
 		t.Errorf("permissions = %v, want {contents: read, id-token: write}", job.Permissions)
 	}
 	var helm, run string
+	var env map[string]string
 	for _, s := range job.Steps {
 		if strings.HasPrefix(s.Uses, "azure/setup-helm@") {
 			helm, _ = s.With["version"].(string)
 		}
 		if strings.Contains(s.Run, "scripts/deploy-dev.sh") {
 			run = s.Run
+			env = s.Env
 		}
 	}
 	if helm != "v4.3.0" {
 		t.Errorf("setup-helm version = %q, want v4.3.0 (--rollback-on-failure)", helm)
 	}
-	for _, want := range []string{"PROJECT_NAME", `"$status" -eq 2`, "::warning::", "exit \"$status\""} {
+	if env["PROJECT_NAME"] == "" {
+		t.Error("deploy step env lacks PROJECT_NAME")
+	}
+	for _, want := range []string{`"$status" -eq 2`, "::warning::", "exit \"$status\""} {
 		if !strings.Contains(run, want) {
 			t.Errorf("deploy step run lacks %q", want)
 		}
 	}
-	if strings.Contains(run, "make ") {
-		t.Errorf("deploy step must call the script directly: make turns every failure into exit 2")
+	for _, line := range strings.Split(run, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "make ") {
+			t.Errorf("deploy step must call the script directly: make turns every failure into exit 2")
+		}
 	}
 }
