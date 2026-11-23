@@ -188,9 +188,11 @@ the longest measured cold start, rounded down to whole minutes.
    request refreshes the deadline.
 6. Denial, failure or `maxWait`: send the reason as a progress line, then
    `data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"error":{...}}`,
-   then `data: [DONE]`. After `maxWait` the line says the GPU is still
-   starting and to send the message again in a few minutes; the start
-   continues.
+   then `data: [DONE]`. After `maxWait` the gateway first calls
+   `Demand(key, now + 360 s + demandGrace)`, then the line says the GPU
+   is still starting and to send the message again within 5 minutes; the
+   start continues. Gateway shutdown ends every held stream the same way
+   with code `shutting_down`.
 
 **Progress line.** One SSE chunk per line:
 
@@ -288,7 +290,9 @@ message, which has already started the GPU, and `Demand` coalesces.
 - R16. The Envoy route total timeout MUST be at least 1200 s in on-demand
   mode (ADR 0018 §7).
 - R17. A `demand`-origin start MUST be cancelled when the demand deadline
-  passes before `Ready`; an `explicit`-origin start MUST NOT be (ADR 0018 §6).
+  passes before `Ready`; an `explicit`-origin start MUST NOT be. A
+  `maxWait` expiry MUST extend the deadline by 360 s + `demandGrace`
+  (ADR 0018 §6).
 - R18. The gateway MUST remove `[vk-llm] ` lines from incoming
   `reasoning_content` before forwarding (ADR 0018 §4).
 

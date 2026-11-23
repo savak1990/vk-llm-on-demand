@@ -82,7 +82,9 @@ time out before a cold start ends.
 
 Each held stream keeps the demand deadline at now + `demandGrace` (60 s
 default) while it is connected; a non-streaming request sets it to now +
-`Retry-After` + `demandGrace`. When the deadline passes before `Ready`, the
+`Retry-After` + `demandGrace`; a `maxWait` expiry extends it by 360 s +
+`demandGrace`, so the start that §3 lets continue survives until the user
+sends the message again. When the deadline passes before `Ready`, the
 controller sends itself `EvStop`, unless an explicit start
 (`POST /api/v1/gpu/start`) also asked for this instance. ADR 0007 kept
 demand after a disconnect.
