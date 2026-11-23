@@ -36,4 +36,7 @@ everything below the platform's pointer (ADR 0008).
 A chat change is a pull request here; the platform changes only for shared
 services. The chart is not versioned by the repository tag: the pointer
 tracks `main`, like `gitops/`. Upgrading Open WebUI means bumping
-`chat/Chart.yaml` and re-running `helm dependency update chat`.
+`chat/Chart.yaml` and re-running `helm dependency update chat`. The
+constitution's chart rules (version from a git tag, installs on any
+cluster) apply to the published `gpu-on-demand` chart; `chat/` is a
+platform-only, unversioned chart rendered from Git.

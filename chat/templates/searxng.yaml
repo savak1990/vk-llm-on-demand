@@ -38,11 +38,12 @@ spec:
             # One worker is enough for a household; the image default of 5 idles near 500 MiB.
             - name: GRANIAN_WORKERS
               value: "1"
+            # Per-pod value: SearXNG signs nothing that must survive a restart,
+            # and it must never hold Open WebUI's session key.
             - name: SEARXNG_SECRET
               valueFrom:
-                secretKeyRef:
-                  name: open-webui-env
-                  key: WEBUI_SECRET_KEY
+                fieldRef:
+                  fieldPath: metadata.uid
           readinessProbe:
             httpGet:
               path: /healthz

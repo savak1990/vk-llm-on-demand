@@ -12,7 +12,7 @@ Never reference specific documents (specs, ADRs, tickets) in code comments. Expl
 
 `vk-llm-on-demand` is a Go control plane that exposes an OpenAI-compatible API and rents a GPU instance (Vast.ai first) that the user starts explicitly and that a 30-minute rolling inactivity timeout or `vk-llm stop` releases. It is deployed onto the separate platform repository `vk-lab-platform`, but its Helm chart must install into any Kubernetes cluster.
 
-This repository holds the control plane, the worker launch scripts, the Helm chart and the release pipeline. It MUST NOT hold platform code. Platform changes (Argo pointer Application, External Secrets policy, SSM parameters) go to `vk-lab-platform` as a pull request; spec `core/130` lists them.
+This repository holds the control plane, the worker launch scripts, the Helm charts (`gpu-on-demand`, and the `chat/` front end) and the release pipeline. It MUST NOT hold platform code. Platform changes (Argo pointer Application, External Secrets policy, SSM parameters) go to `vk-lab-platform` as a pull request; spec `core/130` lists them.
 
 The authority is `specs/core/000-P-constitution/spec.md`. Read it before non-trivial work; this file does not restate it.
 
