@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
-const stubImage = "vkllm-worker-stub-test:latest"
+const (
+	stubImage        = "vkllm-worker-stub-test:latest"
+	stubBuildTimeout = 3 * time.Minute
+)
 
 // buildStubImage copies the stub build context into a temp dir, writes
 // the current onstart script there (regenerated from Render() on every
@@ -49,8 +52,12 @@ func buildStubImage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cmd := exec.Command("docker", "build", "-t", stubImage, dir)
-	out, err := cmd.CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), stubBuildTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "docker", "build", "-t", stubImage, dir).CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("docker build exceeded %s (base image pull or network):\n%s", stubBuildTimeout, out)
+	}
 	if err != nil {
 		t.Fatalf("docker build failed: %v\n%s", err, out)
 	}
