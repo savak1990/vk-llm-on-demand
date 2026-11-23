@@ -84,8 +84,8 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if d.Instance.State != state.String() {
 				return errStale
 			}
+			setStartOrigin(d, ev)
 			d.Desired = store.DesiredRunning
-			d.StartOrigin = originOf(ev)
 			return nil
 		}, nil
 

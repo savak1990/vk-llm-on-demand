@@ -20,7 +20,7 @@ func originOf(ev Event) string {
 }
 
 // setStartOrigin records who started the GPU, but a demand never downgrades
-// a start still pending at Idle, so an expired chat cannot cancel it.
+// a start still pending (desired RUNNING), so an expired chat cannot cancel it.
 func setStartOrigin(d *store.Document, ev Event) {
 	if originOf(ev) == originExplicit || d.Desired != store.DesiredRunning {
 		d.StartOrigin = originOf(ev)

@@ -445,3 +445,20 @@ func TestDemandTimerCancelsUnattendedStartThroughLoop(t *testing.T) {
 		t.Fatalf("state %v desired %q, want Destroying/Idle STOPPED", c.stateNow(), doc.Desired)
 	}
 }
+
+// Models a demand that passed Demand's state check just before a failure teardown committed.
+func TestDemandDuringFailureTeardownKeepsExplicitOrigin(t *testing.T) {
+	c, _ := newOnDemandController(t)
+	c.state, c.generation = Destroying, 3
+	putDoc(t, c, func(d *store.Document) {
+		bootingDoc(originExplicit)(d)
+		d.Instance.State = Destroying.String()
+	})
+	if err := c.processEvent(context.Background(), Event{Kind: EvStart, Origin: originDemand, KeyID: "k1"}); err != nil {
+		t.Fatalf("processEvent: %v", err)
+	}
+	doc, _, _ := c.deps.Store.Load(context.Background())
+	if doc.StartOrigin != originExplicit {
+		t.Fatalf("StartOrigin = %q, want explicit", doc.StartOrigin)
+	}
+}
