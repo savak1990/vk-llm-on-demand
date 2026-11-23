@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -79,10 +80,141 @@ func (g *Gateway) writeQueueFull(w http.ResponseWriter) {
 	writeError(w, http.StatusTooManyRequests, "server_error", "queue_full", "Too many requests are waiting for the GPU; retry in 15 s.")
 }
 
-func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, _ map[string]json.RawMessage) {
-	if g.held.Load() >= int64(g.deps.Config.OnDemand.MaxPending) {
+const pollEvery = 2 * time.Second
+
+// cachedStatus shares one Status read per poll across every held request.
+func (g *Gateway) cachedStatus(now time.Time) controller.Snapshot {
+	g.statusMu.Lock()
+	defer g.statusMu.Unlock()
+	if now.Sub(g.statusAt) >= pollEvery || g.statusAt.IsZero() {
+		g.statusSn, g.statusAt = g.deps.Controller.Status(), now
+	}
+	return g.statusSn
+}
+
+func (g *Gateway) putStatus(now time.Time, s controller.Snapshot) {
+	g.statusMu.Lock()
+	g.statusSn, g.statusAt = s, now
+	g.statusMu.Unlock()
+}
+
+func startFailed(s controller.Snapshot) bool {
+	switch s.Public {
+	case "FAILED", "DELETING", "DRAINING":
+		return true
+	case "STOPPED":
+		return s.Desired != "RUNNING"
+	}
+	return false
+}
+
+func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[string]json.RawMessage) {
+	cfg := g.deps.Config.OnDemand
+	if g.held.Add(1) > int64(cfg.MaxPending) {
+		g.held.Add(-1)
 		g.writeQueueFull(w)
 		return
 	}
-	g.refuseColdStart(w, r)
+	defer g.held.Add(-1)
+	g.metrics.pendingRequests.Inc()
+	defer g.metrics.pendingRequests.Dec()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	rc := http.NewResponseController(w)
+	alias := g.deps.Config.ModelAlias
+	send := func(s string) bool {
+		if _, err := io.WriteString(w, s); err != nil {
+			return false
+		}
+		return rc.Flush() == nil
+	}
+	fail := func(outcome, code, msg string) {
+		recorderOf(w).outcome = outcome
+		setCodeOverride(w, "stream_error")
+		g.metrics.coldStartOutcomesTotal.WithLabelValues(outcome).Inc()
+		send(progressChunk(alias, msg, g.deps.Clock.Now()) + errorTail(code, msg))
+	}
+
+	key := keyIDOf(r)
+	start := g.deps.Clock.Now()
+	snap, err := g.deps.Controller.Demand(r.Context(), key, start.Add(cfg.DemandGrace))
+	switch {
+	case errors.Is(err, controller.ErrDraining):
+		fail("shutting_down", "backend_unavailable", "The GPU is shutting down; send your message again in a minute.")
+		return
+	case err != nil:
+		fail("gpu_unavailable", "gpu_unavailable", unavailableMessage(snap.Unavailable))
+		return
+	}
+	g.putStatus(start, snap)
+
+	phrases := cfg.TickerPhrases
+	if len(phrases) == 0 {
+		phrases = defaultTickerPhrases
+	}
+	var tr progressTracker
+	lastLine, lastBeat, lastPhrase := start, start, -1
+	tick := g.deps.Clock.NewTicker(pollEvery)
+	defer tick.Stop()
+	for {
+		now := g.deps.Clock.Now()
+		if g.shuttingDown.Load() {
+			fail("shutting_down", "shutting_down", "The service is restarting; send your message again in a minute.")
+			return
+		}
+		s := g.cachedStatus(now)
+		for _, l := range tr.lines(s) {
+			if !send(progressChunk(alias, l, now)) {
+				return
+			}
+			lastLine = now
+		}
+		switch {
+		case s.Ready:
+			rt, err := g.deps.Controller.Admit(s.Generation)
+			if err != nil {
+				fail("gpu_unavailable", "backend_unavailable", "The GPU stopped before it could answer; send your message again.")
+				return
+			}
+			defer g.deps.Controller.RequestEnd(s.Generation)
+			g.metrics.waitSeconds.Observe(now.Sub(start).Seconds())
+			g.metrics.coldStartOutcomesTotal.WithLabelValues("ready").Inc()
+			recorderOf(w).gen = s.Generation
+			g.proxyChat(w, r, s.Generation, rt, body, true, true)
+			return
+		case startFailed(s):
+			fail("gpu_unavailable", "gpu_unavailable", unavailableMessage(s.Unavailable))
+			return
+		case now.Sub(start) >= cfg.MaxWait:
+			// The start continues after the stream ends, so keep it alive long enough for a resend.
+			_, _ = g.deps.Controller.Demand(r.Context(), key, now.Add(longestColdStart+cfg.DemandGrace))
+			fail("gpu_cold_start", "gpu_cold_start", "The GPU is still starting. Send your message again within 5 minutes.")
+			return
+		}
+		if now.Sub(lastBeat) >= cfg.HeartbeatInterval {
+			if !send(": keep-alive\n\n") {
+				return
+			}
+			lastBeat = now
+			if _, err := g.deps.Controller.Demand(r.Context(), key, now.Add(cfg.DemandGrace)); err != nil && !errors.Is(err, controller.ErrDraining) {
+				fail("gpu_unavailable", "gpu_unavailable", unavailableMessage(g.deps.Controller.Status().Unavailable))
+				return
+			}
+		}
+		if now.Sub(lastLine) >= cfg.TickerInterval {
+			lastPhrase = nextPhrase(phrases, lastPhrase)
+			if !send(progressChunk(alias, phrases[lastPhrase], now)) {
+				return
+			}
+			lastLine = now
+		}
+		select {
+		case <-r.Context().Done():
+			recorderOf(w).outcome = "client_gone"
+			g.metrics.coldStartOutcomesTotal.WithLabelValues("client_gone").Inc()
+			return
+		case <-tick.C:
+		}
+	}
 }

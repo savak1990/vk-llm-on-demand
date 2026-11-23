@@ -104,3 +104,9 @@ func (f *fakeController) snapshot() (admitCalls, endCalls []int64) {
 type fakeRoundTripper func(*http.Request) (*http.Response, error)
 
 func (f fakeRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func (f *fakeController) statusCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.statusCalls
+}

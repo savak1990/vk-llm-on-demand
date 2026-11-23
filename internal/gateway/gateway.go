@@ -63,6 +63,10 @@ type Gateway struct {
 	metrics *gatewayMetrics
 
 	held atomic.Int64
+
+	statusMu sync.Mutex
+	statusAt time.Time
+	statusSn controller.Snapshot
 }
 
 func New(d Deps) (*Gateway, error) {

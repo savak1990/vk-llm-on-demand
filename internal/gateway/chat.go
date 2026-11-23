@@ -140,10 +140,10 @@ func (g *Gateway) handleChatCompletions(w http.ResponseWriter, r *http.Request) 
 	rec.gen = gen
 	defer g.deps.Controller.RequestEnd(gen)
 
-	g.proxyChat(w, r, gen, rt, body, stream)
+	g.proxyChat(w, r, gen, rt, body, stream, false)
 }
 
-func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, rt http.RoundTripper, body map[string]json.RawMessage, stream bool) {
+func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, rt http.RoundTripper, body map[string]json.RawMessage, stream, held bool) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "server_error", "internal_error", "internal error")
@@ -185,6 +185,10 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 		if outcome == outcomeUpstreamError {
 			g.deps.Controller.ReportUpstreamFailure(gen)
 		}
+		if held {
+			g.writeInStreamOutcome(w, http.NewResponseController(w), outcome)
+			return
+		}
 		g.writePreHeaderOutcome(w, outcome)
 		return
 	}
@@ -197,11 +201,21 @@ func (g *Gateway) proxyChat(w http.ResponseWriter, r *http.Request, gen int64, r
 		// forwards as-is. Headers still haven't been sent to the
 		// client, so this is plain too, regardless of stream.
 		g.deps.Controller.ReportUpstreamFailure(gen)
+		if held {
+			setCodeOverride(w, "stream_error")
+			_, _ = io.WriteString(w, errorTail("upstream_error", "the worker rejected the request"))
+			return
+		}
 		writeError(w, http.StatusBadGateway, "server_error", "upstream_error", "the worker rejected the request")
 	case resp.StatusCode >= 400:
+		if held {
+			setCodeOverride(w, "stream_error")
+			_, _ = io.WriteString(w, errorTail("upstream_error", "the worker rejected the request"))
+			return
+		}
 		g.copyUpstream4xx(w, resp)
 	case stream:
-		g.streamUpstream(w, resp, gen, r, start)
+		g.streamUpstream(w, resp, gen, r, start, held)
 	default:
 		g.copyUpstream2xx(w, resp, r, start)
 	}
@@ -371,9 +385,11 @@ func inStreamError(code, message string) string {
 // streamUpstream streams a confirmed 2xx SSE response to the client,
 // observing the first-token latency and forwarding every error after
 // the 200/text-event-stream headers go out through writeInStreamOutcome.
-func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen int64, r *http.Request, start time.Time) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.WriteHeader(http.StatusOK)
+func (g *Gateway) streamUpstream(w http.ResponseWriter, resp *http.Response, gen int64, r *http.Request, start time.Time, held bool) {
+	if !held {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}
 	rc := http.NewResponseController(w)
 
 	firstByte := true
