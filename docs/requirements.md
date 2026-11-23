@@ -168,4 +168,6 @@ host (ADR 0014, P2), `vk-llm cache *`, multiple providers, multiple
 models, dynamic model selection, vLLM, multi-GPU, more than one worker,
 agent orchestration, RAG, warm pools, CRDs and an operator, GPU nodes
 joining the cluster, OAuth or per-user quotas, a web dashboard,
-OpenHands and Open WebUI integrations. See [`roadmap.md`](roadmap.md).
+OpenHands integration. See [`roadmap.md`](roadmap.md).
+
+Open WebUI as a household chat front end moved into scope with CORE-230.

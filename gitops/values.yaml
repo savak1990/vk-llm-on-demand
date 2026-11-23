@@ -31,3 +31,9 @@ model:
 gpu: RTX 6000Ada
 worker:
   image: ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:0a9f6c7cfe5a6b90b6c048b7a86865bf55a88af34bada927482eab2ef5f25b4a
+
+# Open WebUI sends no max_tokens, so the cap is the real output limit, and
+# every household member shares its one key.
+gateway:
+  maxTokensCap: 16384
+  rateLimitPerKeyRPM: 100

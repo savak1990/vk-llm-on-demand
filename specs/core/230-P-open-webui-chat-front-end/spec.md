@@ -140,17 +140,13 @@ these settings reverts on restart.
 | `WEB_SEARCH_RESULT_COUNT` | `3` | |
 | `BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL` | `true` | results go to the model directly; no embedding model runs in the pod |
 | `RAG_EMBEDDING_ENGINE` | `openai` | the local SentenceTransformers model is never loaded (it costs 500–800 MB); nothing calls it, because uploads are off and search bypasses embedding |
-| file uploads | off | no volume; a file over 1 MiB gets 413 from the gateway |
-| per-user API keys | off | one static key reaches the gateway |
+| `USER_PERMISSIONS_CHAT_FILE_UPLOAD` | `false` | no volume; a file over 1 MiB gets 413 from the gateway; admins bypass user permissions |
+| `ENABLE_API_KEYS`, `USER_PERMISSIONS_FEATURES_API_KEYS` | `false` | one static key reaches the gateway |
 | `GLOBAL_LOG_LEVEL` | `INFO` | `DEBUG` logs request bodies, and Alloy ships every pod log to Loki |
-| `AIOHTTP_CLIENT_TIMEOUT` | `660` | a long streamed answer must not be cut before the gateway's 10-minute generation limit |
 
-The names above, except the two rows below, were checked in Open WebUI
-v0.13.4's `backend/open_webui/config.py` and `env.py` on 2026-11-22. To
-check at implementation: the exact names for "file uploads off" and
-"per-user API keys off", and the default and name of
-`AIOHTTP_CLIENT_TIMEOUT`. Slim images exist since v0.6.26: about 200 MB
-against about 1.6 GB, with no bundled models.
+All names were checked in v0.13.4's `config.py` and `env.py` on 2026-11-23;
+the tag `v0.13.4-slim` exists on GHCR. Slim images exist since v0.6.26:
+about 200 MB against about 1.6 GB, with no bundled models.
 
 The worker runs llama-server with `--reasoning-format deepseek`, so the
 model's thinking arrives in `reasoning_content` and Open WebUI shows it as
@@ -333,10 +329,7 @@ deployed only after that session confirms room on the cluster.
 
 | Question | Why it matters | Default until checked |
 |---|---|---|
-| Is the slim tag for v0.13.4 named `v0.13.4-slim`? | image pin | read the GHCR tag list at implementation |
 | Exact chart keys for the subchart and Redis toggles in 18.4.0 | R1 | read `helm show values` at implementation |
-| Setting names for "uploads off" and "API keys off" in v0.13.4 | R14 | read `config.py` at implementation |
-| Default and name of `AIOHTTP_CLIENT_TIMEOUT` in v0.13.4 | long answers | set 660 |
 | Does Open WebUI's live connection (socket.io) work through Envoy Gateway v1.2.1 without extra settings? | streaming in the UI | assume yes; AC3 proves it |
 | Does Conduit work with Open WebUI v0.13.4? | AC2 | assume yes |
 | Measured memory of Open WebUI slim with no embedding model | capacity | 256 Mi request, 768 Mi limit |
