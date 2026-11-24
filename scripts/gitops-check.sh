@@ -83,5 +83,9 @@ if yq -e 'select(.kind == "PersistentVolumeClaim" or .kind == "StatefulSet")' "$
   echo "gitops-check: chat must not render a PVC or StatefulSet (no Redis, no volume)" >&2
   exit 1
 fi
+if yq 'select(.kind == "Deployment" and .metadata.name == "open-webui") | .spec.template.spec.initContainers[].command[]' "$tmp/chat.yaml" | grep -qF 'data/*'; then
+  echo "gitops-check: copy-app-data must not glob /app/backend/data/*: the slim image ships it empty and the init container fails" >&2
+  exit 1
+fi
 
 echo "gitops-check: ok (chart $version)"
