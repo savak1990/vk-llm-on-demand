@@ -3,7 +3,7 @@ id: "CORE-280"
 status: "IN_PROGRESS"
 updated: "2026-11-24"
 depends_on: ["CORE-120", "CORE-130", "CORE-160"]
-adrs: ["0020", "0008", "0009", "0012", "0016", "0017"]
+adrs: ["0021", "0008", "0009", "0012", "0016", "0017"]
 ---
 
 # 280 — A dev environment that follows `main`
@@ -13,7 +13,7 @@ pull requests; AC1, AC2, AC4 and AC7 are proven now (see Evidence). AC3,
 AC5 and AC6 need a live deploy and can only run after both pull requests
 merge, so this spec carries DONE and folder letter `D` in a follow-up
 pull request once that run is recorded. Decisions are recorded in
-[ADR 0020](../../../docs/adr/0020-dev-installation-follows-main.md).
+[ADR 0021](../../../docs/adr/0021-dev-installation-follows-main.md).
 Part of the work lands in `vk-lab-platform` as its own pull request.
 
 **Complexity:** M — one new CI job and two scripts here; a generic deploy
@@ -158,23 +158,23 @@ same for both. `scripts/gpu-control.sh` does not change.
 
 - R1. Every merge to `main` that publishes a new version MUST install that
   exact chart version and image into `llm-dev`, with no manual step
-  (ADR 0020 §1).
+  (ADR 0021 §1).
 - R2. A merge that changes only `gitops/`, `docs/` or `specs/` MUST NOT
   redeploy dev (today's `paths-ignore`).
 - R3. Production MUST change only through a merged PR that edits
   `gitops/values.yaml`, and MUST pin a clean `0.x.y` release; no workflow
-  MUST write to namespace `llm` or edit that file (ADR 0020 §1).
+  MUST write to namespace `llm` or edit that file (ADR 0021 §1).
 - R4. The deploy job MUST run in the GitHub Environment `gpu-control` and
   reach the cluster only through `vk-llm-ci-role` and OIDC; no long-lived
-  cluster credential MUST be stored in GitHub (ADR 0020 §2).
+  cluster credential MUST be stored in GitHub (ADR 0021 §2).
 - R5. The deploy credential MUST be able to write only in `llm-dev` and
   MUST NOT read or write namespace `llm`; its rules MUST cover every kind
   the dev values render and no other.
 - R6. Dev MUST use production's client key, management token, worker seed,
   SSH key and Vast.ai API key. A dev token is a production token; this is
-  accepted (ADR 0020 §4).
+  accepted (ADR 0021 §4).
 - R7. Dev MUST run in explicit mode with production's budget, price cap and
-  idle timeout (ADR 0020 §3).
+  idle timeout (ADR 0021 §3).
 - R8. Dev MUST be reachable at `llm-dev.<fqdn>` with the existing wildcard
   certificate and external-dns, with the same request timeout as
   production's policy, rendered from the same template.
@@ -192,7 +192,7 @@ same for both. `scripts/gpu-control.sh` does not change.
 - R14. After helm succeeds, the job MUST call the three read-only endpoints
   and MUST fail on any non-200 after 5 minutes of retries; it MUST NOT call
   any endpoint that starts, stops or reconfigures a GPU, nor send inference
-  (ADR 0020 §5).
+  (ADR 0021 §5).
 - R15. Dev MUST enable the ServiceMonitor and MUST NOT install a
   PrometheusRule or dashboard; production's cover both namespaces.
 - R16. `gpu-control.yml` MUST take a `target` input (`prod` default, `dev`)
@@ -236,7 +236,7 @@ same for both. `scripts/gpu-control.sh` does not change.
 
 ## Definition of done
 
-Both pull requests merged; AC1–AC7 recorded under Evidence; ADR 0020
+Both pull requests merged; AC1–AC7 recorded under Evidence; ADR 0021
 Accepted; `docs/testing-strategy.md` no longer says "one installation";
 status DONE and folder letter `D` in the same pull request.
 

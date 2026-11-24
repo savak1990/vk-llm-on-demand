@@ -2,7 +2,7 @@
 
 Two installations share one provider account: production in `llm`, pinned
 by a gitops PR, and dev in `llm-dev`, installed by `deploy.yml` on every
-code merge to `main` (ADR 0020). Each lists and destroys only instances
+code merge to `main` (ADR 0021). Each lists and destroys only instances
 labelled with its own `installationId`. There are no `-pr` installations
 and no preview workflow.
 

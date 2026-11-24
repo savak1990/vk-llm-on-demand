@@ -7,7 +7,7 @@ scanning jobs in the PR gate and a GoReleaser-built `vk-llm` release in the
 tag job. The chart's `existingSecrets.apiKeys` Secret now carries
 `client-keys`, `management-tokens` and `worker-seed` (ADR 0012 §3). The
 rejected alternative "A dev namespace deployed by CI" is superseded by
-ADR 0020 (link [0020-dev-installation-follows-main.md](0020-dev-installation-follows-main.md)).
+ADR 0021 (link [0021-dev-installation-follows-main.md](0021-dev-installation-follows-main.md)).
 
 ## Context
 
@@ -35,7 +35,7 @@ metadata. The initial seed tag is `v0.1.0`, created by spec 010.
 |---|---|---|
 | `ci.yml` | ahorro | jobs `changes`, `go`, `image`, `helm` (lint, kubeconform, package), `workflows`, `repo` (specs-check), `ci-ok`. No Flutter, no AWS OIDC, no domain-check (no domain is ever templated here). |
 | `publish.yml` | ahorro | one image `gpu-on-demand`, one chart; same copy-or-build logic |
-| `deploy.yml` | ahorro | on push to `main`: version + publish prerelease, and since ADR 0020, `helm upgrade` into `llm-dev`; Argo owns only `llm`. |
+| `deploy.yml` | ahorro | on push to `main`: version + publish prerelease, and since ADR 0021, `helm upgrade` into `llm-dev`; Argo owns only `llm`. |
 | `release.yml` | ahorro | `workflow_dispatch` with `bump`; publish, then tag |
 | `dependabot.yml` | ahorro | github-actions, docker, gomod |
 
