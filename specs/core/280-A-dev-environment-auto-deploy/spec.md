@@ -1,16 +1,19 @@
 ---
 id: "CORE-280"
-status: "READY"
-updated: "2026-11-23"
+status: "IN_PROGRESS"
+updated: "2026-11-24"
 depends_on: ["CORE-120", "CORE-130", "CORE-160"]
 adrs: ["0019", "0008", "0009", "0012", "0016", "0017"]
 ---
 
 # 280 — A dev environment that follows `main`
 
-**Status note:** READY (2026-11-23). Requirements agreed earlier the same
-day; design agreed in a grilling session the same day. Decisions are
-recorded in [ADR 0019](../../../docs/adr/0019-dev-installation-follows-main.md).
+**Status note:** IN_PROGRESS (2026-11-24). Implementation is in on both
+pull requests; AC1, AC2, AC4 and AC7 are proven now (see Evidence). AC3,
+AC5 and AC6 need a live deploy and can only run after both pull requests
+merge, so this spec carries DONE and folder letter `D` in a follow-up
+pull request once that run is recorded. Decisions are recorded in
+[ADR 0019](../../../docs/adr/0019-dev-installation-follows-main.md).
 Part of the work lands in `vk-lab-platform` as its own pull request.
 
 **Complexity:** M — one new CI job and two scripts here; a generic deploy
@@ -249,4 +252,37 @@ None. Closed on 2026-11-23:
 
 ## Evidence
 
-None yet.
+Provable now, without a live deploy:
+
+- **AC1.** `make gitops-check` renders production's values and dev's values
+  from the pinned OCI chart and diffs them with `host`, `prometheusRule`
+  and `dashboard` stripped — they match. It then additionally renders dev's
+  values against the main-branch chart in `deploy/helm/gpu-on-demand`
+  (not the pinned OCI chart, which is what `deploy-dev.sh` actually
+  installs) and asserts the same kind list:
+  `ConfigMap Deployment HTTPRoute Role RoleBinding Service ServiceAccount
+  ServiceMonitor`. Proven to bite: adding a throwaway `PodDisruptionBudget`
+  template under `deploy/helm/gpu-on-demand/templates/` makes
+  `make gitops-check` fail with `dev renders kinds '... PodDisruptionBudget
+  ...'`; removing it passes again (`gitops-check: ok (chart 0.2.0)`).
+- **AC2.** `go test ./test/deploydev/... -run TestDeployDevPassesUnreachableThrough -v`
+  stubs `aws` to return `ParameterNotFound` and asserts `deploy-dev.sh`
+  exits 2: `--- PASS: TestDeployDevPassesUnreachableThrough`.
+- **AC4 (partly).** The platform's golden render
+  (`./scripts/gitops-render-check.sh update`, SHARED-220) shows the
+  `llm-deploy` Role and RoleBinding exist only in namespace `llm-dev`,
+  scoped to the kinds R5 lists; no Role or RoleBinding for `llm-deploy`
+  renders in namespace `llm`. The live `kubectl auth can-i` probe (AC4's
+  full text) needs a real cluster and is deferred to the post-merge PR.
+- **AC7.** `git diff origin/main...HEAD -- tests/golden/gitops-aws` in
+  `vk-lab-platform` shows 18 changed Ahorro golden files (comment rewording
+  only — `git diff ... | grep '^[+-][^+-]' | grep -v '^[+-]#'` is empty for
+  each one); every changed `+`/`-` line starts with `#`. Names, namespaces
+  and rules are unchanged. The replicasets fix in this same pull request
+  (finding 10) only re-ran `gitops-render-check.sh update` on top of that,
+  which changed exactly the three `Role__llm-dev__llm-deploy.yaml` variants
+  and touched no Ahorro file.
+
+Deferred to a post-merge pull request, once both pull requests have merged
+and one real `deploy.yml` run and one `gpu-control status` run have
+happened: AC3, AC5, AC6, and the status/folder-letter move to DONE/`D`.

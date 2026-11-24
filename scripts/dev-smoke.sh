@@ -9,7 +9,7 @@ set -euo pipefail
 
 if [[ "$ENDPOINT" != https://* ]]; then
   echo "dev-smoke: ENDPOINT must start with https://" >&2
-  exit 2
+  exit 1
 fi
 ENDPOINT=${ENDPOINT%/}
 

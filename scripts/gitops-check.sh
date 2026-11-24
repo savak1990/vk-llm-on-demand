@@ -104,7 +104,17 @@ helm template gpu-on-demand oci://ghcr.io/savak1990/vk-llm-on-demand/charts/gpu-
   --version "$version" --namespace llm-dev -f "$tmp/dev-values.yaml" > "$tmp/dev.yaml"
 kinds="$(yq -N '.kind' "$tmp/dev.yaml" | sort -u | tr '\n' ' ')"
 [ "$kinds" = "ConfigMap Deployment HTTPRoute Role RoleBinding Service ServiceAccount ServiceMonitor " ] || {
-  echo "gitops-check: dev renders kinds '$kinds'; update the platform's llm-deploy Role before adding one" >&2
+  echo "gitops-check: dev renders kinds '$kinds' from the pinned OCI chart; update the platform's llm-deploy Role before adding one" >&2
+  exit 1
+}
+
+# deploy-dev.sh deploys the chart on main, not production's pinned OCI
+# version, so the kind list that matters is the local chart's, not the
+# one above.
+helm template gpu-on-demand deploy/helm/gpu-on-demand --namespace llm-dev -f "$tmp/dev-values.yaml" > "$tmp/dev-local.yaml"
+localkinds="$(yq -N '.kind' "$tmp/dev-local.yaml" | sort -u | tr '\n' ' ')"
+[ "$localkinds" = "ConfigMap Deployment HTTPRoute Role RoleBinding Service ServiceAccount ServiceMonitor " ] || {
+  echo "gitops-check: dev renders kinds '$localkinds' from the main-branch chart; update the platform's llm-deploy Role before adding one" >&2
   exit 1
 }
 

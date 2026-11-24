@@ -107,6 +107,15 @@ func TestKubeconfigRejectsUnauthorizedKubectl(t *testing.T) {
 	}
 }
 
+func TestKubeconfigRejectsLoggedInError(t *testing.T) {
+	dir := stubAWSOK(t)
+	addStub(t, dir, "kubectl", "#!/usr/bin/env bash\necho 'error: You must be logged in to the server (the server has asked for the client to provide credentials)' >&2\nexit 1\n")
+	code, _ := run(t, dir, repoScript(t, "kubeconfig.sh"))
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+}
+
 func TestKubeconfigTimeoutStaysUnreachable(t *testing.T) {
 	dir := stubAWSOK(t)
 	addStub(t, dir, "kubectl", "#!/usr/bin/env bash\necho 'Unable to connect to the server: dial tcp: i/o timeout' >&2\nexit 1\n")

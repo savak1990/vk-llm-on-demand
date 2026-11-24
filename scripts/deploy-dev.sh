@@ -2,6 +2,7 @@
 # Usage: deploy-dev.sh <version> <sha>
 # Exit 2: the cluster is not reachable (a normal lab state); any other non-zero is a real failure.
 set -euo pipefail
+umask 077
 
 REGION=eu-west-1
 NAMESPACE=llm-dev

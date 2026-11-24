@@ -42,6 +42,7 @@ token="$(param token)"
 
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
   echo "::add-mask::$token"
+  echo "::add-mask::$endpoint"
 fi
 
 mkdir -p "$(dirname "$TARGET")"
@@ -72,7 +73,7 @@ command -v kubectl >/dev/null || { echo "kubeconfig: kubectl not found" >&2; exi
 # kubectl's own stderr may name the endpoint, so it is matched, never printed.
 if ! kube_err="$(KUBECONFIG="$TARGET" kubectl version --request-timeout=10s 2>&1 >/dev/null)"; then
   case "$kube_err" in
-    *Unauthorized*|*Forbidden*|*x509*|*certificate*)
+    *Unauthorized*|*Forbidden*|*x509*|*certificate*|*"logged in"*)
       echo "kubeconfig: the cluster rejected the credential. Run 'make up' in vk-lab-platform, then retry." >&2
       rm -f "$TARGET"
       exit 1

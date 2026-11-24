@@ -60,6 +60,14 @@ credential, and Argo CD owns only the released namespace.
   it up on the next code merge.
 - After a cluster rebuild, dev returns when the latest `deploy.yml` run is
   re-run.
+- The `llm-deploy` identity has full verbs on Secrets in `llm-dev`, since
+  Helm's own release storage needs them; those Secrets include the Vast.ai
+  API key and the SSH key. Anyone who can run a workflow in the
+  `gpu-control` Environment can therefore reach the Vast.ai key. Ahorro's
+  deploy credential has the same shape.
+- After a cluster rebuild, a dev GPU that was already running is not reaped
+  until `deploy.yml` is re-run or the worker's own idle timer fires;
+  production's GPU returns through Argo CD instead.
 
 ## Alternatives considered
 

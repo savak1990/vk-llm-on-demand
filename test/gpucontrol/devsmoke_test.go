@@ -78,8 +78,8 @@ func TestDevSmokeFailsAfterDeadline(t *testing.T) {
 func TestDevSmokeRejectsPlainHTTP(t *testing.T) {
 	f := newFake(t)
 	r := runNamed(t, "dev-smoke.sh", smokeEnv(f, map[string]string{"ENDPOINT": "http://example.test"}))
-	if r.exitCode != 2 {
-		t.Fatalf("exit = %d, want 2", r.exitCode)
+	if r.exitCode != 1 {
+		t.Fatalf("exit = %d, want 1", r.exitCode)
 	}
 }
 
