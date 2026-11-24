@@ -12,6 +12,7 @@ coverage.out
 # Helm
 dist/
 *.tgz
+!chat/charts/*.tgz
 
 # Local kubeconfigs and key material never land in the tree.
 .kube/

@@ -47,6 +47,7 @@ jobs:
               - 'test/kind/**'
               - 'scripts/check-rbac.sh'
               - 'gitops/**'
+              - 'chat/**'
               - 'scripts/gitops-check.sh'
             workflows:
               - '.github/**'

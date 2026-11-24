@@ -334,6 +334,10 @@ separate binary from GitHub Releases (ADR 0013). The GitHub Actions
 workflow lives in this repository and needs one secret and one variable
 (ADR 0012 §5).
 
+A second, unpublished chart, `chat/` (Open WebUI and SearXNG), lives in
+this repository too; the platform's pointer Application `vk-llm-chat`
+renders it directly, with no GHCR package (ADR 0020).
+
 ## 12. Decision summary
 
 | # | Decision | Status |
@@ -357,6 +361,7 @@ workflow lives in this repository and needs one secret and one variable
 | [0017](adr/0017-gpu-control-endpoint-from-ssm-fqdn.md) | `gpu-control` builds its endpoint from the lab fqdn in SSM | Accepted |
 | [0018](adr/0018-offer-selection-by-session-cost.md) | Offers ranked by estimated session cost; caps on download, storage, disk | Accepted |
 | [0019](adr/0019-on-demand-mode-progress-stream.md) | On-demand mode: progress stream, non-streaming refusal, unattended-start cancel | Accepted |
+| [0020](adr/0020-chat-front-end-as-a-second-app.md) | Chat front end (Open WebUI, SearXNG) is a second, unpublished chart and a second Argo app | Accepted |
 
 ## 13. Unresolved
 

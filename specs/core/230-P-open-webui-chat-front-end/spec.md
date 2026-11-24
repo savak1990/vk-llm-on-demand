@@ -3,15 +3,17 @@ id: "CORE-230"
 status: "READY"
 updated: "2026-11-23"
 depends_on: ["CORE-060", "CORE-110", "CORE-130"]
-adrs: ["0009", "0010", "0012"]
+adrs: ["0009", "0010", "0012", "0020"]
 ---
 
 # 230 — Open WebUI and SearXNG: a household chat front end
 
 **Status note:** READY. Design agreed with the user on 2026-11-22/23 and
 re-checked on 2026-11-23 (authorization, hosting, features, logs, limits,
-acceptance). Not implemented. Like CORE-130, the spec lives here and most
-changes are a pull request against `vk-lab-platform`.
+acceptance). Not implemented. Like CORE-130, the spec lives here. The chat
+app itself is this repository's `chat/` chart (ADR 0020); the pull request
+against `vk-lab-platform` adds the shared services: secrets, database,
+namespace, AppProject and pointer `vk-llm-chat`, traffic policies.
 
 **Complexity:** M — one upstream chart, one small Deployment, one new
 database, five secrets, two repositories.
@@ -33,10 +35,9 @@ cluster rebuild. The GPU is still started by hand (`vk-llm start`,
 
 In `vk-lab-platform` (one pull request, designed here):
 
-- A namespace `chat` with an Argo `Application` for the upstream Open WebUI
-  chart, a SearXNG `Deployment`/`Service`/`ConfigMap`, an `HTTPRoute` and a
-  `BackendTrafficPolicy`, under `gitops/templates/platform/shared/chat/`,
-  guarded off the `local` target.
+- A namespace `chat` with ExternalSecret `open-webui-env`; the AppProject
+  and pointer Application `vk-llm-chat` (path `chat` of this repository);
+  the two `BackendTrafficPolicy` objects; guarded off the `local` target.
 - A Postgres role and database `openwebui` in the existing `lab-postgres`.
 - Five SSM parameters with their ciphertext, Terraform, IAM ARNs and
   ExternalSecrets.
@@ -46,6 +47,8 @@ In `vk-lab-platform` (one pull request, designed here):
 
 In this repository:
 
+- `chat/`: an unpublished Helm chart — vendored `open-webui` 18.4.0,
+  SearXNG, the two HTTPRoutes and ConfigMap `open-webui-config` (ADR 0020).
 - `config.gateway.maxTokensCap: 16384` and
   `config.gateway.rateLimitPerKeyRPM: 100` in `gitops/`.
 - `docs/requirements.md` §13 amended: it lists "OpenHands and Open WebUI
@@ -79,12 +82,12 @@ Laptop browser ───────────────────┴─�
 
 | Component | Source | Notes |
 |---|---|---|
-| Open WebUI | Helm repo `https://helm.openwebui.com/`, chart `open-webui`, version **18.4.0** (app v0.13.4), pinned; image tag `v0.13.4-slim` | Argo `Application` in `argocd`, `project: default`, like Grafana and Loki. Ollama, Pipelines and Tika subcharts off; no Redis; `persistence.enabled: false`; strategy Recreate (one replica, one database), readiness and startup probes on /health |
-| SearXNG | upstream image, pinned by digest | `Deployment` + `Service` (ClusterIP, port 8080) + `ConfigMap` `settings.yml` with `search.formats: [html, json]` and the limiter off; `GRANIAN_WORKERS=1`; no `HTTPRoute` |
+| Open WebUI | this repository's `chat/` chart, dependency `open-webui` **18.4.0** (app v0.13.4) vendored in `chat/charts/`; image tag `v0.13.4-slim` | rendered by the platform pointer `vk-llm-chat` (project `vk-llm-chat`, namespace `chat`). Ollama, Pipelines and Tika subcharts off; no Redis; `persistence.enabled: false`; strategy Recreate (one replica, one database), readiness and startup probes on /health |
+| SearXNG | this repository's `chat/` chart, upstream image, pinned by digest | `Deployment` + `Service` (ClusterIP, port 8080) + `ConfigMap` `settings.yml` with `search.formats: [html, json]` and the limiter off; `GRANIAN_WORKERS=1`; no `HTTPRoute` |
 | Database | `lab-postgres` (CNPG, `cnpg-system`) | `spec.managed.roles` gains `openwebui` (password from an ExternalSecret in `cnpg-system`); a CNPG `Database` `openwebui` owned by it |
-| Route | `HTTPRoute` `chat.<fqdn>` → Open WebUI service, parent `platform-gateway`/`envoy`/`https` | DNS and certificate come from the existing wildcard and external-dns |
-| Login route | `HTTPRoute` `open-webui-auth`, same hostname, `PathPrefix /api/v1/auths/` | the longer prefix wins over the main route; every `/api/v1/auths/*` endpoint matches, including the session check on page load |
-| Traffic policies | `BackendTrafficPolicy` on each route | main route: `timeout.http.requestTimeout: 1200s`, the same bound as the GPU route: in on-demand mode a request can wait up to 600 s for the GPU to start, then generate for up to 600 s; login route: local rate limit 20 req/s plus the same timeout |
+| Route | `HTTPRoute` `chat.<fqdn>` → Open WebUI service, parent `platform-gateway`/`envoy`/`https` | DNS and certificate come from the existing wildcard and external-dns. Defined in `chat/templates/routes.yaml` |
+| Login route | `HTTPRoute` `open-webui-auth`, same hostname, `PathPrefix /api/v1/auths/` | the longer prefix wins over the main route; every `/api/v1/auths/*` endpoint matches, including the session check on page load. Defined in `chat/templates/routes.yaml` |
+| Traffic policies | `BackendTrafficPolicy` on each route, defined in the platform | main route: `timeout.http.requestTimeout: 1200s`, the same bound as the GPU route: in on-demand mode a request can wait up to 600 s for the GPU to start, then generate for up to 600 s; login route: local rate limit 20 req/s plus the same timeout |
 
 Why `chat` and not `llm`: either works (gpu-on-demand has its own
 ServiceAccount and no NetworkPolicy is active). A separate namespace keeps
@@ -118,6 +121,11 @@ guessing script, it does not stop one.
 `ENABLE_PERSISTENT_CONFIG=false`: the values below win on every start, so
 Git is the source of truth. A change made in the admin panel to one of
 these settings reverts on restart.
+
+`WEBUI_URL` comes from ConfigMap `open-webui-config`, rendered from `fqdn`.
+`DEFAULT_MODELS` and `TASK_MODEL_EXTERNAL` are in the pod spec, so a model
+change rolls the pod; `make gitops-check` keeps them equal to
+`gitops/values.yaml` `model.alias`.
 
 | Setting | Value | Why |
 |---|---|---|
@@ -233,8 +241,9 @@ deployed only after that session confirms room on the cluster.
 
 ## Requirements
 
-- R1. Open WebUI MUST be deployed from the pinned upstream chart 18.4.0 by
-  an Argo `Application` that never renders on the `local` target.
+- R1. Open WebUI MUST be deployed from the vendored chart 18.4.0 in this
+  repository's `chat/` chart, rendered by the platform pointer
+  `vk-llm-chat`, which never renders on the `local` target.
 - R2. All accounts and chats MUST be stored in the `openwebui` database in
   `lab-postgres`; Open WebUI MUST NOT use a persistent volume.
 - R3. Self-registration MUST be off from the first start; the admin account
@@ -254,7 +263,8 @@ deployed only after that session confirms room on the cluster.
   search-query generation and web search MUST be on.
 - R11. The gateway's output cap MUST be 16384 tokens.
 - R12. The platform's render check and aws golden MUST include the new
-  objects.
+  platform objects (namespace, ExternalSecrets, AppProject, pointer,
+  traffic policies).
 - R13. Both chat routes MUST carry a 1200 s request timeout; only the login
   route (`/api/v1/auths/`) MUST carry a 20 req/s local rate limit.
 - R14. File uploads and per-user API keys MUST be off.
@@ -263,6 +273,8 @@ deployed only after that session confirms room on the cluster.
 - R16. The gateway's per-key rate limit MUST be 100 requests per minute.
 - R17. The `client-keys` template MUST keep `management-tokens` and
   `worker-seed` in the Secret.
+- R18. The rendered `DEFAULT_MODELS` and `TASK_MODEL_EXTERNAL` MUST equal
+  `gitops/values.yaml` `model.alias`.
 
 ## Implementation steps
 
@@ -274,17 +286,19 @@ deployed only after that session confirms room on the cluster.
    1 to change in `rolesanywhere`.
 3. Same PR: `cnpg-system` ExternalSecret and managed role, `Database` CR.
    Check: render check green.
-4. Same PR: namespace `chat`, ExternalSecrets, Open WebUI `Application`,
-   SearXNG manifests, `HTTPRoute`, `BackendTrafficPolicy`; `client-keys`
-   template with `mergePolicy: Merge`. Check: render check green, golden
-   updated; the rendered `vk-llm-api-token` keeps `management-tokens` and
-   `worker-seed`.
-5. This repository: `maxTokensCap` 16384, `rateLimitPerKeyRPM` 100,
+4. Same PR: namespace `chat` and ExternalSecret, `client-keys` template,
+   AppProject and pointer `vk-llm-chat`, traffic policies. Check: render
+   check green, golden updated; the rendered `vk-llm-api-token` keeps
+   `management-tokens` and `worker-seed`.
+5. This repository: `chat/` chart, ADR 0020 (merged before the platform
+   PR).
+6. This repository: `maxTokensCap` 16384, `rateLimitPerKeyRPM` 100,
    requirements §13. Check: `make gitops-check specs-check`.
-6. Wait for HETZ-176's confirmation of room on the cluster.
-7. Operator: apply `persistent-up` and `bootstrap-up`, merge both PRs.
-8. Acceptance without the GPU: AC1, AC2 (browser), AC5, AC6, AC8, AC10.
-9. One GPU session of 60 minutes or less (`vk-llm start` … `vk-llm stop`,
+7. Wait for HETZ-176's confirmation of room on the cluster.
+8. Operator: apply `persistent-up` and `bootstrap-up`; merge this
+   repository's PR, then the platform PR.
+9. Acceptance without the GPU: AC1, AC2 (browser), AC5, AC6, AC8, AC10.
+10. One GPU session of 60 minutes or less (`vk-llm start` … `vk-llm stop`,
    cost at most $0.80): AC2 (Conduit), AC3, AC4, AC7, AC9, AC11. Paste the
    evidence below.
 
@@ -306,9 +320,9 @@ deployed only after that session confirms room on the cluster.
   chat is still present. (R2)
 - AC7. A request without `max_tokens` is clamped to 16384 (gateway log
   `max_tokens_clamped`). (R11)
-- AC8. Argo shows the new Applications `Synced`/`Healthy`; the render check
-  passes; `vk-llm status` still works with the management token. (R1, R12,
-  R17)
+- AC8. Argo shows the new Application `vk-llm-chat` `Synced`/`Healthy`; the
+  render check passes; `vk-llm status` still works with the management
+  token. (R1, R12, R17)
 - AC9. After a chat that contains a unique word, a Loki query for that word
   over the `chat` and `llm` namespaces returns no lines. (R15)
 - AC10. The upload control is absent or refused; the settings page offers

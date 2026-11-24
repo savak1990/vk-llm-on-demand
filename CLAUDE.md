@@ -12,7 +12,7 @@ Never reference specific documents (specs, ADRs, tickets) in code comments. Expl
 
 `vk-llm-on-demand` is a Go control plane that exposes an OpenAI-compatible API and rents a GPU instance (Vast.ai first) that the user starts explicitly and that a 30-minute rolling inactivity timeout or `vk-llm stop` releases. It is deployed onto the separate platform repository `vk-lab-platform`, but its Helm chart must install into any Kubernetes cluster.
 
-This repository holds the control plane, the worker launch scripts, the Helm chart and the release pipeline. It MUST NOT hold platform code. Platform changes (Argo pointer Application, External Secrets policy, SSM parameters) go to `vk-lab-platform` as a pull request; spec `core/130` lists them.
+This repository holds the control plane, the worker launch scripts, the Helm charts (`gpu-on-demand`, and the `chat/` front end) and the release pipeline. It MUST NOT hold platform code. Platform changes (Argo pointer Application, External Secrets policy, SSM parameters) go to `vk-lab-platform` as a pull request; spec `core/130` lists them.
 
 The authority is `specs/core/000-P-constitution/spec.md`. Read it before non-trivial work; this file does not restate it.
 
@@ -34,6 +34,7 @@ Short version, for orientation only:
 - Every GPU is destroyed 30 minutes after the last inference finished (rolling, from readiness if none); `stop` drains for 60 s and destroys at once; no leases (ADR 0011).
 - The management API `/api/v1/gpu/*` uses management tokens; the inference API `/v1/*` uses inference keys; `vk-llm` and `gpu-control.yml` are thin clients (ADR 0012).
 - gitleaks, govulncheck and trivy run as pinned binaries in the PR gate; the `vk-llm` CLI ships via GoReleaser on GitHub Releases (ADR 0013).
+- The chat front end (Open WebUI, SearXNG) is a second Argo app: this repository's `chat/` chart, rendered by its own platform pointer (ADR 0020).
 - Persistent-volume caching and preferred-host scheduling are P2 (ADR 0014, Proposed).
 - The pipeline and chart conventions copy `vk-ahorro` (ADR 0008).
 - Runtime secrets reach the cluster through the platform's KMS ciphertext → SSM → External Secrets path (ADR 0009, Proposed).

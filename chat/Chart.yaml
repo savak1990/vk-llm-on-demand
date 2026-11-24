@@ -1,0 +1,10 @@
+apiVersion: v2
+name: vk-llm-chat
+description: Household chat front end for vk-llm-on-demand - Open WebUI and a private SearXNG.
+type: application
+# Never packaged or published: Argo renders this directory from Git.
+version: 0.1.0
+dependencies:
+  - name: open-webui
+    version: 18.4.0
+    repository: https://helm.openwebui.com/
