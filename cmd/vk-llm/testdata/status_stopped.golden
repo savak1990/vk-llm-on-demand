@@ -1,7 +1,7 @@
 Provider          vast.ai
 State             STOPPED
 GPU               —
-Model             qwen-35b (32768 tokens)
+Model             qwen-35b (32768 tokens per session)
 Ready             no
 Price             —
 Uptime            0s

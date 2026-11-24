@@ -182,7 +182,7 @@ none of which write `lastInferenceFinishedAt` (ADR 0011 §2, CORE-055 R11).
 | Provider | `provider` | — |
 | State | `state` (+ ` (desired <desired>)` when `desired` differs from what `state` implies) | — |
 | GPU | `instance.gpu` | `—` when `instance` is null |
-| Model | `model.alias`, `model.contextSize` | — |
+| Model | `model.alias`, `model.contextSize` (rendered `<alias> (<n> tokens per session)`, CORE-300) | — |
 | Ready | `ready` as `yes`/`no` | — |
 | Price | `instance.priceUSDPerHour` as `$0.71/h` | `—` |
 | Uptime | `uptimeSeconds` as `30m30s` | `0s` |

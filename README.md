@@ -336,14 +336,15 @@ worker reserves `contextSize * config.model.parallel` tokens of KV cache, so
 raising `parallel` to run more sessions at once costs more VRAM even with
 `contextSize` unchanged.
 
-VRAM is roughly the model file plus the KV cache. These are estimates, not
-measured numbers — confirm on your own GPU before relying on them. For the
-lab's `Qwen3.8-27B` Q8_0 model (28.6 GB), an `f16` KV cache costs about 12 GB
-per 262144 tokens of total reserved context; `config.model.kCacheType` and
-`config.model.vCacheType` shrink that: `q8_0` is about 53% of the `f16`
-size, `q4_0` about 28%. Four sessions of 131072 tokens each
-(`contextSize: 131072`, `parallel: 4`) with `q8_0` comes to roughly 43 GB on
-a 48 GB GPU. The K cache is more sensitive to quantization than the V
+VRAM is roughly the model file plus the KV cache plus about 1.5 GB of
+buffers. These are estimates, not measured numbers — confirm on your own
+GPU before relying on them. For the lab's `Qwen3.8-27B` Q8_0 model
+(28.6 GB), an `f16` KV cache costs about 12 GB per 262144 tokens of total
+reserved context; `config.model.kCacheType` and `config.model.vCacheType`
+shrink that: `q8_0` is about 53% of the `f16` size, `q4_0` about 28%. Four
+sessions of 131072 tokens each (`contextSize: 131072`, `parallel: 4`) with
+`q8_0` comes to roughly 28.6 + 13 + 1.5 ≈ 43 GB on a 48 GB GPU. The K cache
+is more sensitive to quantization than the V
 cache: `kCacheType: q4_0` hurts quality the most of the three settings; if
 you need to go below `q8_0`, quantize `vCacheType` first.
 

@@ -83,6 +83,22 @@ func TestBuildCreateCtxIsContextSizeTimesParallel(t *testing.T) {
 	}
 }
 
+func TestBuildCreateAsymmetricCacheTypes(t *testing.T) {
+	p := validParams()
+	p.KCacheType = "q8_0"
+	p.VCacheType = "q4_0"
+	req, err := BuildCreate(p)
+	if err != nil {
+		t.Fatalf("BuildCreate() error = %v, want nil", err)
+	}
+	if req.Env["K_CACHE_TYPE"] != "q8_0" {
+		t.Errorf(`Env["K_CACHE_TYPE"] = %q, want "q8_0"`, req.Env["K_CACHE_TYPE"])
+	}
+	if req.Env["V_CACHE_TYPE"] != "q4_0" {
+		t.Errorf(`Env["V_CACHE_TYPE"] = %q, want "q4_0"`, req.Env["V_CACHE_TYPE"])
+	}
+}
+
 func TestBuildCreateValidation(t *testing.T) {
 	cases := map[string]func(*CreateParams){
 		"short sha256":       func(p *CreateParams) { p.ModelSHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abc" }, // 63 chars
@@ -94,6 +110,7 @@ func TestBuildCreateValidation(t *testing.T) {
 		"bad k cache type":   func(p *CreateParams) { p.KCacheType = "fp8" },
 		"bad v cache type":   func(p *CreateParams) { p.VCacheType = "fp8" },
 		"empty k cache type": func(p *CreateParams) { p.KCacheType = "" },
+		"empty v cache type": func(p *CreateParams) { p.VCacheType = "" },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

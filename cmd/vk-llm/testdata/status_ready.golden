@@ -1,7 +1,7 @@
 Provider          vast.ai
 State             READY
 GPU               RTX 4090
-Model             qwen-35b (32768 tokens)
+Model             qwen-35b (32768 tokens per session)
 Ready             yes
 Price             $0.71/h
 Uptime            30m30s

@@ -88,7 +88,7 @@ The `result` field (in start/stop responses) and HTTP status are equivalent and 
 | `state` | snapshot public state (ADR 0011 §6) | one of `STOPPED, ALLOCATING, STARTING, LOADING_MODEL, READY, DRAINING, DELETING, FAILED` |
 | `desired` | snapshot | `RUNNING` or `STOPPED` |
 | `instance` | snapshot | `null` when no provider instance exists; `readyAt` `null` before READY |
-| `model` | `model.alias`, `model.contextSize` | from configuration |
+| `model` | `model.alias`, `model.contextSize` | from configuration; `contextSize` is the context per session (CORE-300) |
 | `ready` | derived | `state == "READY"` |
 | `uptimeSeconds` | derived | `now − instance.createdAt`, whole seconds; 0 with no instance |
 | `lastInferenceFinishedAt` | snapshot | rendered as given; `null` when the snapshot's value is zero |
