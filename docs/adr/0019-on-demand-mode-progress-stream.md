@@ -58,18 +58,30 @@ receives:
   never the same phrase twice in a row;
 - **an SSE comment** every 15 s.
 
-Every line is a `reasoning_content` delta prefixed `[vk-llm] `, never
+Every line is a `reasoning_content` delta prefixed `vk-llm › `, never
 `content`, so an agent loop does not take it as the answer. At `READY` the
 original request is forwarded and the model's chunks follow in the same
 stream. On denial, failure or `maxWait` expiry the stream ends with a
 reason line, an error chunk with `finish_reason`, and `[DONE]`; the start
 continues after a `maxWait` expiry.
 
+**Amendment (2026-11-24).** Live testing showed OpenCode v2.3.2 hides the
+thinking block by default, so a held stream looked stuck. The gateway now
+also sends one visible `content` line, no prefix, once at the start of the
+hold: "⏳ Starting the GPU (3–6 min). Progress is in the thinking block."
+The thinking-line prefix changes from `[vk-llm] ` to `vk-llm › `, since
+OpenCode's markdown renderer showed the old prefix as an underlined link.
+
 ### 4. History stripping
 
 Some clients (OpenCode) resend `reasoning_content` in later turns. Before
 forwarding any request, the gateway deletes every line that starts with
 `[vk-llm] ` from `reasoning_content` in incoming messages.
+
+**Amendment (2026-11-24).** The filter now also matches the new
+`vk-llm › ` prefix, and removes the visible status line (§3 amendment)
+from an assistant message's `content` when it starts with it, so the
+model never sees either one on a later turn.
 
 ### 5. Non-streaming requests: start, then refuse at once
 

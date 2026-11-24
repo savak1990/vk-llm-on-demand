@@ -161,6 +161,10 @@ func (g *Gateway) holdAndProxy(w http.ResponseWriter, r *http.Request, body map[
 		g.writeHeldTail(w, rc, code, msg)
 	}
 
+	if !send(visibleStatusChunk(alias, g.deps.Clock.Now())) {
+		return
+	}
+
 	const restarting = "The service is restarting; send your message again in a minute."
 	if g.shuttingDown.Load() {
 		fail("shutting_down", "shutting_down", restarting)

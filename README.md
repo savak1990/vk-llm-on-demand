@@ -238,12 +238,16 @@ downloaded if the size is unknown.
 
 What a user sees depends on the request:
 
-- A **streaming** chat request gets `200 text/event-stream` at once. While
+- A **streaming** chat request gets `200 text/event-stream` at once, then
+  one visible line with no prefix — "⏳ Starting the GPU (3–6 min).
+  Progress is in the thinking block." — since OpenCode hides the thinking
+  block by default and a stream with nothing visible looks stuck. While
   the GPU comes up, each progress checkpoint (offer found, GPU rented,
   model downloading, checksum verified, model loading) arrives as a
-  `reasoning_content` delta prefixed `[vk-llm] `, which most chat clients
-  render as a collapsible "thinking" block. The model's real answer
-  follows in the same response.
+  `reasoning_content` delta prefixed `vk-llm › `, which most chat clients
+  render as a collapsible "thinking" block (in OpenCode: Settings →
+  Session → Thinking = show). The model's real answer follows in the
+  same response.
 - A **non-streaming** request gets `503 gpu_cold_start` with a
   `Retry-After` header at once; the client is expected to retry.
 - If 32 streams are already held, a 33rd streaming request gets
