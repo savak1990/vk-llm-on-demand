@@ -16,7 +16,8 @@ const testSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852
 func testWorkerCfg() config.Worker {
 	return config.Worker{
 		ModelURL: "https://huggingface.co/example/model.gguf", ModelSHA256: testSHA256,
-		ModelParallel: 1, WorkerImage: "ghcr.io/example/worker", WorkerDeadManTimeout: 40 * 60 * 1e9,
+		ModelParallel: 1, KCacheType: "f16", VCacheType: "f16",
+		WorkerImage: "ghcr.io/example/worker", WorkerDeadManTimeout: 40 * 60 * 1e9,
 	}
 }
 
@@ -48,6 +49,22 @@ func TestWorkerAdapterBuildCreateSetsOfferIDAndStaticFields(t *testing.T) {
 	}
 	if req.Env["WORKER_API_KEY"] != "worker-key-xyz" {
 		t.Errorf("Env[WORKER_API_KEY] = %q", req.Env["WORKER_API_KEY"])
+	}
+	if req.Env["K_CACHE_TYPE"] != "f16" {
+		t.Errorf("Env[K_CACHE_TYPE] = %q, want f16", req.Env["K_CACHE_TYPE"])
+	}
+	if req.Env["V_CACHE_TYPE"] != "f16" {
+		t.Errorf("Env[V_CACHE_TYPE] = %q, want f16", req.Env["V_CACHE_TYPE"])
+	}
+}
+
+func TestWorkerAdapterBuildCreateCtxIsContextSizeTimesParallel(t *testing.T) {
+	cfg := testWorkerCfg()
+	cfg.ModelParallel = 4
+	a := newWorkerAdapter(cfg, "qwen3.6-35b-a3b", 131072, worker.NewExporter())
+	req := a.BuildCreate(provider.Offer{ID: 1}, 60, "vkllm:iid:1", "k")
+	if req.Env["CTX"] != "524288" {
+		t.Errorf(`Env["CTX"] = %q, want "524288" (131072 * 4)`, req.Env["CTX"])
 	}
 }
 

@@ -1,7 +1,7 @@
 ---
 id: "CORE-070"
 status: "DONE"
-updated: "2026-11-04"
+updated: "2026-11-24"
 depends_on: ["CORE-020", "CORE-030"]
 adrs: ["0002", "0003", "0005", "0006", "0009", "0011"]
 ---
@@ -11,6 +11,14 @@ adrs: ["0002", "0003", "0005", "0006", "0009", "0011"]
 **Status note:** DONE 2026-11-04. Implemented against bundle A of ADR
 0006; the B delta is one section below and was not implemented (CORE-030
 accepted bundle A).
+
+**2026-11-24 amendment:** `CTX` is now `model.contextSize * model.parallel`
+(the context is per session, not a total). Two new env vars, `K_CACHE_TYPE`
+and `V_CACHE_TYPE` (`model.kCacheType` / `model.vCacheType`, default `f16`),
+select `llama-server`'s `--cache-type-k`/`--cache-type-v`. The environment
+contract table, `CreateParams`, the required-env list and the launch line
+below are updated to match; the rest of the onstart script quote and the
+Evidence section are left as the 2026-11-04 record.
 
 **Complexity:** M
 **Risk:** medium — the script runs on hosts we cannot debug, and two Vast behaviours it relies on are unverified
@@ -54,8 +62,10 @@ sends `env` as a JSON object). Nothing is rendered into the script text.
 | `MODEL_URL` | `model.url` | HF URL of `Qwen_Qwen3.6-35B-A3B-Q5_K_M.gguf` (research §3) | no |
 | `MODEL_SHA256` | `model.sha256` | 64 hex chars, pinned in chart | no |
 | `MODEL_ALIAS` | `model.alias` | `qwen3.6-35b-a3b` | no |
-| `CTX` | `model.contextSize` | `32768` | no |
+| `CTX` | `model.contextSize * model.parallel` | `32768` | no |
 | `PARALLEL` | `model.parallel` | `1` | no |
+| `K_CACHE_TYPE` | `model.kCacheType` | `f16` | no |
+| `V_CACHE_TYPE` | `model.vCacheType` | `f16` | no |
 | `WORKER_API_KEY` | `WorkerKey(...)` (ADR 0006 §4) | 43 chars base64url | **yes** |
 | `DEADMAN_SECONDS` | `lifecycle.idleShutdown.timeout + 10m` in seconds (ADR 0011 §5) | `2400` | no |
 | `REASONING_FORMAT` | constant `deepseek` (ADR 0002 §3) | `deepseek` | no |
@@ -81,6 +91,7 @@ type CreateParams struct {
     Label          string        // vkllm:<installation-id>:<generation>
     ModelURL, ModelSHA256, Alias string
     Ctx, Parallel  int
+    KCacheType, VCacheType string
     DeadMan        time.Duration // lifecycle.idleShutdown.timeout + 10m
     WorkerKey      string
 }
@@ -94,11 +105,12 @@ func BuildCreate(p CreateParams) (provider.CreateRequest, error)
 | `runtype` | `ssh` |
 | `label` | `p.Label` |
 | `onstart` | `Render()` output (field is `onstart`, not `onstart_cmd`) |
-| `env` | the eight variables above; no key starting with `-p` |
+| `env` | the ten variables above; no key starting with `-p` |
 
 Field names inside `provider.CreateRequest` belong to CORE-020. `BuildCreate`
 returns an error when `ModelSHA256` is not 64 lowercase hex characters,
-`ModelURL` is not `https://`, `Alias` is empty, `Ctx < 1`, `Parallel < 1`, or
+`ModelURL` is not `https://`, `Alias` is empty, `Ctx < 1`, `Parallel < 1`,
+`KCacheType`/`VCacheType` is not one of `f16`/`q8_0`/`q4_0`, or
 `DeadMan < 60s`.
 
 ### Onstart script
@@ -123,7 +135,7 @@ fail() {
   exit "$2"
 }
 st start
-for v in MODEL_URL MODEL_SHA256 MODEL_ALIAS CTX PARALLEL WORKER_API_KEY DEADMAN_SECONDS REASONING_FORMAT; do
+for v in MODEL_URL MODEL_SHA256 MODEL_ALIAS CTX PARALLEL K_CACHE_TYPE V_CACHE_TYPE WORKER_API_KEY DEADMAN_SECONDS REASONING_FORMAT; do
   [ -n "${!v:-}" ] || fail fail_env 1
 done
 
@@ -162,6 +174,7 @@ boot() {
   st server_spawn
   exec /app/llama-server --host 127.0.0.1 --port 8080 --model "$M" \
     -c "$CTX" -np "$PARALLEL" -ngl "${NGL:-all}" -fa on --no-mmproj --metrics --jinja \
+    --cache-type-k "$K_CACHE_TYPE" --cache-type-v "$V_CACHE_TYPE" \
     --reasoning-format "$REASONING_FORMAT" --api-key "$WORKER_API_KEY" \
     --timeout 600 --alias "$MODEL_ALIAS" >/dev/null 2>&1
 }
@@ -345,7 +358,7 @@ per-generation HMAC key, and no port mapping in bundle A.
 - AC2. Size: `len(Render()) < 4048`. If the wrapper path is taken, decoding it reproduces the plain script. (R1)
 - AC3. Lint: `shellcheck -s bash` on the rendered script exits 0 with no findings. (R7)
 - AC4. Key: `WorkerKey([]byte("k"), "i", 7)` equals the vector recorded in the test, is 43 characters, contains no `,`, and differs for generation 8. (R8)
-- AC5. Create: `BuildCreate` with valid params yields `runtype=ssh`, `disk=60`, exactly the eight env keys, no key starting with `-p`; a 63-character sha256 returns an error. (R9, NFR-7.3)
+- AC5. Create: `BuildCreate` with valid params yields `runtype=ssh`, `disk=60`, exactly the ten env keys, no key starting with `-p`; a 63-character sha256 returns an error. (R9, NFR-7.3)
 - AC6. Checksum (stub container, `ubuntu:24.04`, `/app/llama-server` stub, `MODEL_URL=file:///src.bin`, `MODEL_SHA256=bad`): exit code 3 within 10 s, last stage `fail_checksum`, no `server_spawn` line; a `TERM` trap in the container's PID 1 fires. (R4, FR-5.5)
 - AC7. Dead-man (same container, correct sha256, `DEADMAN_SECONDS=3`, `POLL_SECONDS=1`): exit 0 within 6 s of `server_spawn`; stub process gone; `/models/model.gguf` sha256 equals the source; combined stdout, stage log and `/models` listing contain zero matches of the key value. (R5, R6, R7, FR-4.5)
 - AC8. Real image (local only, network and Docker required, `make test-worker-image`; not wired into CI — GitHub-hosted runners have no GPU and this is not blocking for that reason): pinned `server-cuda` digest, tiny GGUF, `NGL=0`, `POLL_SECONDS=2`: stage `server_healthy` within 120 s; `Probe` returns `Ready` through a loopback transport; a probe from outside the container's network namespace to its own IP on 8080 gets connection refused. (R2, R3, R10, FR-3.1, NFR-7.3)

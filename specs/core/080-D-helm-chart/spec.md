@@ -1,7 +1,7 @@
 ---
 id: "CORE-080"
 status: "DONE"
-updated: "2026-11-23"
+updated: "2026-11-24"
 depends_on: ["CORE-060"]
 adrs: ["0004", "0008", "0009", "0010", "0011", "0012", "0013", "0019"]
 ---
@@ -17,6 +17,13 @@ offer, not a chart value. The values table, the schema snippet and the
 rendered key count below are updated to match `deploy/helm/gpu-on-demand`
 as shipped; the Evidence section is left as the 2026-11-06 record and is
 not restated.
+
+**2026-11-24 amendment:** `config.model.contextSize` means the context per
+session, not the total; the worker now reserves `contextSize * parallel`
+tokens of KV cache. Two new keys, `config.model.kCacheType` and
+`config.model.vCacheType`, pick the quantization of `llama-server`'s K and V
+caches (`f16` default, `q8_0`, `q4_0`). The values table below and the
+rendered row count are updated to match.
 
 **Complexity:** M — many small templates and a long values schema, no business logic.
 **Risk:** medium — a wrong RBAC verb, a wrong `config.*` → env-var mapping, or a schema guard that does not actually block `idleShutdown.enabled: false` breaks safety invisibly, because nothing here is unit-testable in Go.
@@ -121,8 +128,10 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.model.alias` | `qwen3.6-35b-a3b` | `VKLLM_MODEL_ALIAS` |
 | `config.model.url` | no default, required | `VKLLM_MODEL_URL` |
 | `config.model.sha256` | no default, required | `VKLLM_MODEL_SHA256` |
-| `config.model.contextSize` | `32768` | `VKLLM_MODEL_CONTEXT_SIZE` |
+| `config.model.contextSize` | `32768` | `VKLLM_MODEL_CONTEXT_SIZE` — context per session; the worker reserves `contextSize * parallel` tokens |
 | `config.model.parallel` | `1` | `VKLLM_MODEL_PARALLEL` |
+| `config.model.kCacheType` | `f16` | `VKLLM_MODEL_K_CACHE_TYPE` — schema enum `f16` \| `q8_0` \| `q4_0` |
+| `config.model.vCacheType` | `f16` | `VKLLM_MODEL_V_CACHE_TYPE` — schema enum `f16` \| `q8_0` \| `q4_0` |
 | `config.model.generationTimeout` | `10m` | `VKLLM_MODEL_GENERATION_TIMEOUT` — upstream deadline per request; sizes the Envoy route timeout to 660s in explicit mode, at least 1200s in on-demand mode (architecture §9, ADR 0010 Consequences, ADR 0019 §7) |
 | `config.worker.image` | no default, required | `VKLLM_WORKER_IMAGE` |
 | `config.worker.deadManTimeout` | `""` (empty → derives `lifecycle.idleShutdown.timeout + 10m`) | `VKLLM_WORKER_DEAD_MAN_TIMEOUT` |
@@ -138,7 +147,7 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 
 The management API reads the monthly budget from the controller snapshot, not from its own config; there is no separate management-side budget value (CORE-190).
 
-53 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
+55 `config.*` rows above, each always rendered (empty string when the default is empty), never conditional — a value absent from the ConfigMap would silently fall back to whatever default `internal/config` compiles in, which this chart cannot see or test. Two fixed keys outside the `config.*` table:
 
 | Env var | Value | Why it is not a `config.*` row |
 |---|---|---|

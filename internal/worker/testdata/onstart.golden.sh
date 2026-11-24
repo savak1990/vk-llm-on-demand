@@ -11,7 +11,7 @@ fail() {
   exit "$2"
 }
 st start
-for v in MODEL_URL MODEL_SHA256 MODEL_ALIAS CTX PARALLEL WORKER_API_KEY DEADMAN_SECONDS REASONING_FORMAT; do
+for v in MODEL_URL MODEL_SHA256 MODEL_ALIAS CTX PARALLEL K_CACHE_TYPE V_CACHE_TYPE WORKER_API_KEY DEADMAN_SECONDS REASONING_FORMAT; do
   [ -n "${!v:-}" ] || fail fail_env 1
 done
 
@@ -61,6 +61,7 @@ boot() {
   st server_spawn
   exec /app/llama-server --host 127.0.0.1 --port 8080 --model "$M" \
     -c "$CTX" -np "$PARALLEL" -ngl "${NGL:-all}" -fa on --no-mmproj --metrics --jinja \
+    --cache-type-k "$K_CACHE_TYPE" --cache-type-v "$V_CACHE_TYPE" \
     --reasoning-format "$REASONING_FORMAT" --api-key "$WORKER_API_KEY" \
     --timeout 600 --alias "$MODEL_ALIAS" >/dev/null 2>&1
 }
