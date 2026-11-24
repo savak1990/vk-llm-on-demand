@@ -24,7 +24,7 @@ func (c *Controller) Status() Snapshot {
 	}
 	snap.BudgetCeilingUSD = c.deps.Budget.CeilingUSD()
 	c.progressMu.Lock()
-	if c.progressGen == gen {
+	if state == Loading && c.progressGen == gen {
 		snap.DownloadedBytes = c.progress.Bytes
 		snap.WorkerStages = append([]string(nil), c.progress.Stages...)
 	}

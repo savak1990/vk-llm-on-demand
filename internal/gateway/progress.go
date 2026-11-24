@@ -9,7 +9,12 @@ import (
 	"github.com/savak1990/vk-llm-on-demand/internal/progress"
 )
 
-const progressPrefix = "[vk-llm] "
+const progressPrefix = "vk-llm › "
+
+// legacyProgressPrefix is the prefix chats started before this change still carry.
+const legacyProgressPrefix = "[vk-llm] "
+
+const visibleStatusLine = "⏳ Starting the GPU (3–6 min). Progress is in the thinking block."
 
 var defaultTickerPhrases = []string{
 	"Still warming up the GPU…",
@@ -29,7 +34,8 @@ func progressState(s controller.Snapshot) progress.State {
 
 type chunkDelta struct {
 	Role             string `json:"role"`
-	ReasoningContent string `json:"reasoning_content"`
+	Content          string `json:"content,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type chunkChoice struct {
@@ -50,6 +56,15 @@ func progressChunk(alias, text string, now time.Time) string {
 	b, _ := json.Marshal(progressChunkBody{
 		ID: "vkllm-progress", Object: "chat.completion.chunk", Created: now.Unix(), Model: alias,
 		Choices: []chunkChoice{{Delta: chunkDelta{Role: "assistant", ReasoningContent: progressPrefix + text + "\n\n"}}},
+	})
+	return "data: " + string(b) + "\n\n"
+}
+
+// visibleStatusChunk is the one visible content line sent once at the start of a held stream.
+func visibleStatusChunk(alias string, now time.Time) string {
+	b, _ := json.Marshal(progressChunkBody{
+		ID: "vkllm-progress", Object: "chat.completion.chunk", Created: now.Unix(), Model: alias,
+		Choices: []chunkChoice{{Delta: chunkDelta{Role: "assistant", Content: visibleStatusLine + "\n\n"}}},
 	})
 	return "data: " + string(b) + "\n\n"
 }

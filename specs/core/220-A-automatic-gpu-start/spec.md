@@ -177,7 +177,8 @@ the longest measured cold start, rounded down to whole minutes.
 
 **Held stream.** Lifecycle of one held request:
 
-1. Write `200`, `Content-Type: text/event-stream`, flush.
+1. Write `200`, `Content-Type: text/event-stream`, flush, then send the one
+   visible status line (below) once, before anything else.
 2. Call `Demand(key, now + demandGrace)`. On denial go to step 6.
 3. Loop until `READY`, denial, failure, `maxWait`, or client disconnect:
    - every 2 s, read a `Status()` snapshot that is cached for 2 s and
@@ -200,12 +201,23 @@ the longest measured cold start, rounded down to whole minutes.
    start continues. Gateway shutdown ends every held stream the same way
    with code `shutting_down`.
 
+**Visible status line.** Sent exactly once per held stream, right after the
+`200 text/event-stream` headers and before any progress line, as a
+`delta.content` chunk with no prefix:
+
+```json
+{"id":"vkllm-progress","object":"chat.completion.chunk","created":<unix>,
+ "model":"<alias>","choices":[{"index":0,
+ "delta":{"role":"assistant","content":"⏳ Starting the GPU (3–6 min). Progress is in the thinking block.\n\n"},
+ "finish_reason":null}]}
+```
+
 **Progress line.** One SSE chunk per line:
 
 ```json
 {"id":"vkllm-progress","object":"chat.completion.chunk","created":<unix>,
  "model":"<alias>","choices":[{"index":0,
- "delta":{"role":"assistant","reasoning_content":"[vk-llm] <text>\n\n"},
+ "delta":{"role":"assistant","reasoning_content":"vk-llm › <text>\n\n"},
  "finish_reason":null}]}
 ```
 
@@ -227,10 +239,23 @@ download lines show GB downloaded at each 2 GB step instead. Built-in
 ticker phrases: "Still warming up the GPU…", "Almost there…", "The GPU is
 still getting ready…", "Still working on it…", "Hang on, nearly ready…".
 
-**History filter.** Before every forward (held or not), for each message
+**History filter.** Before every forward (held or not): for each message
 with a string `reasoning_content`, delete each line that starts with
-`[vk-llm] ` and the blank line after it; drop the field when it becomes
-empty. Nothing else in the body changes.
+`vk-llm › ` or the legacy `[vk-llm] ` and the blank line after it; drop the
+field when it becomes empty. For each **assistant** message whose string
+`content` starts with the visible status line, remove that line and the
+blank line after it; if `content` becomes empty, keep it as `""`. Nothing
+else in the body changes.
+
+**Design note (2026-11-24).** OpenCode v2.3.2 hides the thinking block by
+default, so a held stream showed no visible token and looked stuck.
+Chatbox may use the first 100 characters of the answer for the chat
+title, and Open WebUI glues the visible line to the answer. The one
+visible status line is sent with no prefix so it reads plainly wherever
+it lands, and it is stripped from history so the model never sees it on a
+later turn. The old `reasoning_content` prefix `[vk-llm] ` rendered as an
+underlined link in OpenCode's markdown viewer; `vk-llm › ` renders as
+plain text.
 
 **Metrics.** `vkllm_gateway_pending_requests` (held streams),
 `vkllm_gateway_wait_seconds` (hold start to `READY`),
@@ -279,8 +304,9 @@ message, which has already started the GPU, and `Demand` coalesces.
 - R9. A streaming request held for a start MUST get `200
   text/event-stream` at once, then progress lines, then the model's answer
   in the same response.
-- R10. Progress lines MUST be `reasoning_content` deltas only, each
-  prefixed `[vk-llm] `.
+- R10. Progress lines MUST be `reasoning_content` deltas prefixed
+  `vk-llm › `, except one visible `content` status line (exact text above)
+  sent once at the start of the hold.
 - R11. The gateway MUST send each checkpoint in the table at most once, in
   order; the offer line MUST name the GPU, location, hourly price and
   machine id.
@@ -299,8 +325,9 @@ message, which has already started the GPU, and `Demand` coalesces.
   passes before `Ready`; an `explicit`-origin start MUST NOT be. A
   `maxWait` expiry MUST extend the deadline by 360 s + `demandGrace`
   (ADR 0019 §6).
-- R18. The gateway MUST remove `[vk-llm] ` lines from incoming
-  `reasoning_content` before forwarding (ADR 0019 §4).
+- R18. The gateway MUST remove `vk-llm › ` and legacy `[vk-llm] ` lines
+  from incoming `reasoning_content`, and the visible status line from an
+  assistant message's `content`, before forwarding (ADR 0019 §4).
 - R19. `vk-llm start` MUST print the same milestone lines as the chat
   progress stream, on stderr, from the status document; `vk-llm stop` is
   unchanged.
@@ -350,8 +377,9 @@ message, which has already started the GPU, and `Demand` coalesces.
   today's.
 - AC9. A held stream with a scripted controller (`ALLOCATING` → offer →
   `LOADING_MODEL` with bytes at 0 %, 30 % and 100 % → stages → `READY`)
-  emits the checkpoint lines in order, each once, then the fake worker's
-  chunks; every progress chunk has `reasoning_content` and no `content`.
+  emits the visible status line as the first chunk, once, then the
+  checkpoint lines in order, each once, then the fake worker's chunks;
+  every other progress chunk has `reasoning_content` and no `content`.
 - AC10. No state change for 600 s (fake clock, 2 s polls): at least 30
   comments, at least 15 ticker phrases, no phrase twice in a row, at least
   30 demand refreshes, then the `maxWait` tail.
@@ -359,13 +387,16 @@ message, which has already started the GPU, and `Demand` coalesces.
   `finish_reason` chunk with `error`, and `[DONE]`.
 - AC12. With 32 streams held, the 33rd gets `429 queue_full`.
 - AC13. An assistant message with `reasoning_content`
-  `"[vk-llm] A\n\nreal thought\n[vk-llm] B\n\n"` is forwarded as
-  `"real thought\n"`.
+  `"vk-llm › A\n\nreal thought\nvk-llm › B\n\n"` is forwarded as
+  `"real thought\n"`; the same holds for the legacy `[vk-llm] ` prefix. An
+  assistant message whose `content` starts with the visible status line
+  is forwarded with that line removed.
 - AC14. Live, lab, GPU stopped: one message from Open WebUI (desktop) and
   from Conduit shows the thinking block and then the answer. Msty does the
   same, or its result is recorded as unsupported in the README.
 - AC15. Live: OpenCode completes a turn after a cold start, and the next
-  turn's request to the worker carries no `[vk-llm] ` line.
+  turn's request to the worker carries no `vk-llm › ` line and no visible
+  status line.
 - AC16. Live: close the app during `ALLOCATING`; the instance is destroyed
   within `demandGrace` + 60 s and no instance remains.
 - AC17. `vk-llm start` with a scripted status walk whose documents carry

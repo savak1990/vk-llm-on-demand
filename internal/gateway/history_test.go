@@ -5,9 +5,11 @@ import (
 	"testing"
 )
 
+const wantVisibleLine = "⏳ Starting the GPU (3–6 min). Progress is in the thinking block."
+
 func TestStripProgress(t *testing.T) {
 	body := map[string]json.RawMessage{
-		"messages": json.RawMessage(`[{"role":"user","content":"q"},{"role":"assistant","content":"a","reasoning_content":"[vk-llm] A\n\nreal thought\n[vk-llm] B\n\n"}]`),
+		"messages": json.RawMessage(`[{"role":"user","content":"q"},{"role":"assistant","content":"a","reasoning_content":"vk-llm › A\n\nreal thought\nvk-llm › B\n\n"}]`),
 	}
 	stripProgress(body)
 	var msgs []map[string]any
@@ -21,12 +23,92 @@ func TestStripProgress(t *testing.T) {
 }
 
 func TestStripProgressDropsEmptyField(t *testing.T) {
-	body := map[string]json.RawMessage{"messages": json.RawMessage(`[{"role":"assistant","content":"a","reasoning_content":"[vk-llm] Ready.\n\n"}]`)}
+	body := map[string]json.RawMessage{"messages": json.RawMessage(`[{"role":"assistant","content":"a","reasoning_content":"vk-llm › Ready.\n\n"}]`)}
 	stripProgress(body)
 	var msgs []map[string]any
 	_ = json.Unmarshal(body["messages"], &msgs)
 	if _, ok := msgs[0]["reasoning_content"]; ok {
 		t.Fatalf("empty reasoning_content kept: %v", msgs[0])
+	}
+}
+
+func TestStripProgressLegacyPrefixRemoved(t *testing.T) {
+	body := map[string]json.RawMessage{"messages": json.RawMessage(`[{"role":"assistant","content":"a","reasoning_content":"[vk-llm] Ready.\n\n"}]`)}
+	stripProgress(body)
+	var msgs []map[string]any
+	_ = json.Unmarshal(body["messages"], &msgs)
+	if _, ok := msgs[0]["reasoning_content"]; ok {
+		t.Fatalf("empty legacy reasoning_content kept: %v", msgs[0])
+	}
+}
+
+func TestStripProgressBothPrefixesInOneMessage(t *testing.T) {
+	body := map[string]json.RawMessage{
+		"messages": json.RawMessage(`[{"role":"assistant","reasoning_content":"[vk-llm] old line\n\nreal thought\nvk-llm › new line\n\n"}]`),
+	}
+	stripProgress(body)
+	var msgs []map[string]any
+	_ = json.Unmarshal(body["messages"], &msgs)
+	if got := msgs[0]["reasoning_content"]; got != "real thought\n" {
+		t.Fatalf("reasoning_content = %q", got)
+	}
+}
+
+func TestStripProgressVisibleLineRemovedFromContent(t *testing.T) {
+	body := map[string]json.RawMessage{
+		"messages": json.RawMessage(`[{"role":"assistant","content":"` + wantVisibleLine + `\n\nThe answer is 4."}]`),
+	}
+	stripProgress(body)
+	var msgs []map[string]any
+	_ = json.Unmarshal(body["messages"], &msgs)
+	if got := msgs[0]["content"]; got != "The answer is 4." {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestStripProgressVisibleLineOnlyBecomesEmptyString(t *testing.T) {
+	body := map[string]json.RawMessage{
+		"messages": json.RawMessage(`[{"role":"assistant","content":"` + wantVisibleLine + `\n\n"}]`),
+	}
+	stripProgress(body)
+	var msgs []map[string]any
+	_ = json.Unmarshal(body["messages"], &msgs)
+	got, ok := msgs[0]["content"]
+	if !ok {
+		t.Fatalf("content field was deleted, want kept as empty string: %v", msgs[0])
+	}
+	if got != "" {
+		t.Fatalf("content = %q, want empty string", got)
+	}
+}
+
+func TestStripProgressVisibleLineCRLF(t *testing.T) {
+	body := map[string]json.RawMessage{
+		"messages": json.RawMessage(`[{"role":"assistant","content":"` + wantVisibleLine + `\r\n\r\nThe answer is 4."}]`),
+	}
+	stripProgress(body)
+	var msgs []map[string]any
+	_ = json.Unmarshal(body["messages"], &msgs)
+	if got := msgs[0]["content"]; got != "The answer is 4." {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestStripProgressVisibleLineMidStringUntouched(t *testing.T) {
+	raw := json.RawMessage(`[{"role":"assistant","content":"earlier I said ` + wantVisibleLine + ` mid-string"}]`)
+	body := map[string]json.RawMessage{"messages": raw}
+	stripProgress(body)
+	if string(body["messages"]) != string(raw) {
+		t.Fatalf("messages rewritten: %s", body["messages"])
+	}
+}
+
+func TestStripProgressVisibleLineUserMessageUntouched(t *testing.T) {
+	raw := json.RawMessage(`[{"role":"user","content":"` + wantVisibleLine + `\n\nwhat is 2+2?"}]`)
+	body := map[string]json.RawMessage{"messages": raw}
+	stripProgress(body)
+	if string(body["messages"]) != string(raw) {
+		t.Fatalf("messages rewritten: %s", body["messages"])
 	}
 }
 

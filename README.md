@@ -238,12 +238,16 @@ downloaded if the size is unknown.
 
 What a user sees depends on the request:
 
-- A **streaming** chat request gets `200 text/event-stream` at once. While
+- A **streaming** chat request gets `200 text/event-stream` at once, then
+  one visible line with no prefix — "⏳ Starting the GPU (3–6 min).
+  Progress is in the thinking block." — since OpenCode hides the thinking
+  block by default and a stream with nothing visible looks stuck. While
   the GPU comes up, each progress checkpoint (offer found, GPU rented,
   model downloading, checksum verified, model loading) arrives as a
-  `reasoning_content` delta prefixed `[vk-llm] `, which most chat clients
-  render as a collapsible "thinking" block. The model's real answer
-  follows in the same response.
+  `reasoning_content` delta prefixed `vk-llm › `, which most chat clients
+  render as a collapsible "thinking" block (in OpenCode: Settings →
+  Session → Thinking = show). The model's real answer follows in the
+  same response.
 - A **non-streaming** request gets `503 gpu_cold_start` with a
   `Retry-After` header at once; the client is expected to retry.
 - If 32 streams are already held, a 33rd streaming request gets
@@ -327,19 +331,59 @@ schedule — the workflow does not reset it.
 
 ## OpenCode
 
-```json
+This example uses the lab's model alias, `qwen3.8-27b`, not the chart
+default (`config.model.alias: qwen3.6-35b-a3b`) — set it to whatever
+`config.model.alias` your own install uses.
+
+Set the inference key in the shell:
+
+```sh
+export VK_LLM_INFERENCE_KEY=sk-vkllm-...
+```
+
+On the lab, this key comes from the platform's secret store; never commit
+it.
+
+Then, in `~/.config/opencode/opencode.jsonc`:
+
+```jsonc
 {
-  "provider": {
+  "model": "vk-llm/qwen3.8-27b",
+  "providers": {
     "vk-llm": {
-      "npm": "@ai-sdk/openai-compatible",
-      "options": {"baseURL": "https://llm.example.com/v1", "apiKey": "{env:VK_LLM_INFERENCE_KEY}"},
-      "models": {"qwen3.8-27b": {"name": "Qwen3.8 27B (on-demand RTX 6000 Ada)"}}
+      "name": "vk-llm (on-demand GPU)",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "https://llm.lab.example.com/v1",
+        "apiKey": "{env:VK_LLM_INFERENCE_KEY}"
+      },
+      "models": {
+        "qwen3.8-27b": {
+          "name": "Qwen3.8 27B (RTX 6000 Ada)",
+          "variants": [
+            { "id": "low",    "body": { "reasoning_effort": "low" } },
+            { "id": "medium", "body": { "reasoning_effort": "medium" } },
+            { "id": "xhigh",  "body": { "reasoning_effort": "xhigh" } }
+          ]
+        }
+      }
     }
   }
 }
 ```
 
-In explicit mode (the default), run `vk-llm start` first; while the GPU
-is stopped, requests return `backend_unavailable`. In on-demand mode,
-OpenCode's own request starts the GPU — see
-["On-demand mode"](#on-demand-mode).
+To see the start-up progress, add a top-level
+`"settings": { "session": { "thinking": "show" } }`, or press `ctrl+p` in
+OpenCode and set Thinking to show.
+
+Notes:
+
+- `"model"` must be set, or OpenCode uses its free hosted model.
+- The model id must match the gateway alias (`config.model.alias`), or the
+  gateway returns `404 model_not_found`.
+- This model's template accepts `reasoning_effort` `low`, `medium`,
+  `xhigh` and `none`, but not `high` (the gateway relays the worker's
+  rejection).
+- In on-demand mode, the first message starts the GPU. In explicit mode,
+  run `vk-llm start` first; while the GPU is stopped, requests return
+  `backend_unavailable` — see ["On-demand mode"](#on-demand-mode).

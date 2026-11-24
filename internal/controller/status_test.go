@@ -131,6 +131,51 @@ func TestLoadingPollReadsDownloadProgress(t *testing.T) {
 	}
 }
 
+func TestStatusHidesStaleProgressAfterNewStart(t *testing.T) {
+	c, _, _, _, w := newTestController(t)
+	w.progress = DownloadProgress{Bytes: 28_600_000_000, Stages: []string{"download_end", "server_spawn"}}
+	c.state, c.generation = Loading, 1
+	c.conn = tunnelConnForTest(func() error { return nil })
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 1
+		d.Instance = &store.Instance{State: Loading.String(), Label: "vkllm:iid:1", ProviderID: "9"}
+	})
+	c.readProgress(context.Background(), 1)
+	if got := c.Status().DownloadedBytes; got != 28_600_000_000 {
+		t.Fatalf("DownloadedBytes = %d, want 28_600_000_000 while still loading", got)
+	}
+
+	c.state = Searching
+	putDoc(t, c, func(d *store.Document) { d.Instance = nil })
+
+	snap := c.Status()
+	if snap.DownloadedBytes != 0 || len(snap.WorkerStages) != 0 {
+		t.Fatalf("snap = %+v, want no stale progress from the previous instance while Searching", snap)
+	}
+}
+
+func TestStatusHidesProgressOnceReady(t *testing.T) {
+	c, _, _, _, w := newTestController(t)
+	w.progress = DownloadProgress{Bytes: 500, Stages: []string{"download_begin"}}
+	c.state, c.generation = Loading, 3
+	c.conn = tunnelConnForTest(func() error { return nil })
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Loading.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+	})
+	c.readProgress(context.Background(), 3)
+	if got := c.Status().DownloadedBytes; got != 500 {
+		t.Fatalf("DownloadedBytes = %d, want 500 while loading", got)
+	}
+
+	c.state = Ready
+
+	snap := c.Status()
+	if snap.DownloadedBytes != 0 || len(snap.WorkerStages) != 0 {
+		t.Fatalf("snap = %+v, want no download progress once Ready", snap)
+	}
+}
+
 func TestOfferChosenStoresGeolocation(t *testing.T) {
 	c, _, _, _, _ := newTestController(t)
 	c.state = Searching

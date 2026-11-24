@@ -65,11 +65,27 @@ stream. On denial, failure or `maxWait` expiry the stream ends with a
 reason line, an error chunk with `finish_reason`, and `[DONE]`; the start
 continues after a `maxWait` expiry.
 
+**Amendment (2026-11-24).** Live testing showed OpenCode v2.3.2 hides the
+thinking block by default, so a held stream looked stuck. The gateway now
+also sends one visible `content` line, no prefix, once at the start of the
+hold: "⏳ Starting the GPU (3–6 min). Progress is in the thinking block."
+The thinking-line prefix changes from `[vk-llm] ` to `vk-llm › `, since
+OpenCode's markdown renderer showed the old prefix as an underlined link.
+This narrows the "never `content`" rule above to every line except that
+one. Trade-off: on a denial, failure or `maxWait` expiry the status line is
+the only `content` before the error chunk, so a client can show it as the
+reply; the error chunk that follows still marks the turn as failed.
+
 ### 4. History stripping
 
 Some clients (OpenCode) resend `reasoning_content` in later turns. Before
 forwarding any request, the gateway deletes every line that starts with
 `[vk-llm] ` from `reasoning_content` in incoming messages.
+
+**Amendment (2026-11-24).** The filter now also matches the new
+`vk-llm › ` prefix, and removes the visible status line (§3 amendment)
+from an assistant message's `content` when it starts with it, so the
+model never sees either one on a later turn.
 
 ### 5. Non-streaming requests: start, then refuse at once
 

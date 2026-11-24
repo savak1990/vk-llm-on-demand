@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,55 @@ import (
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 )
+
+const visibleStatusLineBase = "⏳ Starting the GPU (3–6 min). Progress is in the thinking block."
+const visibleStatusLineText = visibleStatusLineBase + "\n\n"
+
+// progressChunkContents returns the decoded delta.content of every vkllm-progress chunk in body.
+func progressChunkContents(t *testing.T, body string) []string {
+	t.Helper()
+	var contents []string
+	for _, chunk := range strings.Split(body, "data: ") {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" || chunk == "[DONE]" {
+			continue
+		}
+		var c struct {
+			ID      string `json:"id"`
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if json.Unmarshal([]byte(chunk), &c) != nil || c.ID != "vkllm-progress" {
+			continue
+		}
+		contents = append(contents, c.Choices[0].Delta.Content)
+	}
+	return contents
+}
+
+// firstSSEContent returns the delta.content of the first SSE data chunk in body.
+func firstSSEContent(t *testing.T, body string) string {
+	t.Helper()
+	first, ok := strings.CutPrefix(body, "data: ")
+	if !ok {
+		t.Fatalf("body does not start with an SSE data line:\n%s", body)
+	}
+	first = strings.SplitN(first, "\n\n", 2)[0]
+	var c struct {
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(first), &c); err != nil {
+		t.Fatalf("Unmarshal first chunk: %v", err)
+	}
+	return c.Choices[0].Delta.Content
+}
 
 // holdRun drives one held request; the body is read only after ServeHTTP returns.
 type holdRun struct {
@@ -121,7 +171,7 @@ func TestHeldStreamProgressThenAnswer(t *testing.T) {
 	}
 	iAlloc := strings.Index(body, "Looking for a GPU offer")
 	iOffer := strings.Index(body, "Renting an L40S")
-	iReady := strings.Index(body, "[vk-llm] Ready.")
+	iReady := strings.Index(body, "vk-llm › Ready.")
 	iAnswer := strings.Index(body, `"content":"hi"`)
 	if iAlloc < 0 || iOffer < iAlloc || iReady < iOffer || iAnswer < iReady {
 		t.Fatalf("order wrong: %d %d %d %d\n%s", iAlloc, iOffer, iReady, iAnswer, body)
@@ -218,8 +268,71 @@ func TestHeldStreamDenied(t *testing.T) {
 	fc := &fakeController{admitErr: controller.ErrBackendUnavailable, demandErr: controller.ErrGPUUnavailable, demandSnap: controller.Snapshot{Unavailable: "attempts_exhausted"}}
 	h := startHold(t, fc)
 	body := h.run(t, 4*time.Second)
-	if !strings.Contains(body, "[vk-llm] Too many GPU start attempts") || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+	if !strings.Contains(body, "vk-llm › Too many GPU start attempts") || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
 		t.Fatalf("body:\n%s", body)
+	}
+}
+
+func TestHeldStreamVisibleLineFirst(t *testing.T) {
+	worker := fakeRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}},
+			Body: &chunkedBody{chunks: [][]byte{[]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n")}}}, nil
+	})
+	var admits atomic.Int32
+	fc := &fakeController{
+		demandSnap: controller.Snapshot{Public: "ALLOCATING", Desired: "RUNNING"},
+		admitFn: func(int64) (http.RoundTripper, error) {
+			if admits.Add(1) == 1 {
+				return nil, controller.ErrBackendUnavailable
+			}
+			return worker, nil
+		},
+	}
+	fc.statusFn = scripted(
+		controller.Snapshot{Public: "ALLOCATING", Desired: "RUNNING"},
+		controller.Snapshot{Public: "STARTING", Desired: "RUNNING", MachineID: 7, GPUName: "L40S"},
+		controller.Snapshot{Public: "READY", Desired: "RUNNING", Ready: true, Generation: 4},
+	)
+	h := startHold(t, fc)
+	body := h.run(t, 30*time.Second)
+
+	if got := firstSSEContent(t, body); got != visibleStatusLineText {
+		t.Fatalf("first chunk content = %q, want %q", got, visibleStatusLineText)
+	}
+	iVisible := strings.Index(body, visibleStatusLineBase)
+	iThinking := strings.Index(body, "Looking for a GPU offer")
+	if iThinking < iVisible {
+		t.Fatalf("thinking line %d before visible line %d", iThinking, iVisible)
+	}
+	seen := 0
+	for _, c := range progressChunkContents(t, body) {
+		switch c {
+		case "":
+		case visibleStatusLineText:
+			seen++
+		default:
+			t.Fatalf("stray content in a progress chunk: %q", c)
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("visible line count = %d, want 1\n%s", seen, body)
+	}
+}
+
+func TestHeldStreamDeniedVisibleLineFirst(t *testing.T) {
+	fc := &fakeController{admitErr: controller.ErrBackendUnavailable, demandErr: controller.ErrGPUUnavailable, demandSnap: controller.Snapshot{Unavailable: "attempts_exhausted"}}
+	h := startHold(t, fc)
+	body := h.run(t, 4*time.Second)
+	if got := firstSSEContent(t, body); got != visibleStatusLineText {
+		t.Fatalf("first chunk content = %q, want %q", got, visibleStatusLineText)
+	}
+	iVisible := strings.Index(body, visibleStatusLineBase)
+	iReason := strings.Index(body, "vk-llm › Too many GPU start attempts")
+	if iReason < iVisible {
+		t.Fatalf("reason line %d before visible line %d\n%s", iReason, iVisible, body)
+	}
+	if !strings.HasSuffix(body, "data: [DONE]\n\n") {
+		t.Fatalf("missing DONE tail:\n%s", body)
 	}
 }
 
@@ -252,7 +365,7 @@ func TestHeldStreamWorkerErrorEndsWithTail(t *testing.T) {
 	fc := readyAfterHold(fakeRoundTripper(func(*http.Request) (*http.Response, error) { return nil, errors.New("boom") }))
 	h := startHold(t, fc)
 	body := h.run(t, 10*time.Second)
-	if !strings.Contains(body, "[vk-llm] connection to the worker was lost") || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+	if !strings.Contains(body, "vk-llm › connection to the worker was lost") || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
 		t.Fatalf("body:\n%s", body)
 	}
 }
@@ -263,7 +376,7 @@ func TestHeldStreamWorkerRejectsEndsWithTail(t *testing.T) {
 	}))
 	h := startHold(t, fc)
 	body := h.run(t, 10*time.Second)
-	if !strings.Contains(body, "[vk-llm] the worker rejected the request") || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+	if !strings.Contains(body, "vk-llm › the worker rejected the request") || !strings.Contains(body, `"finish_reason":"stop"`) || !strings.HasSuffix(body, "data: [DONE]\n\n") {
 		t.Fatalf("body:\n%s", body)
 	}
 }
@@ -314,7 +427,7 @@ func TestHeldStreamWorker4xxKeepsMessage(t *testing.T) {
 	}))
 	h := startHold(t, fc)
 	body := h.run(t, 10*time.Second)
-	if !strings.Contains(body, `"code":"upstream_rejected"`) || !strings.Contains(body, "[vk-llm] context too long") || !strings.HasSuffix(body, "data: [DONE]\n\n") {
+	if !strings.Contains(body, `"code":"upstream_rejected"`) || !strings.Contains(body, "vk-llm › context too long") || !strings.HasSuffix(body, "data: [DONE]\n\n") {
 		t.Fatalf("body:\n%s", body)
 	}
 }
