@@ -247,15 +247,15 @@ field when it becomes empty. For each **assistant** message whose string
 blank line after it; if `content` becomes empty, keep it as `""`. Nothing
 else in the body changes.
 
-**Design note (2026-11-24).** Live testing with OpenCode v2.3.2 (thinking
-hidden by default) showed a held stream with no visible token looking
-stuck. Open WebUI, Conduit and Chatbox glue the thinking block to the
-answer or may use the first 100 characters of the answer for the chat
-title, so one short, prefix-free `content` line up front covers every
-client without polluting the title or the answer; the line is stripped
-from history so the model never sees it. The old `reasoning_content`
-prefix `[vk-llm] ` rendered as an underlined link in OpenCode's markdown
-viewer; `vk-llm › ` renders as plain text.
+**Design note (2026-11-24).** OpenCode v2.3.2 hides the thinking block by
+default, so a held stream showed no visible token and looked stuck.
+Chatbox may use the first 100 characters of the answer for the chat
+title, and Open WebUI glues the thinking line to the answer. The one
+visible status line is sent with no prefix so it reads plainly wherever
+it lands, and it is stripped from history so the model never sees it on a
+later turn. The old `reasoning_content` prefix `[vk-llm] ` rendered as an
+underlined link in OpenCode's markdown viewer; `vk-llm › ` renders as
+plain text.
 
 **Metrics.** `vkllm_gateway_pending_requests` (held streams),
 `vkllm_gateway_wait_seconds` (hold start to `READY`),

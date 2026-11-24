@@ -58,7 +58,7 @@ receives:
   never the same phrase twice in a row;
 - **an SSE comment** every 15 s.
 
-Every line is a `reasoning_content` delta prefixed `vk-llm › `, never
+Every line is a `reasoning_content` delta prefixed `[vk-llm] `, never
 `content`, so an agent loop does not take it as the answer. At `READY` the
 original request is forwarded and the model's chunks follow in the same
 stream. On denial, failure or `maxWait` expiry the stream ends with a
