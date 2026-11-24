@@ -54,6 +54,7 @@ func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, e
 		Image: d.Worker.WorkerImage, DiskGB: d.Controller.ProviderFilter.MinDiskGB, Label: "wire-validate",
 		ModelURL: d.Worker.ModelURL, ModelSHA256: d.Worker.ModelSHA256, Alias: d.ModelAlias,
 		Ctx: d.Mgmt.ModelContextSize, Parallel: d.Worker.ModelParallel,
+		KCacheType: d.Worker.KCacheType, VCacheType: d.Worker.VCacheType,
 		DeadMan: d.Worker.WorkerDeadManTimeout, WorkerKey: "wire-validate",
 	}); err != nil {
 		return nil, nil, nil, fmt.Errorf("worker config: %w", err)

@@ -329,6 +329,29 @@ management API, with the same idempotent, budget-gated behavior as
 `vk-llm`. A GPU started from Actions idles out on the usual 30-minute
 schedule — the workflow does not reset it.
 
+## Concurrent sessions and VRAM
+
+`config.model.contextSize` is the context per session, not a total: the
+worker reserves `contextSize * config.model.parallel` tokens of KV cache, so
+raising `parallel` to run more sessions at once costs more VRAM even with
+`contextSize` unchanged.
+
+VRAM is roughly the model file plus the KV cache plus about 1.5 GB of
+buffers. These are estimates, not measured numbers — confirm on your own
+GPU before relying on them. For the lab's `Qwen3.8-27B` Q8_0 model
+(28.6 GB), an `f16` KV cache costs about 12 GB per 262144 tokens of total
+reserved context; `config.model.kCacheType` and `config.model.vCacheType`
+shrink that: `q8_0` is about 53% of the `f16` size, `q4_0` about 28%. Four
+sessions of 131072 tokens each (`contextSize: 131072`, `parallel: 4`) with
+`q8_0` comes to roughly 28.6 + 13 + 1.5 ≈ 43 GB on a 48 GB GPU. The K cache
+is more sensitive to quantization than the V
+cache: `kCacheType: q4_0` hurts quality the most of the three settings; if
+you need to go below `q8_0`, quantize `vCacheType` first.
+
+In an OpenAI-compatible client, set the context limit (OpenCode's
+`limit.context`) to `config.model.contextSize`, the per-session value, not
+the total.
+
 ## OpenCode
 
 This example uses the lab's model alias, `qwen3.8-27b`, not the chart
@@ -360,6 +383,7 @@ Then, in `~/.config/opencode/opencode.jsonc`:
       "models": {
         "qwen3.8-27b": {
           "name": "Qwen3.8 27B (RTX 6000 Ada)",
+          "limit": { "context": 262144, "output": 16384 },
           "variants": [
             { "id": "low",    "body": { "reasoning_effort": "low" } },
             { "id": "medium", "body": { "reasoning_effort": "medium" } },
@@ -381,6 +405,9 @@ Notes:
 - `"model"` must be set, or OpenCode uses its free hosted model.
 - The model id must match the gateway alias (`config.model.alias`), or the
   gateway returns `404 model_not_found`.
+- `limit.context` must match `config.model.contextSize` (per session, see
+  ["Concurrent sessions and VRAM"](#concurrent-sessions-and-vram)), or
+  OpenCode's own truncation disagrees with the worker's.
 - This model's template accepts `reasoning_effort` `low`, `medium`,
   `xhigh` and `none`, but not `high` (the gateway relays the worker's
   rejection).

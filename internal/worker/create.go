@@ -16,12 +16,16 @@ type CreateParams struct {
 	DiskGB                       int
 	Label                        string
 	ModelURL, ModelSHA256, Alias string
-	Ctx, Parallel                int
-	DeadMan                      time.Duration
-	WorkerKey                    string
+	// Ctx is the context per session; the CTX env the worker gets is Ctx * Parallel.
+	Ctx, Parallel          int
+	KCacheType, VCacheType string
+	DeadMan                time.Duration
+	WorkerKey              string
 }
 
 const reasoningFormat = "deepseek"
+
+var kvCacheTypes = map[string]bool{"f16": true, "q8_0": true, "q4_0": true}
 
 func isHex64(s string) bool {
 	return len(s) == 64 && strings.Trim(s, "0123456789abcdef") == ""
@@ -41,6 +45,10 @@ func BuildCreate(p CreateParams) (provider.CreateRequest, error) {
 		return provider.CreateRequest{}, fmt.Errorf("worker: Ctx must be >= 1")
 	case p.Parallel < 1:
 		return provider.CreateRequest{}, fmt.Errorf("worker: Parallel must be >= 1")
+	case !kvCacheTypes[p.KCacheType]:
+		return provider.CreateRequest{}, fmt.Errorf("worker: KCacheType must be f16, q8_0 or q4_0")
+	case !kvCacheTypes[p.VCacheType]:
+		return provider.CreateRequest{}, fmt.Errorf("worker: VCacheType must be f16, q8_0 or q4_0")
 	case p.DeadMan < 60*time.Second:
 		return provider.CreateRequest{}, fmt.Errorf("worker: DeadMan must be >= 60s")
 	}
@@ -55,8 +63,10 @@ func BuildCreate(p CreateParams) (provider.CreateRequest, error) {
 			"MODEL_URL":        p.ModelURL,
 			"MODEL_SHA256":     p.ModelSHA256,
 			"MODEL_ALIAS":      p.Alias,
-			"CTX":              strconv.Itoa(p.Ctx),
+			"CTX":              strconv.Itoa(p.Ctx * p.Parallel),
 			"PARALLEL":         strconv.Itoa(p.Parallel),
+			"K_CACHE_TYPE":     p.KCacheType,
+			"V_CACHE_TYPE":     p.VCacheType,
 			"WORKER_API_KEY":   p.WorkerKey,
 			"DEADMAN_SECONDS":  strconv.Itoa(int(p.DeadMan.Seconds())),
 			"REASONING_FORMAT": reasoningFormat,

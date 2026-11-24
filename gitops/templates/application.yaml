@@ -34,6 +34,9 @@ spec:
             url: {{ .Values.model.url | quote }}
             sha256: {{ .Values.model.sha256 | quote }}
             contextSize: {{ .Values.model.contextSize | int }}
+            parallel: {{ .Values.model.parallel | int }}
+            kCacheType: {{ .Values.model.kCacheType | quote }}
+            vCacheType: {{ .Values.model.vCacheType | quote }}
           worker:
             image: {{ .Values.worker.image | quote }}
           lifecycle:

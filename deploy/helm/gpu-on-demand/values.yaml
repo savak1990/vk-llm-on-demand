@@ -75,8 +75,11 @@ config:
     alias: qwen3.6-35b-a3b
     url: ""
     sha256: ""
+    # Per session; the worker reserves contextSize * parallel tokens of KV cache.
     contextSize: 32768
     parallel: 1
+    kCacheType: f16
+    vCacheType: f16
     generationTimeout: 10m
   worker:
     image: ""

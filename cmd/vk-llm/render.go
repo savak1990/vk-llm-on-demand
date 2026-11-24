@@ -25,7 +25,7 @@ func renderStatus(w io.Writer, doc statusDoc) {
 		_, _ = fmt.Fprintf(tw, "GPU\t%s\n", doc.Instance.GPU)
 	}
 
-	_, _ = fmt.Fprintf(tw, "Model\t%s (%d tokens)\n", doc.Model.Alias, doc.Model.ContextSize)
+	_, _ = fmt.Fprintf(tw, "Model\t%s (%d tokens per session)\n", doc.Model.Alias, doc.Model.ContextSize)
 
 	readyStr := "no"
 	if doc.Ready {

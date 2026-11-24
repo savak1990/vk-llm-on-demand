@@ -120,6 +120,8 @@ VKLLM_MODEL_URL: {{ required "config.model.url is required: no production value 
 VKLLM_MODEL_SHA256: {{ required "config.model.sha256 is required: no production value is pinned anywhere yet" .Values.config.model.sha256 | quote }}
 VKLLM_MODEL_CONTEXT_SIZE: {{ .Values.config.model.contextSize | int64 | quote }}
 VKLLM_MODEL_PARALLEL: {{ .Values.config.model.parallel | int64 | quote }}
+VKLLM_MODEL_K_CACHE_TYPE: {{ .Values.config.model.kCacheType | quote }}
+VKLLM_MODEL_V_CACHE_TYPE: {{ .Values.config.model.vCacheType | quote }}
 VKLLM_MODEL_GENERATION_TIMEOUT: {{ .Values.config.model.generationTimeout | quote }}
 VKLLM_WORKER_IMAGE: {{ required "config.worker.image is required: no production value is pinned anywhere yet" .Values.config.worker.image | quote }}
 VKLLM_WORKER_DEAD_MAN_TIMEOUT: {{ .Values.config.worker.deadManTimeout | quote }}

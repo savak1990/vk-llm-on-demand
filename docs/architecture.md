@@ -304,7 +304,8 @@ and are set by the chart under `config.*`.
 | `onDemand.tickerInterval` / `onDemand.demandGrace` / `onDemand.tickerPhrases` | 30s / 60s / `[]` | on-demand mode only; the heartbeat must stay below the grace |
 | `model.alias` | `qwen3.6-35b-a3b` | |
 | `model.url` / `model.sha256` | pinned in `gitops/values.yaml` | |
-| `model.contextSize` / `model.parallel` | 32768 / 1 | |
+| `model.contextSize` / `model.parallel` | 32768 / 1 | `contextSize` is per session; the worker reserves `contextSize * parallel` tokens |
+| `model.kCacheType` / `model.vCacheType` | `f16` / `f16` | schema enum `f16` \| `q8_0` \| `q4_0` |
 | `model.generationTimeout` | 10m | upstream deadline per request |
 | `worker.image` | `ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:…` | pinned in `gitops/values.yaml` |
 | `worker.deadManTimeout` | idleShutdown.timeout + 10m | |

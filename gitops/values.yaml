@@ -24,9 +24,14 @@ model:
   alias: qwen3.8-27b
   url: https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q8_0.gguf
   sha256: 6bc9e7220d8400574fd62df25f04a961cb5cbb0d766cf0118c21c36c0059c35a
-  # The model's native window. KV cache at this size is about 8 GiB on top of
-  # 27 GiB of weights, inside a 48 GB GPU with one slot.
+  # The model's native window, per session. One f16 slot at this size used
+  # 42.9 of 48 GB VRAM in total on 2026-11-24 (weights plus about 14 GB).
   contextSize: 262144
+  # Today's lab behaviour: one f16 session. A follow-up promotion PR switches
+  # this to 4 sessions of 131072 tokens each with q8_0, once this chart ships.
+  parallel: 1
+  kCacheType: f16
+  vCacheType: f16
 # Vast.ai gpu_name, exact string. 48 GB, same generation as L40S, cheaper median price.
 gpu: RTX 6000Ada
 

@@ -38,6 +38,7 @@ func (a *workerAdapter) BuildCreate(offer provider.Offer, diskGB int, label, wor
 		Image: a.cfg.WorkerImage, DiskGB: diskGB, Label: label,
 		ModelURL: a.cfg.ModelURL, ModelSHA256: a.cfg.ModelSHA256, Alias: a.modelAlias,
 		Ctx: a.modelContextSize, Parallel: a.cfg.ModelParallel,
+		KCacheType: a.cfg.KCacheType, VCacheType: a.cfg.VCacheType,
 		DeadMan: a.cfg.WorkerDeadManTimeout, WorkerKey: workerKey,
 	})
 	if err != nil {

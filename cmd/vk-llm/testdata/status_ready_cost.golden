@@ -1,7 +1,7 @@
 Provider          vast.ai
 State             READY
 GPU               RTX 6000Ada
-Model             qwen-35b (32768 tokens)
+Model             qwen-35b (32768 tokens per session)
 Ready             yes
 Price             $0.62/h (GPU $0.56 + storage $0.06)
 Download          $1.14 (29.2 GB × $0.039/GB, est. 4m23s)

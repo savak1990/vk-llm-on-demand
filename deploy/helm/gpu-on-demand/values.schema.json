@@ -46,6 +46,8 @@
             "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
             "contextSize": { "type": "integer", "minimum": 1 },
             "parallel": { "type": "integer", "minimum": 1 },
+            "kCacheType": { "type": "string", "enum": ["f16", "q8_0", "q4_0"] },
+            "vCacheType": { "type": "string", "enum": ["f16", "q8_0", "q4_0"] },
             "generationTimeout": { "type": "string" }
           }
         },
