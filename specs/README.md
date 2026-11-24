@@ -88,6 +88,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [270](core/270-P-google-sign-in/spec.md) | Requirements: "Sign in with Google" for the chat front end, household accounts only (no design yet) | 230 |
 | [280](core/280-P-dev-environment-auto-deploy/spec.md) | Requirements: every merge to main deploys to `llm-dev`; production stays a manual gitops change; no PR previews (no design yet) | 120, 130, 160 |
 | [290](core/290-P-large-moe-cpu-offload/spec.md) | Spike: larger MoE models with experts in CPU RAM; offer filter sized to the model (no design yet) | 070, 210 |
+| [300](core/300-A-concurrent-sessions-kv-cache/spec.md) | Concurrent sessions: KV cache type (f16/q8_0/q4_0) and context per session | 070, 080, 130 |
 
 ## Order of work
 
