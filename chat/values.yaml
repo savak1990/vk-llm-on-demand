@@ -38,6 +38,13 @@ open-webui:
     failureThreshold: 30
   image:
     tag: v0.13.4-slim
+  # The slim image ships /app/backend/data empty, so the chart's default
+  # `cp data/*` finds nothing to glob and the init container fails.
+  copyAppData:
+    command:
+      - sh
+      - -c
+      - if [ -d /app/backend/data ]; then cp -R -n /app/backend/data/. /tmp/app-data/; fi
   resources:
     requests:
       cpu: 25m
