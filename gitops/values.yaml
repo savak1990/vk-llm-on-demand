@@ -7,8 +7,8 @@ namespace: llm
 # chart and the image it runs always match.
 charts:
   registry: ghcr.io/savak1990/vk-llm-on-demand/charts
-chartVersion: "0.3.1"
-tag: "ad9cf24dc135ccad3163e6d8b2bc9808581ad511"
+chartVersion: "0.4.0"
+tag: "25ed6c1d6cb39bdce467435a971d0fc0ab16c11e"
 
 # Secrets the platform renders into namespace llm (vk-lab-platform
 # gitops/templates/platform/shared/llm/secrets.yaml). The chart mounts them
@@ -24,14 +24,13 @@ model:
   alias: qwen3.8-27b
   url: https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q8_0.gguf
   sha256: 6bc9e7220d8400574fd62df25f04a961cb5cbb0d766cf0118c21c36c0059c35a
-  # The model's native window, per session. One f16 slot at this size used
-  # 42.9 of 48 GB VRAM in total on 2026-11-24 (weights plus about 14 GB).
-  contextSize: 262144
-  # Today's lab behaviour: one f16 session. A follow-up promotion PR switches
-  # this to 4 sessions of 131072 tokens each with q8_0, once this chart ships.
-  parallel: 1
-  kCacheType: f16
-  vCacheType: f16
+  # Context per session. One f16 slot of 262144 tokens used 42.9 of 48 GB
+  # VRAM on 2026-11-24; 4 slots of 131072 at q8_0 need about the same KV
+  # memory (estimate, confirm in the Vast console after the first start).
+  contextSize: 131072
+  parallel: 4
+  kCacheType: q8_0
+  vCacheType: q8_0
 # Vast.ai gpu_name, exact string. 48 GB, same generation as L40S, cheaper median price.
 gpu: RTX 6000Ada
 
