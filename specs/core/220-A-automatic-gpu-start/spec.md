@@ -250,7 +250,7 @@ else in the body changes.
 **Design note (2026-11-24).** OpenCode v2.3.2 hides the thinking block by
 default, so a held stream showed no visible token and looked stuck.
 Chatbox may use the first 100 characters of the answer for the chat
-title, and Open WebUI glues the thinking line to the answer. The one
+title, and Open WebUI glues the visible line to the answer. The one
 visible status line is sent with no prefix so it reads plainly wherever
 it lands, and it is stripped from history so the model never sees it on a
 later turn. The old `reasoning_content` prefix `[vk-llm] ` rendered as an

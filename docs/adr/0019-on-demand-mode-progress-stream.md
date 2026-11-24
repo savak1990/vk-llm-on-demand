@@ -71,6 +71,10 @@ also sends one visible `content` line, no prefix, once at the start of the
 hold: "⏳ Starting the GPU (3–6 min). Progress is in the thinking block."
 The thinking-line prefix changes from `[vk-llm] ` to `vk-llm › `, since
 OpenCode's markdown renderer showed the old prefix as an underlined link.
+This narrows the "never `content`" rule above to every line except that
+one. Trade-off: on a denial, failure or `maxWait` expiry the status line is
+the only `content` before the error chunk, so a client can show it as the
+reply; the error chunk that follows still marks the turn as failed.
 
 ### 4. History stripping
 
