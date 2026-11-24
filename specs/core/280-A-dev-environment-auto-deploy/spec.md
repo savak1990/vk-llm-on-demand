@@ -276,9 +276,11 @@ Provable now, without a live deploy:
   full text) needs a real cluster and is deferred to the post-merge PR.
 - **AC7.** `git diff origin/main...HEAD -- tests/golden/gitops-aws` in
   `vk-lab-platform` shows 18 changed Ahorro golden files (comment rewording
-  only — `git diff ... | grep '^[+-][^+-]' | grep -v '^[+-]#'` is empty for
-  each one); every changed `+`/`-` line starts with `#`. Names, namespaces
-  and rules are unchanged. The replicasets fix in this same pull request
+  only). One glob diff over all 18 at once —
+  `git diff origin/main...HEAD -- 'tests/golden/gitops-aws/*/*ahorro*' |
+  grep '^[+-][^+-]' | grep -v '^[+-]#'` — is empty, so every changed
+  `+`/`-` line across all of them starts with `#`. Names, namespaces and
+  rules are unchanged. The replicasets fix in this same pull request
   (finding 10) only re-ran `gitops-render-check.sh update` on top of that,
   which changed exactly the three `Role__llm-dev__llm-deploy.yaml` variants
   and touched no Ahorro file.
