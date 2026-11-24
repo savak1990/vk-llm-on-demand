@@ -64,11 +64,12 @@ ConfigMap and the traffic-policy target have the same names. The default
 `namespace=llm-dev`, `hostPrefix=llm-dev`, `chartVersion=<version>`,
 `tag=<full sha>` and `fqdn=<from SSM>`, and takes
 `.spec.source.helm.valuesObject` from the rendered Application with `yq`.
-It then sets `prometheusRule.enabled=false` and `dashboard.enabled=false`.
+It then sets `prometheusRule.enabled=false`, `dashboard.enabled=false` and
+`config.lifecycle.provisioningMode=explicit`, so dev stays explicit
+regardless of production's mode (R7).
 Every other value — model, GPU, worker image, gateway caps, secret names —
 is production's, so there is one place that pins them. Budget ($30/month),
-price cap ($0.80/h), idle timeout (30 min) and explicit mode are the chart
-defaults production also uses.
+price cap ($0.80/h) and idle timeout (30 min) are production's.
 
 ### Deploy job
 
@@ -147,8 +148,9 @@ same for both. `scripts/gpu-control.sh` does not change.
 
 ### Failure and cost rules
 
-- Dev rents nothing unless someone starts it; explicit mode, the $30 budget,
-  the $0.80 cap and the 30-minute idle timeout apply as in production.
+- Dev rents nothing unless someone starts it; dev stays in explicit mode
+  regardless of production's provisioning mode, and the $30 budget, the
+  $0.80 cap and the 30-minute idle timeout apply as in production.
 - The two installations cannot touch each other's instances: each lists only
   labels prefixed `vkllm:<installationId>:`.
 - The deploy identity cannot read or write namespace `llm`: it has no
@@ -216,8 +218,9 @@ same for both. `scripts/gpu-control.sh` does not change.
 ## Tests / acceptance criteria
 
 - AC1. The rendered dev values differ from production's only in `host`, the
-  image tag, the chart version, `prometheusRule` and `dashboard` (a diff in
-  the dry run of step 3).
+  image tag, the chart version, `prometheusRule`, `dashboard` and
+  `config.lifecycle.provisioningMode` (dev stays `explicit`; a diff in the
+  dry run of step 3).
 - AC2. With the credential parameters absent, `deploy-dev.sh` exits 2 and
   the job is green with a warning.
 - AC3. A merge to `main` produces a `deploy-dev` job that is green within
@@ -255,8 +258,10 @@ None. Closed on 2026-11-23:
 Provable now, without a live deploy:
 
 - **AC1.** `make gitops-check` renders production's values and dev's values
-  from the pinned OCI chart and diffs them with `host`, `prometheusRule`
-  and `dashboard` stripped — they match. It then additionally renders dev's
+  from the pinned OCI chart and diffs them with `host`, `prometheusRule`,
+  `dashboard` and `config.lifecycle.provisioningMode` stripped — they match,
+  and dev's rendered `provisioningMode` is asserted `explicit`. It then
+  additionally renders dev's
   values against the main-branch chart in `deploy/helm/gpu-on-demand`
   (not the pinned OCI chart, which is what `deploy-dev.sh` actually
   installs) and asserts the same kind list:

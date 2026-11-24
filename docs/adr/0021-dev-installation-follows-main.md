@@ -33,10 +33,11 @@ credential, and Argo CD owns only the released namespace.
    service-account token the platform publishes to SSM. Helm alone owns the
    chart objects in `llm-dev`; Argo CD self-heals only the platform objects
    there (namespace, RBAC, ExternalSecrets, traffic policy).
-3. **Dev is production's configuration plus newer code.** Its values are
-   rendered from the same `gitops/` chart as production's, with only the
-   namespace, host prefix, version and image tag changed, and alerts and
-   dashboard off. Budget, price cap, idle timeout and explicit mode are
+3. **Dev is production's configuration plus newer code, except mode.** Its
+   values are rendered from the same `gitops/` chart as production's, with
+   only the namespace, host prefix, version and image tag changed, alerts
+   and dashboard off, and the provisioning mode forced to `explicit`
+   regardless of production's. Budget, price cap and idle timeout are
    production's.
 4. **Dev shares production's Vast.ai account and all four application
    secrets** (client key, management token, worker seed, SSH key). Instance

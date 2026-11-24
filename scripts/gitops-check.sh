@@ -95,9 +95,13 @@ tag="$(yq '.tag' gitops/values.yaml)"
   echo "gitops-check: dev values must disable prometheusRule and dashboard" >&2
   exit 1
 }
-strip='del(.host, .prometheusRule, .dashboard)'
+[ "$(yq '.config.lifecycle.provisioningMode' "$tmp/dev-values.yaml")" = "explicit" ] || {
+  echo "gitops-check: dev must stay in explicit provisioning mode" >&2
+  exit 1
+}
+strip='del(.host, .prometheusRule, .dashboard, .config.lifecycle.provisioningMode)'
 diff <(yq -P "$strip" "$tmp/values.yaml") <(yq -P "$strip" "$tmp/dev-values.yaml") || {
-  echo "gitops-check: dev values may differ from production only in host, prometheusRule and dashboard" >&2
+  echo "gitops-check: dev values may differ from production only in host, prometheusRule, dashboard and provisioningMode" >&2
   exit 1
 }
 helm template gpu-on-demand oci://ghcr.io/savak1990/vk-llm-on-demand/charts/gpu-on-demand \
