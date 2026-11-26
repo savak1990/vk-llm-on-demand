@@ -199,7 +199,8 @@ for two connections.
 - AC3. After a merge, the `llm-dev` Application syncs the new version within
   10 minutes and its PostSync hook succeeds.
 - AC4. The platform golden diff for production's pointer, project, secrets
-  and traffic policy is empty or comment-only.
+  and traffic policy is comment-only, except an explicit
+  `valueFiles: [values.yaml]` on the pointer (Argo's default made visible).
 - AC5. `GET https://llm-dev.<fqdn>/api/v1/gpu/status` returns 200, and the
   deploy creates no Vast.ai instance.
 - AC6. Open WebUI shows `dev-<alias>` next to `<alias>`, with production's
