@@ -1,6 +1,6 @@
 ---
 id: "CORE-180"
-status: "DRAFT"
+status: "READY"
 updated: "2026-11-26"
 depends_on: ["CORE-020", "CORE-050", "CORE-100", "CORE-210", "CORE-220", "CORE-310", "CORE-320"]
 adrs: ["0014", "0003", "0004", "0005", "0015", "0018"]
@@ -14,8 +14,9 @@ no expiry). [CORE-320](../320-D-vast-volume-spike/spec.md) is DONE
 (2026-11-26): a volume survives the destroy of its GPU (V1), and a hit made
 the model ready in about 126 s against about 368 s for a miss, and saved the
 $1.12 download fee. The answers V2 to V9 are written into the sections below.
-One design question from the spike is open (see Open questions); it is
-decided before implementation.
+The operator decided the two questions from the spike on 2026-11-26: offers
+that can start a cache are preferred within the same 15 % threshold, and
+the storage price cap is $0.40/GB-month.
 [CORE-310](../310-A-cold-start-recording/spec.md) comes first, because it
 gives the rental records that this spec extends.
 
@@ -73,7 +74,7 @@ config:
     maxCaches: 1                         # 0 disables the cache and releases every volume
     retention: 72h                       # from the end of the last use
     preferThreshold: 0.15                # a host without a cache wins only if ≥ 15 % cheaper
-    maxStoragePriceUSDPerGBMonth: 0.25   # no volume on a host with a higher storage price
+    maxStoragePriceUSDPerGBMonth: 0.40   # no volume on a host with a higher storage price
   budget:
     monthlyUSD: 35                       # was 30; storage now counts in it
 ```
@@ -85,7 +86,7 @@ keeps one cache, and the lab uses the default with no override in
 
 The volume size is derived, never configured:
 `ceil(modelBytes × 1.1 / 1e9) + 2` GB (34 GB for the 28.6 GB model). With
-`maxCaches: 1` the worst storage cost is 34 GB × $0.25 = $8.50 per month.
+`maxCaches: 1` the worst storage cost is 34 GB × $0.40 = $13.60 per month.
 
 ### State document
 
@@ -136,7 +137,20 @@ unchanged (ADR 0018). Then:
    without a cache.
 3. If `C` exists and `N.sessionUSD > (1 − preferThreshold) × C.sessionUSD`,
    choose `C` (a hit). If `C` exists and no `N` exists, choose `C`.
-   Otherwise choose `N` (a miss).
+   Otherwise the result is a miss, and step 4 chooses among the offers
+   without a cache.
+4. On a miss, `S` is the cheapest offer whose machine can start a cache
+   (every condition of "Seeding on a miss" holds for it), and `U` is the
+   cheapest offer whose machine cannot. If `S` exists and
+   `U.sessionUSD > (1 − preferThreshold) × S.sessionUSD`, choose `S`. If `S`
+   exists and no `U` exists, choose `S`. Otherwise choose `U`. When
+   `maxCaches` is `0`, no offer can start a cache, so step 4 is the plain
+   session-cost order.
+
+Both steps use the one `preferThreshold` setting. The volume offers come
+from one `search volumes` call per search, joined to the GPU offers by
+`machine_id`; a failed volume search makes every offer a `U` and never fails
+the start (R9).
 
 The cached host never gets a price premium above a cap: it must pass every
 filter like any other offer. If the search does not return the cached
@@ -284,6 +298,8 @@ $35 is safe only when storage counts in it.
    cached machine wins. Another at $0.34 (exactly 15 % cheaper) or $0.33:
    the other wins.
 3. AC3. A cached machine priced above `maxHourlyPriceUSD` is never chosen.
+   On a miss, an offer that can start a cache at $0.40 wins over one that
+   cannot at $0.35 (12.5 % cheaper); one that cannot at $0.34 wins.
 4. AC4. 72 h after the destroy, with no use, the volume is deleted within two
    reconcile ticks; a use at 71 h moves the expiry to 72 h after that use.
 5. AC5. When the month-to-date spend reaches the budget, every volume not in
@@ -296,8 +312,8 @@ $35 is safe only when storage counts in it.
 
 ## Definition of done
 
-- [ ] CORE-320 is `DONE` and V1 is true.
-- [ ] ADR 0014 is `Accepted`.
+- [x] CORE-320 is `DONE` and V1 is true.
+- [x] ADR 0014 is `Accepted`.
 - [ ] AC1 to AC6 pass in CI; AC7 is recorded under Evidence.
 - [ ] `make go-build go-test go-lint helm-lint helm-template specs-check` passes.
 - [ ] Status `DONE`, folder renamed `180-D-…`, in the same PR as the code.
@@ -306,8 +322,6 @@ $35 is safe only when storage counts in it.
 
 | Question | Why it matters | Settled by |
 |---|---|---|
-| Prefer offers whose machine has a volume offer (operator proposal, 2026-11-26)? If yes, by how much in the session-cost ranking? | Only a machine with a volume offer can start a cache. In the spike, 5 of 6 machines had one, but at most 1 per snapshot was at or below $0.25/GB-month with enough space | Operator decision before implementation |
-| Is `maxStoragePriceUSDPerGBMonth: 0.25` the right default? | Volume prices were $0.20–0.667/GB-month; at $0.25, a new cache could start on 1 of 6 machines per snapshot | Same decision |
 | Can a delete fail while another customer rents the machine, or while it is offline? | The release and budget rules need the delete to stop the billing | Observed in production through `vkllm_cache_delete_failures_total` |
 
 ## Evidence
