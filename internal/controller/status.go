@@ -111,7 +111,7 @@ func splitSpend(e store.LedgerEntry, p *store.OfferPrices) (gpu, storage, downlo
 // document's running spend through this one lookup.
 func openEntry(doc store.Document) (store.LedgerEntry, bool) {
 	for _, e := range doc.Ledger.Entries {
-		if e.Gen == doc.Generation && e.End == nil {
+		if e.Gen == doc.Generation && e.Volume == "" && e.End == nil {
 			return e, true
 		}
 	}

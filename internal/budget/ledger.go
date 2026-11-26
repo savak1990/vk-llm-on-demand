@@ -39,7 +39,32 @@ func (c *Checker) RefreshOpenEntry(doc *store.Document, now time.Time) {
 func (c *Checker) CloseEntry(doc *store.Document, now time.Time, gen int64) {
 	for i := range doc.Ledger.Entries {
 		e := &doc.Ledger.Entries[i]
-		if e.Gen == gen && e.End == nil {
+		if e.Gen == gen && e.Volume == "" && e.End == nil {
+			e.EstUSD = estUSD(e.FixedUSD, e.DPH, e.Start, now)
+			t := now
+			e.End = &t
+			doc.Ledger.TotalUSD += e.EstUSD
+			break
+		}
+	}
+	foldOverflow(doc)
+}
+
+// OpenStorageEntry starts charging a volume when it is recorded, before
+// its create: an ambiguous create can still make it.
+func (c *Checker) OpenStorageEntry(doc *store.Document, now time.Time, gen int64, label string, dphUSD float64) {
+	for _, e := range doc.Ledger.Entries {
+		if e.Volume == label && e.End == nil {
+			return
+		}
+	}
+	doc.Ledger.Entries = append(doc.Ledger.Entries, store.LedgerEntry{Gen: gen, Volume: label, Start: now, DPH: dphUSD})
+}
+
+func (c *Checker) CloseStorageEntry(doc *store.Document, now time.Time, label string) {
+	for i := range doc.Ledger.Entries {
+		e := &doc.Ledger.Entries[i]
+		if e.Volume == label && e.End == nil {
 			e.EstUSD = estUSD(e.FixedUSD, e.DPH, e.Start, now)
 			t := now
 			e.End = &t
@@ -80,7 +105,7 @@ func (c *Checker) Rollover(doc *store.Document, now time.Time) {
 	var stillOpen []store.LedgerEntry
 	for _, e := range doc.Ledger.Entries {
 		if e.End == nil {
-			stillOpen = append(stillOpen, store.LedgerEntry{Gen: e.Gen, Start: now, DPH: e.DPH})
+			stillOpen = append(stillOpen, store.LedgerEntry{Gen: e.Gen, Volume: e.Volume, Start: now, DPH: e.DPH})
 		}
 	}
 	doc.Ledger.Month = month

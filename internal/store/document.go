@@ -1,7 +1,6 @@
 package store
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
@@ -15,19 +14,19 @@ const (
 )
 
 type Document struct {
-	SchemaVersion    int             `json:"schemaVersion"`
-	InstallationID   string          `json:"installationId"`
-	Generation       int64           `json:"generation"`
-	Desired          string          `json:"desired"`
-	Instance         *Instance       `json:"instance"`
-	Ops              []Op            `json:"ops"`
-	AttemptsThisHour Attempts        `json:"attemptsThisHour"`
-	Ledger           Ledger          `json:"ledger"`
-	MachineDenylist  []DenyEntry     `json:"machineDenylist"`
-	Cache            json.RawMessage `json:"cache"`
-	BudgetMonthUSD   *float64        `json:"budgetMonthUsd,omitempty"`
-	StartOrigin      string          `json:"startOrigin,omitempty"`
-	Rentals          []Rental        `json:"rentals,omitempty"`
+	SchemaVersion    int         `json:"schemaVersion"`
+	InstallationID   string      `json:"installationId"`
+	Generation       int64       `json:"generation"`
+	Desired          string      `json:"desired"`
+	Instance         *Instance   `json:"instance"`
+	Ops              []Op        `json:"ops"`
+	AttemptsThisHour Attempts    `json:"attemptsThisHour"`
+	Ledger           Ledger      `json:"ledger"`
+	MachineDenylist  []DenyEntry `json:"machineDenylist"`
+	Cache            *CacheState `json:"cache"`
+	BudgetMonthUSD   *float64    `json:"budgetMonthUsd,omitempty"`
+	StartOrigin      string      `json:"startOrigin,omitempty"`
+	Rentals          []Rental    `json:"rentals,omitempty"`
 }
 
 type Instance struct {
@@ -43,6 +42,7 @@ type Instance struct {
 	LastInferenceFinishedAt *time.Time `json:"lastInferenceFinishedAt"`
 	IdleDeadline            *time.Time `json:"idleDeadline"`
 	LastError               string     `json:"lastError"`
+	Cache                   string     `json:"cache,omitempty"`
 }
 
 // Rental is the record of one start. MarkAt is the controller-clock time
@@ -65,6 +65,7 @@ type Rental struct {
 	Stages             map[string]int64 `json:"stages,omitempty"`
 	DownloadMBps       float64          `json:"downloadMBps,omitempty"`
 	CostUSD            float64          `json:"costUSD,omitempty"`
+	Cache              string           `json:"cache,omitempty"`
 }
 
 type Offer struct {
@@ -113,6 +114,7 @@ type Ledger struct {
 
 type LedgerEntry struct {
 	Gen      int64      `json:"gen"`
+	Volume   string     `json:"volume,omitempty"`
 	Start    time.Time  `json:"start"`
 	End      *time.Time `json:"end"`
 	DPH      float64    `json:"dph"`
@@ -123,6 +125,36 @@ type LedgerEntry struct {
 type DenyEntry struct {
 	MachineID int64     `json:"machineId"`
 	Until     time.Time `json:"until"`
+}
+
+const (
+	CacheSeeding  = "seeding"
+	CacheReady    = "ready"
+	CacheDeleting = "deleting"
+)
+
+type CacheState struct {
+	Volumes []CacheVolume `json:"volumes"`
+}
+
+// CacheVolume is keyed by Label: the provider assigns VolumeID only after
+// the create, and the sweep fills it in from the volume list.
+type CacheVolume struct {
+	Label                string     `json:"label"`
+	VolumeID             int64      `json:"volumeId,omitempty"`
+	VolumeOfferID        int64      `json:"volumeOfferId,omitempty"`
+	MachineID            int64      `json:"machineId"`
+	ModelURL             string     `json:"modelURL"`
+	SHA256               string     `json:"sha256"`
+	SizeGB               int        `json:"sizeGB"`
+	StorageUSDPerGBMonth float64    `json:"storageUSDPerGBMonth"`
+	State                string     `json:"state"`
+	CreatedGen           int64      `json:"createdGen"`
+	InUseGen             int64      `json:"inUseGen"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	ExpiresAt            *time.Time `json:"expiresAt"`
+	DeleteRequestedAt    *time.Time `json:"deleteRequestedAt"`
+	DeleteReason         string     `json:"deleteReason,omitempty"`
 }
 
 func (d Document) IsFresh() bool { return d.Generation == 0 && d.Instance == nil }
@@ -137,6 +169,5 @@ func NewDocument(installationID string) (Document, error) {
 		SchemaVersion:  SchemaVersion,
 		InstallationID: installationID,
 		Desired:        DesiredStopped,
-		Cache:          []byte("null"),
 	}, nil
 }

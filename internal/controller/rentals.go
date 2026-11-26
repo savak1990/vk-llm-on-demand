@@ -111,7 +111,7 @@ func endRental(d *store.Document, r *store.Rental, in rentalInput) {
 	end := in.now
 	r.EndedAt, r.MarkAt = &end, nil
 	for _, e := range d.Ledger.Entries {
-		if e.Gen == r.Gen && e.End != nil {
+		if e.Gen == r.Gen && e.Volume == "" && e.End != nil {
 			r.CostUSD = math.Round(e.EstUSD*1e4) / 1e4
 		}
 	}

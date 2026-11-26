@@ -320,3 +320,16 @@ func TestRentalEndMergesWorkerStages(t *testing.T) {
 		t.Fatalf("record = %+v", r)
 	}
 }
+
+func TestRentalCostIgnoresStorageEntryOfSameGen(t *testing.T) {
+	d, _ := store.NewDocument("iid")
+	d.Generation = 6
+	d.Instance = &store.Instance{State: Destroying.String(), ProviderID: "9", Offer: rentalOffer()}
+	end := rentalT0
+	d.Ledger.Entries = []store.LedgerEntry{{Gen: 6, Volume: "vkllm_iid_v6", End: &end, EstUSD: 9.99}, {Gen: 6, End: &end, EstUSD: 0.18}}
+	d.Rentals = []store.Rental{{Gen: 6, Outcome: "ready"}}
+	step(t, &d, rentalT0, "", func(d *store.Document) { d.Instance = nil })
+	if d.Rentals[0].CostUSD != 0.18 {
+		t.Fatalf("CostUSD = %v, want the GPU entry 0.18", d.Rentals[0].CostUSD)
+	}
+}

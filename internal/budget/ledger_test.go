@@ -175,3 +175,29 @@ func TestRolloverDropsFixedAmountFromNewMonth(t *testing.T) {
 		t.Fatalf("after rollover entries = %+v, want one open entry with FixedUSD 0", doc.Ledger.Entries)
 	}
 }
+
+func TestStorageEntrySeparateFromGPUEntry(t *testing.T) {
+	c := New(Config{MonthlyUSD: 35, MaxMonthlyUSD: 100})
+	d, _ := store.NewDocument("abc")
+	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	d.Ledger.Month = "2026-11"
+	c.OpenEntry(&d, t0, 11, 0.64, 0)
+	c.OpenStorageEntry(&d, t0, 11, "vkllm_abc_v11", 34*0.4/730)
+	c.OpenStorageEntry(&d, t0, 11, "vkllm_abc_v11", 34*0.4/730) // idempotent
+	c.CloseEntry(&d, t0.Add(time.Hour), 11)
+	if len(d.Ledger.Entries) != 2 || d.Ledger.Entries[0].End == nil || d.Ledger.Entries[1].End != nil {
+		t.Fatalf("entries = %+v; GPU closed, storage still open", d.Ledger.Entries)
+	}
+	c.RefreshOpenEntry(&d, t0.Add(730*time.Hour))
+	if got := c.EstimatedMTD(d); got < 0.64+13.59 || got > 0.64+13.61 {
+		t.Fatalf("EstimatedMTD = %v, want GPU 0.64 + storage 13.60", got)
+	}
+	c.Rollover(&d, time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC))
+	if len(d.Ledger.Entries) != 1 || d.Ledger.Entries[0].Volume != "vkllm_abc_v11" {
+		t.Fatalf("after rollover = %+v; the open storage entry keeps its label", d.Ledger.Entries)
+	}
+	c.CloseStorageEntry(&d, time.Date(2026, 12, 2, 0, 0, 0, 0, time.UTC), "vkllm_abc_v11")
+	if d.Ledger.Entries[0].End == nil || d.Ledger.TotalUSD <= 0 {
+		t.Fatalf("storage close = %+v total %v", d.Ledger.Entries[0], d.Ledger.TotalUSD)
+	}
+}

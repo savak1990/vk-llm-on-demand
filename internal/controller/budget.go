@@ -16,6 +16,8 @@ type Budget interface {
 	AssertPrice(hourlyUSD, capUSD float64) error
 	OpenEntry(doc *store.Document, now time.Time, gen int64, dphUSD, fixedUSD float64)
 	CloseEntry(doc *store.Document, now time.Time, gen int64)
+	OpenStorageEntry(doc *store.Document, now time.Time, gen int64, label string, dphUSD float64)
+	CloseStorageEntry(doc *store.Document, now time.Time, label string)
 	Rollover(doc *store.Document, now time.Time)
 	RefreshOpenEntry(doc *store.Document, now time.Time)
 	UsedRatio(doc store.Document) float64

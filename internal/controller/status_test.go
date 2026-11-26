@@ -189,3 +189,12 @@ func TestOfferChosenStoresGeolocation(t *testing.T) {
 		t.Fatalf("stored offer = %+v", doc.Instance)
 	}
 }
+
+func TestOpenEntrySkipsStorage(t *testing.T) {
+	d, _ := store.NewDocument("iid")
+	d.Generation = 6
+	d.Ledger.Entries = []store.LedgerEntry{{Gen: 6, Volume: "vkllm_iid_v6", EstUSD: 9.99}, {Gen: 6, EstUSD: 0.18}}
+	if e, ok := openEntry(d); !ok || e.EstUSD != 0.18 {
+		t.Fatalf("openEntry = %+v, %v; want the GPU entry", e, ok)
+	}
+}
