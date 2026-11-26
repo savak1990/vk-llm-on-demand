@@ -67,8 +67,7 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		gpuIdleDeadlineSeconds, gpuLastInferenceFinishedSeconds,
 		destroyAttemptsTotal, orphansDestroyedTotal, reconcileRunsTotal,
 		instanceHourlyPriceUSD)
-	// Every declared stage must appear in /metrics at process start,
-	// even though only first_token is ever really observed today.
+	// Every declared stage must appear in /metrics at process start.
 	for _, stage := range []string{"search", "create", "boot", "link", "download", "load", "ready", "first_token"} {
 		coldstartStageSeconds.WithLabelValues(stage)
 	}

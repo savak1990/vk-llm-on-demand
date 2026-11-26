@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"math"
 	"time"
 
@@ -135,6 +136,11 @@ func markStage(r *store.Rental, stage string, now time.Time) rentalChange {
 	if r.MarkAt == nil {
 		return rentalChange{}
 	}
+	// A pod restart during Loading recovers into Booting, so the second
+	// EvLinkUp that follows must not re-observe or overwrite a stage already recorded.
+	if _, ok := r.Stages[stage]; ok {
+		return rentalChange{}
+	}
 	secs := wholeSeconds(now.Sub(*r.MarkAt))
 	if r.Stages == nil {
 		r.Stages = map[string]int64{}
@@ -159,4 +165,89 @@ func wholeSeconds(d time.Duration) int64 {
 		return 0
 	}
 	return int64(math.Round(d.Seconds()))
+}
+
+// summarizeWorkerStages turns worker-clock stage times into whole-second
+// stages; the speed uses fetch time only, so sha256 does not lower it.
+func summarizeWorkerStages(times map[string]time.Time, modelBytes int64) (map[string]int64, float64) {
+	stages := map[string]int64{}
+	var mbps float64
+	if _, ok := times["download_skipped"]; ok {
+		stages["download"] = 0
+	} else if begin, ok := times["download_begin"]; ok {
+		if v, ok := times["verified"]; ok {
+			stages["download"] = wholeSeconds(v.Sub(begin))
+		}
+		if end, ok := times["download_end"]; ok && end.After(begin) && modelBytes > 0 {
+			mbps = math.Round(float64(modelBytes)/1e6/end.Sub(begin).Seconds()*10) / 10
+		}
+	}
+	if spawn, ok := times["server_spawn"]; ok {
+		if healthy, ok := times["server_healthy"]; ok {
+			stages["load"] = wholeSeconds(healthy.Sub(spawn))
+		}
+	}
+	return stages, mbps
+}
+
+func (c *Controller) workerStagesFor(gen int64) *workerStages {
+	c.workerStagesMu.Lock()
+	defer c.workerStagesMu.Unlock()
+	if c.workerStages == nil || c.workerStages.gen != gen {
+		return nil
+	}
+	return c.workerStages
+}
+
+func (c *Controller) readWorkerStages(ctx context.Context, gen int64) {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, progressReadTimeout)
+	defer cancel()
+	p, err := c.deps.Worker.Progress(rctx, conn.Exec)
+	if err != nil {
+		c.warn("controller: worker stage read failed", "gen", gen, "err", err)
+		return
+	}
+	doc, _, err := c.deps.Store.Load(ctx)
+	if err != nil {
+		return
+	}
+	r := findRental(&doc, gen)
+	if r == nil {
+		return
+	}
+	stages, mbps := summarizeWorkerStages(p.Times, r.ModelBytes)
+	c.workerStagesMu.Lock()
+	c.workerStages = &workerStages{gen: gen, stages: stages, mbps: mbps}
+	c.workerStagesMu.Unlock()
+	for k, v := range stages {
+		coldstartStageSeconds.WithLabelValues(k).Observe(float64(v))
+	}
+	c.logRentalReady(*r, stages, mbps)
+}
+
+func (c *Controller) logRentalReady(r store.Rental, worker map[string]int64, mbps float64) {
+	if c.deps.Log == nil {
+		return
+	}
+	args := []any{"gen", r.Gen, "origin", r.Origin, "machine_id", r.MachineID, "geo", r.Geo, "gpu", r.GPU,
+		"dph", r.DPH, "inet_down_mbps", r.InetDownMbps, "download_mbps", mbps}
+	for _, name := range []string{"search", "create", "boot", "link", "download", "load", "ready"} {
+		v, ok := r.Stages[name]
+		if w, wok := worker[name]; wok {
+			v, ok = w, true
+		}
+		if ok {
+			args = append(args, "stage_"+name+"_s", v)
+		}
+	}
+	if r.ReadyAt != nil {
+		args = append(args, "total_s", wholeSeconds(r.ReadyAt.Sub(r.StartedAt)))
+	}
+	c.deps.Log.Info("rental_ready", args...)
 }

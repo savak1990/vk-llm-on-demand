@@ -3,6 +3,7 @@ package worker
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParseProgress(t *testing.T) {
@@ -25,5 +26,16 @@ func TestParseProgressMissingBytes(t *testing.T) {
 		if err != nil || p.Bytes != 0 {
 			t.Fatalf("%q: Bytes %d err %v, want 0 and nil", out, p.Bytes, err)
 		}
+	}
+}
+
+func TestParseProgressKeepsTimes(t *testing.T) {
+	out := []byte("VKLLM_STAGE download_begin 1764151000000\nVKLLM_STAGE download_end 1764151285500\nVKLLM_BYTES 42\n")
+	p, err := ParseProgress(out)
+	if err != nil {
+		t.Fatalf("ParseProgress: %v", err)
+	}
+	if got := p.Times["download_end"].Sub(p.Times["download_begin"]); got != 285500*time.Millisecond {
+		t.Fatalf("download_end - download_begin = %v, want 285.5s", got)
 	}
 }

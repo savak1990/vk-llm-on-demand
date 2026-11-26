@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ProgressCommand prints the stage log and the bytes written under /models;
@@ -15,6 +16,7 @@ const ProgressCommand = `cat /var/log/vkllm-stages.log 2>/dev/null; echo "VKLLM_
 type Progress struct {
 	Bytes  int64
 	Stages []string
+	Times  map[string]time.Time
 }
 
 // ParseProgress reads ProgressCommand's output; a missing or malformed
@@ -24,7 +26,7 @@ func ParseProgress(out []byte) (Progress, error) {
 	if err != nil {
 		return Progress{}, err
 	}
-	var p Progress
+	p := Progress{Times: stages}
 	for name := range stages {
 		p.Stages = append(p.Stages, name)
 	}

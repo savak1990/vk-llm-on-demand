@@ -178,6 +178,9 @@ type Controller struct {
 	progressGen     int64
 	progressReading atomic.Bool // single-flights readProgress across overlapping Loading polls
 
+	workerStagesMu sync.Mutex
+	workerStages   *workerStages
+
 	reconciling    atomic.Bool
 	reconcileMu    sync.Mutex
 	orphanObserved map[provider.InstanceID]int // keyed by id, not label: a duplicate shares the active instance's label

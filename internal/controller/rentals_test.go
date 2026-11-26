@@ -142,3 +142,69 @@ func TestRentalEndFallsBackToCreateOpOutcome(t *testing.T) {
 		t.Fatalf("Outcome = %q, want duplicate_label", d.Rentals[0].Outcome)
 	}
 }
+
+func TestMarkStageSkipsAlreadyPresentStage(t *testing.T) {
+	mark := rentalT0
+	r := store.Rental{MarkAt: &mark, Stages: map[string]int64{"link": 5}}
+	got := markStage(&r, "link", rentalT0.Add(10*time.Second))
+	if got != (rentalChange{}) {
+		t.Fatalf("change = %+v, want zero value", got)
+	}
+	if r.Stages["link"] != 5 {
+		t.Fatalf("Stages[link] = %d, want unchanged 5", r.Stages["link"])
+	}
+	if r.MarkAt == nil || !r.MarkAt.Equal(mark) {
+		t.Fatalf("MarkAt = %v, want unchanged %v", r.MarkAt, mark)
+	}
+}
+
+func TestSummarizeWorkerStages(t *testing.T) {
+	at := func(s float64) time.Time { return rentalT0.Add(time.Duration(s * float64(time.Second))) }
+	cases := []struct {
+		name       string
+		times      map[string]time.Time
+		wantStages map[string]int64
+		wantMBps   float64
+	}{
+		{"miss", map[string]time.Time{
+			"download_begin": at(0), "download_end": at(285), "verified": at(300),
+			"server_spawn": at(301), "server_healthy": at(310),
+		}, map[string]int64{"download": 300, "load": 9}, 100.3},
+		{"skipped", map[string]time.Time{
+			"download_skipped": at(0), "verified": at(20), "server_spawn": at(21), "server_healthy": at(30),
+		}, map[string]int64{"download": 0, "load": 9}, 0},
+		{"not healthy yet", map[string]time.Time{
+			"download_begin": at(0), "download_end": at(285), "verified": at(300), "server_spawn": at(301),
+		}, map[string]int64{"download": 300}, 100.3},
+		{"empty", map[string]time.Time{}, map[string]int64{}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			stages, mbps := summarizeWorkerStages(c.times, 28595763840)
+			if len(stages) != len(c.wantStages) || mbps != c.wantMBps {
+				t.Fatalf("stages %v mbps %v, want %v %v", stages, mbps, c.wantStages, c.wantMBps)
+			}
+			for k, v := range c.wantStages {
+				if stages[k] != v {
+					t.Fatalf("stages[%s] = %d, want %d", k, stages[k], v)
+				}
+			}
+		})
+	}
+}
+
+func TestRentalEndMergesWorkerStages(t *testing.T) {
+	d, _ := store.NewDocument("iid")
+	d.Generation = 5
+	d.Instance = &store.Instance{State: Destroying.String(), ProviderID: "9"}
+	d.Rentals = []store.Rental{{Gen: 5, Outcome: "ready", Stages: map[string]int64{"boot": 15}}}
+	var ch rentalChange
+	in := rentalInput{now: rentalT0, worker: &workerStages{gen: 5, stages: map[string]int64{"download": 300, "load": 9}, mbps: 100.3}}
+	if err := withRental(func(d *store.Document) error { d.Instance = nil; return nil }, in, &ch)(&d); err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	r := d.Rentals[0]
+	if r.Stages["download"] != 300 || r.Stages["load"] != 9 || r.Stages["boot"] != 15 || r.DownloadMBps != 100.3 {
+		t.Fatalf("record = %+v", r)
+	}
+}

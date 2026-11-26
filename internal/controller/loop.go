@@ -114,7 +114,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 
 	outcome, outcomeOK := provisionOutcome(state, next, ev)
 	var change rentalChange
-	in := rentalInput{now: now, searchStart: ev.SearchStarted, outcome: outcome}
+	in := rentalInput{now: now, searchStart: ev.SearchStarted, outcome: outcome, worker: c.workerStagesFor(doc.Generation)}
 
 	if mutate != nil {
 		committed, txErr := store.Transition(ctx, c.deps.Store, c.flushAndRun(withRental(mutate, in, &change)))
@@ -198,6 +198,10 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	c.syncTimers(state, next, doc)
 
 	c.queueEffects(effects)
+	if state == Loading && next == Ready {
+		gen := doc.Generation
+		c.spawn(func() { c.readWorkerStages(c.effCtx(), gen) })
+	}
 	if state == Idle && next == Searching && c.deps.Log != nil {
 		keyID := ev.KeyID
 		if keyID == "" && doc.StartOrigin == originDemand {

@@ -2058,3 +2058,101 @@ func TestFirstTokenRecordedForEachGeneration(t *testing.T) {
 		t.Fatalf("first_token = %v, want 900ms for generation 2", got)
 	}
 }
+
+func stageCount(t *testing.T, stage string) uint64 {
+	t.Helper()
+	reg := prometheus.NewRegistry()
+	reg.MustRegister(coldstartStageSeconds)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, mf := range mfs {
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "stage" && l.GetValue() == stage {
+					return m.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func TestRentalRecordGoodStartAndStop(t *testing.T) {
+	stages := []string{"search", "create", "boot", "link", "download", "load", "ready"}
+	before := map[string]uint64{}
+	for _, s := range stages {
+		before[s] = stageCount(t, s)
+	}
+	h := newHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S", Geolocation: "Quebec, CA", InetDownMbps: 2400})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusOther, provider.StatusOther)
+	h.worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable, ProbeLoading, ProbeLoading, ProbeLoading, ProbeReady)
+	w0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	h.worker.mu.Lock()
+	h.worker.progress = DownloadProgress{Times: map[string]time.Time{
+		"download_begin": w0, "download_end": w0.Add(285 * time.Second), "verified": w0.Add(300 * time.Second),
+		"server_spawn": w0.Add(301 * time.Second), "server_healthy": w0.Add(310 * time.Second),
+	}}
+	h.worker.mu.Unlock()
+
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	h.Settle(t0.Add(45 * time.Second))
+	if _, err := h.ctl.Stop(context.Background(), false); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	h.Settle(h.clk.Now().Add(2 * time.Minute))
+
+	doc, _, err := h.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if doc.Instance != nil || len(doc.Rentals) != 1 {
+		t.Fatalf("instance %v, rentals %d; want nil, 1", doc.Instance, len(doc.Rentals))
+	}
+	r := doc.Rentals[0]
+	for _, s := range stages {
+		if _, ok := r.Stages[s]; !ok {
+			t.Fatalf("Stages missing %s: %v", s, r.Stages)
+		}
+	}
+	if r.Stages["download"] != 300 || r.Stages["load"] != 9 || r.DownloadMBps <= 0 {
+		t.Fatalf("worker stages %v, MB/s %v", r.Stages, r.DownloadMBps)
+	}
+	if r.EndedAt == nil || r.Outcome != "ready" || r.CostUSD <= 0 {
+		t.Fatalf("ended record = %+v", r)
+	}
+	for _, s := range stages {
+		if got := stageCount(t, s) - before[s]; got < 1 {
+			t.Fatalf("vkllm_coldstart_stage_seconds{stage=%q} count delta = %d, want >= 1", s, got)
+		}
+	}
+}
+
+func TestRentalRecordFailedStatus(t *testing.T) {
+	h := newHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusExited, provider.StatusExited)
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	h.Settle(t0.Add(20 * time.Second))
+	doc, _, err := h.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(doc.Rentals) < 1 {
+		t.Fatal("no rental record")
+	}
+	r := doc.Rentals[0]
+	if r.Outcome != "failed_status" || r.ReadyAt != nil || r.EndedAt == nil {
+		t.Fatalf("record = %+v, want failed_status, no readyAt, endedAt set", r)
+	}
+}
