@@ -163,7 +163,7 @@ release; P2 and P3 are future.
 
 ## 13. Explicitly out of scope for the initial release
 
-Persistent-volume cache and preferred host (ADR 0014, P2), `vk-llm cache *`,
+Model cache on Vast.ai volumes and the preferred cached host (ADR 0014, P2),
 multiple providers, multiple models, dynamic model selection, vLLM,
 multi-GPU, more than one worker, agent orchestration, RAG, warm pools, CRDs
 and an operator, GPU nodes joining the cluster, OAuth or per-user quotas, a

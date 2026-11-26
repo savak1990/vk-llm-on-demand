@@ -1,88 +1,81 @@
-# ADR 0014: Model caching on a Vast.ai persistent volume with preferred-host scheduling (P2)
+# ADR 0014: Model cache on Vast.ai volumes with a preferred cached host
 
 ## Status
 
-**Proposed** (2026-11-01), priority P2, not in the initial release. Extends
-[ADR 0005](0005-model-storage.md), whose Status carries a pointer here.
+**Proposed** (2026-11-01, revised 2026-11-26). Waits on the spike in
+[CORE-320](../../specs/core/320-P-vast-volume-spike/spec.md); Accepted only if
+a volume survives the destroy of its GPU. Extends
+[ADR 0005](0005-model-storage.md), whose Status carries a pointer here. The
+2026-11-01 version (one volume made by `vk-llm cache init`, no expiry,
+several volumes rejected) is replaced by this one after a design session
+with the operator on 2026-11-26.
 
 ## Context
 
-Every provision downloads the 26 GB GGUF (ADR 0005). Vast.ai sells
-persistent volumes that are tied to one physical host and cannot move
-([research §1.7](../research.md)). A volume on a host that also has a
-suitable L40S removes the download from the cold start, at a monthly
-storage cost and with no guarantee that the host has a free GPU at an
-acceptable price when the user starts.
+Every provision downloads the model (28.6 GB today, ADR 0005). On the last
+10 starts (2026-11-24 to 11-25) the model phase was the largest phase in 8
+of 9 good starts; a start took 2:16 to 3:11 on a fast host and up to 6:32 on
+a slow one. The controller already rented the same machine up to 4 times in
+a row, because it was the cheapest. Vast.ai volumes are tied to one machine
+and stay after its GPU is destroyed ([research §1.7](../research.md)). A
+stopped instance is not an option (ADR 0003 §6).
 
 ## Decision (proposed)
 
-1. **Cache lifecycle.** `vk-llm cache init` creates one volume of
-   `storage.persistentCache.sizeGB` (50) on a host chosen with the
-   production offer filter, rents a GPU there once, downloads and verifies
-   the model, records `{volumeId, hostId, machineId, modelURL, sha256,
-   createdAt}` in the state document, and destroys the compute. `cache
-   list`, `cache status`, `cache delete` manage it. At most one volume per
-   installation; the reconcile loop destroys any volume carrying our label
-   that the document does not know.
-2. **Preferred-host scheduling.** When `storage.preferredHost.enabled`
-   is true, the offer search first asks for offers on the cached
-   `machineId` that satisfy the filter and cost at most
-   `maxHourlyPriceUSD × (1 + maxPricePremiumPercent/100)`. If one exists
-   it is chosen and the volume is attached at `/models`; the download
-   stage is skipped after a checksum of the cached file. If none exists
-   within `maxWait` (30s of search attempts), and `allowFallback` is true,
-   the normal search runs and the model is downloaded on the fallback host.
-   The cache is a preference, never a dependency.
-3. **Integrity.** The cached file's sha256 is verified at every attach;
-   a mismatch deletes the file and downloads again.
-4. **Cost visibility.** Storage spend is estimated as
-   `sizeGB × storage_cost per GB-month` from the offer, reported in
-   `GET /api/v1/gpu/cost` as `estimatedStorageUSD`, and counted toward the
-   monthly budget.
-5. **Configuration (future block, not rendered by the MVP chart):**
-
-   ```yaml
-   storage:
-     strategy: ephemeral            # ephemeral | persistentCache
-     persistentCache:
-       enabled: false
-       sizeGB: 50
-     preferredHost:
-       enabled: false
-       allowFallback: true
-       maxPricePremiumPercent: 20
-       maxWait: 30s
-   ```
+1. **Seed during a normal rental.** When a rental downloads the model and a
+   cache slot is free (or the oldest can be replaced), the controller
+   creates a volume on that machine and downloads onto it. No separate
+   `cache init` step exists.
+2. **Prefer a cached host, within a threshold.** Among the offers that pass
+   every filter and cap, an offer on a machine with a verified cached volume
+   wins unless an offer without a cache is at least `cache.preferThreshold`
+   (default 15 %) cheaper in session cost. The cached host gets no price
+   premium above any cap.
+3. **Bounded count, rolling retention.** At most `cache.maxCaches` (default
+   1) volumes. A volume expires `cache.retention` (default 72 h) after the
+   end of its last use; each use extends it. A new cache replaces the oldest.
+4. **Cost is capped and counted.** A volume is created only on a host whose
+   storage price is at most `cache.maxStoragePriceUSDPerGBMonth` (default
+   $0.25), so the worst case is about $8.50 per month at one volume. Storage
+   counts in the monthly budget; when the budget is used up, every volume
+   not in use is deleted. The budget default goes from $30 to $35 with this
+   change.
+5. **Same safety rules as instances.** The registry is the `cache` field of
+   the state ConfigMap (ADR 0004). A volume is recorded before it is
+   created; every delete is retried until the provider confirms absence; a
+   labelled volume that the document does not know is deleted; a failed list
+   deletes nothing; empty-store recovery deletes every labelled volume.
+6. **Integrity.** sha256 is verified on every attach; a mismatch downloads
+   again.
 
 ## Alternatives considered
 
-- **S3 mirror** (ADR 0005). Portable across hosts, no host lock-in, but
-  still a full download per provision; stays the fallback for Hugging Face
-  throttling and is compatible with this ADR.
+- **Postgres for the registry.** Rejected on 2026-11-26: it adds a driver,
+  migrations and a second system to the destroy path, for 1 to 3 records.
+  The cache tracks things that cost money, so it belongs in the same store
+  and loop as the GPU (ADR 0004).
+- **Prefer the last machine without a volume.** It saves 30 to 60 s of image
+  pull for $0. Dropped: the cached-host rule covers the same case with a
+  larger gain, and two preference rules mean two settings.
+- **Prefer a location (EU).** Dropped: no data shows that location changes
+  the download speed. CORE-310 records it; a later ADR can add it.
 - **Keep the instance stopped.** Rejected in ADR 0003 §6.
-- **Several cached volumes on several hosts.** More storage cost for a
-  marginal availability gain; one volume first.
-
-## Rationale
-
-The download is the largest controllable cold-start stage. A single volume
-on a host with the right GPU removes it most of the time, and the fallback
-keeps availability unchanged when it does not.
+- **S3 mirror** (ADR 0005). Still a full download per provision.
 
 ## Consequences
 
-- Spec 180 (new, P2) holds the full design; the MVP chart renders no
-  `storage.*` keys; the state document reserves a `cache` field.
-- The provider interface gains volume calls (`CreateVolume`,
-  `ListVolumes(label)`, `DeleteVolume`, attach via `volume_info` on create,
-  research §1.3) when the spec is implemented.
-- `vk-llm` gains the `cache` subcommand group (not in MVP).
+- CORE-180 holds the design; CORE-310 records each rental, and CORE-180
+  adds a `cache` field to that record.
+- The provider interface gains volume calls in the shape CORE-320 finds.
+- Constitution C-7 and `CLAUDE.md` change the budget default to $35 in the
+  same PR as the cache code, not before.
 
 ## Risks
 
-- The cached host disappears or raises prices; mitigated by fallback and
-  by `cache status` showing host availability.
-- Forgotten volumes bill monthly; mitigated by the one-volume rule, the
-  label sweep, and `cache status` in `vk-llm status` output.
-- Volume semantics on Vast change; the spec re-verifies research §1.7
-  before implementation.
+- A delete can fail while someone else rents the machine (CORE-320 V4). The
+  volume then stays in the ledger and in a failure metric until the delete
+  succeeds.
+- The cached machine is often rented by others; the hit rate can be low.
+  CORE-310's records and the hit/miss metric show it, and `maxCaches: 0`
+  turns the cache off.
+- Vast volume behavior changes; CORE-320 records the behavior with dates.

@@ -77,7 +77,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [150](core/150-D-vk-llm-cli/spec.md) | `vk-llm` CLI: start, status, stop | 055 |
 | [160](core/160-D-github-actions-remote-control/spec.md) | `gpu-control.yml` manual workflow | 055 |
 | [170](core/170-P-security-ci-and-release/spec.md) | gitleaks, govulncheck, trivy, SECURITY.md, release checklist | 010, 120 |
-| [180](core/180-P-persistent-volume-cache/spec.md) | P2: persistent-volume cache and preferred host (not in the initial release) | 020, 050 |
+| [180](core/180-P-persistent-volume-cache/spec.md) | Model cache on Vast.ai volumes: preferred cached host, 72 h rolling retention, storage in the budget | 050, 100, 210, 220, 310, 320 |
 | [190](core/190-D-runtime-budget-reconfiguration/spec.md) | Runtime-mutable budget cap, with a fixed ceiling | 055, 100, 150, 160 |
 | [200](core/200-P-per-start-parameters/spec.md) | Problem statement: model, quantization, GPU, idle timeout and price cap as per-start parameters (no design yet) | 055, 130, 150, 190 |
 | [210](core/210-D-offer-cost-model/spec.md) | Offer selection by estimated session cost; caps on download, storage and disk | 020, 050, 070, 100 |
@@ -89,12 +89,14 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [280](core/280-P-dev-environment-auto-deploy/spec.md) | Requirements: every merge to main deploys to `llm-dev`; production stays a manual gitops change; no PR previews (no design yet) | 120, 130, 160 |
 | [290](core/290-P-large-moe-cpu-offload/spec.md) | Spike: larger MoE models with experts in CPU RAM; offer filter sized to the model (no design yet) | 070, 210 |
 | [300](core/300-A-concurrent-sessions-kv-cache/spec.md) | Concurrent sessions: KV cache type (f16/q8_0/q4_0) and context per session | 070, 080, 130 |
+| [310](core/310-P-cold-start-recording/spec.md) | Cold-start recording: rental history in the state document, real stage durations, `vk-llm rentals` | 040, 050, 090, 210 |
+| [320](core/320-P-vast-volume-spike/spec.md) | Spike: Vast.ai volumes as a model cache (survive destroy, billing, delete, label) | 020, 070 |
 
 ## Order of work
 
 Implement in numeric order, except that 030 (the spike) runs as soon as 020
 can create an instance, because ADR 0006 waits on its result, and 180 waits
-for the initial release. Vertical slices: after 055 the GPU can be started
+for 310 and the 320 spike. Vertical slices: after 055 the GPU can be started
 and stopped through the API; after 060 a started GPU streams a completion;
 after 080 the chart installs it; after 120 it ships from `main`; after 150
 and 160 a laptop and GitHub can drive it.

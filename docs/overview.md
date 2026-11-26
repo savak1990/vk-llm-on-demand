@@ -56,7 +56,7 @@ Documented in [`roadmap.md`](roadmap.md) as future work, not started:
 | Area | Future capability |
 |---|---|
 | Lifecycle | on-demand provisioning mode (ADR 0007), `stop --force` |
-| Storage (P2) | Vast.ai persistent-volume model cache, preferred-host scheduling, `vk-llm cache *` (ADR 0014) |
+| Storage (P2) | Vast.ai volume model cache, preferred cached host, 72 h rolling retention (ADR 0014, specs 310, 320, 180) |
 | Providers | Runpod, Civo, multiple providers at once |
 | Models | multiple configured models, dynamic selection, vLLM backend, multi-GPU |
 | Scale | more than one worker, warm pools, batching schedulers |
