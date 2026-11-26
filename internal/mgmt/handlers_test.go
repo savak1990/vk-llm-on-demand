@@ -12,6 +12,7 @@ import (
 	fakeclock "github.com/savak1990/vk-llm-on-demand/internal/clock/fake"
 	"github.com/savak1990/vk-llm-on-demand/internal/config"
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
+	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
 func newTestServer(t *testing.T, fc *fakeController) *server {
@@ -262,5 +263,17 @@ func TestStartOtherDenialsKeepEmptyMessage(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if body["error"]["message"] != "" {
 		t.Fatalf("message = %q, want empty for no_offer", body["error"]["message"])
+	}
+}
+
+func TestRentals200(t *testing.T) {
+	fc := newFakeController()
+	fc.statusSnap = controller.Snapshot{Rentals: []store.Rental{{Gen: 7, Geo: "Quebec, CA"}}}
+	rec := doReq(newTestServer(t, fc), "GET", "/api/v1/gpu/rentals", "")
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"geo":"Quebec, CA"`) {
+		t.Fatalf("code %d body %s", rec.Code, rec.Body.String())
+	}
+	if rec := doReq(newTestServer(t, fc), "POST", "/api/v1/gpu/rentals", ""); rec.Code != 405 {
+		t.Fatalf("POST code = %d, want 405", rec.Code)
 	}
 }

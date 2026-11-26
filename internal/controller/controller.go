@@ -101,6 +101,8 @@ type Snapshot struct {
 	LastError        string
 	AttemptsThisHour int
 	NextCreateAt     time.Time
+
+	Rentals []store.Rental
 }
 
 type timerKind int
