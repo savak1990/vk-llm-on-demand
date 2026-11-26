@@ -1,6 +1,6 @@
 ---
 id: "CORE-320"
-status: "DRAFT"
+status: "DONE"
 updated: "2026-11-26"
 depends_on: ["CORE-020", "CORE-070"]
 adrs: ["0003", "0005", "0014"]
@@ -86,4 +86,36 @@ design itself (CORE-180).
 
 ## Evidence
 
-None yet.
+Run on 2026-11-26 at the operator's request, with the Vast.ai CLI 1.12.0 from
+a scratch virtualenv. Documentary sources: docs.vast.ai (storage/volumes,
+storage/types, the create-instance API) and the `vast-ai/vast-cli` source
+(`vastai/api/instances.py` `build_volume_info`, `vastai/cli/commands/storage.py`).
+
+| # | Answer | How it was found |
+|---|---|---|
+| V1 | **Yes.** After `destroy instance`, the volume stays with status `created` and no instances; the file was intact on the next rental. | Hands-on: instance 62762325 destroyed, volume 62762324 kept |
+| V2 | **One call.** `create instance <offer> --create-volume <volume offer id> --volume-size 34 --mount-path /models --volume-label <name>` sends `volume_info{create_new: true, volume_id, size, mount_path, name}` in the same `PUT /asks/{id}`. A later rental attaches it with `--link-volume <volume id>` (`create_new: false`). `mount_path` is required, and `/models` is accepted. | Docs and CLI source; hands-on confirmed both forms |
+| V3 | **The volume has its own offer and price.** `search volumes "machine_id==M"` returns volume offers with `storage_cost` ($/GB-month); it is not the GPU offer's `storage_cost`, although on machine 40508 both were 0.667. The volume is billed while it exists and the machine is online (docs; inferred from two statements). `show volumes` returns `storage_cost: null`, so the price must be kept from the search. The charge for a detached volume was too small to measure in this run. | Docs and hands-on |
+| V4 | **Refused while attached:** `409: existing instances use that volume!`. After the destroy, `delete volume` succeeded at once, and `show volumes` was empty 10 s later. A delete while another customer rents the machine, or while the machine is offline, could not be produced. | Hands-on |
+| V5 | **Yes.** `search offers "machine_id==40508 …"` returned the same offer 55800352 one minute after the destroy, and the rental with `--link-volume` attached the volume. | Hands-on |
+| V6 | **`label`.** The name from `--volume-label` comes back as `label` in `show volumes`, with `machine_id`, `status` and `instances`. Allowed characters are letters, digits and underscore, at most 64, so a colon form such as `vkllm:<id>:v<gen>` is not possible. | CLI source and hands-on (`vkllm_spike`) |
+| V7 | **sha256 of 28.6 GB from the volume: 23 s** (19 s right after the download). | Hands-on |
+| V8 | No account limit and no create time are documented. The volume was created inside the instance create, with no extra wait. | Docs and hands-on |
+| V9 | **Most machines offer a volume, few at a low price.** Two snapshots 10 minutes apart (RTX 6000Ada, lab filter, at most $0.80/h): 6 GPU offers each, 5 of 6 machines with a volume offer, prices $0.20–0.667/GB-month. With enough space at $0.25 or less there was 1 machine per snapshot, and a different one each time; the cheapest machine of the first snapshot was gone 10 minutes later. | Hands-on |
+
+Timings on machine 40508 (Estonia, $0.579/h, 28,595,763,840 bytes):
+
+| Phase | First rental (miss) | Second rental (hit) |
+|---|---|---|
+| create to container start | about 15 s | 103 s |
+| fetch (one curl stream) | 334 s, 85.6 MB/s | 0 s |
+| sha256 | 19 s | 23 s |
+| model ready | about 368 s | about 126 s |
+| download fee | $1.12 ($0.039/GB) | $0 |
+
+Spend: credit $13.48 before, $12.23 after, $1.25 in total (ceiling $3).
+Cleanup at 22:35 UTC: `show instances` and `show volumes` both empty.
+
+CLI notes for CORE-180: `destroy instance` needs `-y`; `delete volume` asks
+for confirmation and has no `-y`; `create instance` prints a Python dict, not
+JSON, even with `--raw`, so the controller calls the REST API, not the CLI.

@@ -10,7 +10,7 @@ adrs: ["0004", "0005", "0018"]
 
 **Status note:** DRAFT, written 2026-11-26 after a design session with the
 operator. It is the first of three specs for faster cold starts: this one
-(records), [CORE-320](../320-P-vast-volume-spike/spec.md) (a spike on
+(records), [CORE-320](../320-D-vast-volume-spike/spec.md) (a spike on
 Vast.ai volumes) and [CORE-180](../180-P-persistent-volume-cache/spec.md)
 (the model cache on a volume). It has no dependency on the other two.
 

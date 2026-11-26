@@ -2,9 +2,10 @@
 
 ## Status
 
-**Proposed** (2026-11-01, revised 2026-11-26). Waits on the spike in
-[CORE-320](../../specs/core/320-P-vast-volume-spike/spec.md); Accepted only if
-a volume survives the destroy of its GPU. Extends
+**Proposed** (2026-11-01, revised 2026-11-26). The spike in
+[CORE-320](../../specs/core/320-D-vast-volume-spike/spec.md) confirmed on
+2026-11-26 that a volume survives the destroy of its GPU. The ADR is Accepted
+when the open ranking question in CORE-180 is decided. Extends
 [ADR 0005](0005-model-storage.md), whose Status carries a pointer here. The
 2026-11-01 version (one volume made by `vk-llm cache init`, no expiry,
 several volumes rejected) is replaced by this one after a design session
