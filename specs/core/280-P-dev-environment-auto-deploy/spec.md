@@ -76,6 +76,11 @@ differs because the namespace differs.
 `main.57.g…` above `main.56.g…`; a release `0.4.1` sorts above every
 `0.4.1-main.*`, and `0.4.2-main.*` sorts above `0.4.1`.
 
+Old-format builds of the current base (`0.4.2-main.<sha7>`) sort above
+new-format builds of the same base, because an alphanumeric identifier
+outranks a numeric one. A patch release cut right after the switch moves
+every later build to a new base, where no old-format build exists.
+
 ### Chart (`deploy/helm/gpu-on-demand`)
 
 - An empty `image.tag` falls back to `.Chart.AppVersion`, which packaging
@@ -150,7 +155,9 @@ for two connections.
 - R9. Versions of `main` builds MUST sort by build order and MUST always be
   valid semver (ADR 0021 §3).
 - R10. Production MUST pin only `chartVersion`; the image tag MUST come from
-  the chart version (ADR 0021 §4).
+  the chart version (ADR 0021 §4). Until production pins a release that has
+  the fallback, `values.yaml` keeps its `tag`, and `values-dev.yaml` clears
+  it.
 - R11. After a cluster rebuild, dev MUST return with no manual step.
 - R12. A new installation MUST need only one platform list entry and one
   value file here.
@@ -177,8 +184,11 @@ for two connections.
 6. `gpu-control.yml` `target` input; docs.
 7. Platform: installation list (production objects unchanged), dev entry,
    Open WebUI key list, Argo namespace list.
-8. After both merge: a merge to `main` lands in `llm-dev`; record the
-   acceptance checks.
+8. Rollout, in this order: merge the platform PR (it creates the Open
+   WebUI key list the chat change reads, and the dev pointer); run
+   `make argo-up` (Argo's namespace list); merge this PR; cut a patch
+   release; promote production to that release with only `chartVersion`
+   pinned; record the acceptance checks.
 
 ## Tests / acceptance criteria
 
