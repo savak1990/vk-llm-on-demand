@@ -81,7 +81,7 @@ release; P2 and P3 are future.
 |---|---|---|---|---|
 | FR-6.1 | No offer above `maxHourlyPriceUSD` (0.80), `maxDownloadPriceUSDPerGB` (0.10) or `maxStoragePriceUSDPerGBMonth` (1.00) is ever created | Unit test; acceptance run log shows chosen price | 020, 100 | — |
 | FR-6.2 | At most `maxInstances` (1) instances with our label exist | Reconcile destroys extras; simulation | 050 | — |
-| FR-6.3 | Month-to-date estimated spend ≥ `budget.monthlyUSD` (30) stops new provisioning and drains the running instance | Simulation with ledger | 100 | — |
+| FR-6.3 | Month-to-date estimated spend ≥ `budget.monthlyUSD` (35) stops new provisioning and drains the running instance | Simulation with ledger | 100 | — |
 | FR-6.4 | At `budget.warnFraction` a metric and an alert fire | `vkllm_budget_used_ratio` ≥ 0.8 triggers rule | 090, 100 | — |
 | FR-6.5 | At most `maxProvisionAttemptsPerHour` (3) creates per hour; then STOPPED + alert | Simulation | 050, 100 | — |
 | FR-6.6 | Orphans (our label, unknown to store) are destroyed within 2 reconcile intervals | Fake provider injection | 050, 100 | — |

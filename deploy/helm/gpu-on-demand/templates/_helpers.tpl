@@ -103,6 +103,10 @@ VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR: {{ .Values.config.lifecy
 VKLLM_BUDGET_MONTH_USD: {{ .Values.config.budget.monthlyUSD | quote }}
 VKLLM_BUDGET_MAX_MONTHLY_USD: {{ .Values.config.budget.maxMonthlyUSD | quote }}
 VKLLM_BUDGET_WARN_FRACTION: {{ .Values.config.budget.warnFraction | quote }}
+VKLLM_CACHE_MAX_CACHES: {{ .Values.config.cache.maxCaches | int64 | quote }}
+VKLLM_CACHE_RETENTION: {{ .Values.config.cache.retention | quote }}
+VKLLM_CACHE_PREFER_THRESHOLD: {{ .Values.config.cache.preferThreshold | quote }}
+VKLLM_CACHE_MAX_STORAGE_PRICE_USD_PER_GB_MONTH: {{ .Values.config.cache.maxStoragePriceUSDPerGBMonth | quote }}
 VKLLM_CONTROLLER_RECONCILE_INTERVAL: {{ .Values.config.controller.reconcileInterval | quote }}
 VKLLM_GATEWAY_MAX_BODY_BYTES: {{ .Values.config.gateway.maxBodyBytes | int64 | quote }}
 VKLLM_GATEWAY_MAX_TOKENS_CAP: {{ .Values.config.gateway.maxTokensCap | int64 | quote }}

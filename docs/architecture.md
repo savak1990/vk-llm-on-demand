@@ -293,7 +293,7 @@ and are set by the chart under `config.*`.
 | `lifecycle.safety.maxLifetime` | 12h | safeguard, not the idle rule |
 | `lifecycle.safety.maxInstanceSpendUSD` | 0 | 0 = off |
 | `lifecycle.safety.maxProvisionAttemptsPerHour` | 3 | |
-| `budget.monthlyUSD` | 30 | |
+| `budget.monthlyUSD` | 35 | |
 | `budget.maxMonthlyUSD` | 100 | Helm-only ceiling on the runtime-mutable cap (ADR 0015) |
 | `budget.warnFraction` | 0.8 | |
 | `controller.reconcileInterval` | 60s | |

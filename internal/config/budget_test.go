@@ -17,8 +17,8 @@ func TestLoadBudgetDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadBudget: %v", err)
 	}
-	if b.MonthlyUSD != 30 {
-		t.Errorf("MonthlyUSD = %v, want 30", b.MonthlyUSD)
+	if b.MonthlyUSD != 35 {
+		t.Errorf("MonthlyUSD = %v, want 35", b.MonthlyUSD)
 	}
 	if b.WarnFraction != 0.8 {
 		t.Errorf("WarnFraction = %v, want 0.8", b.WarnFraction)

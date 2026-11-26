@@ -20,7 +20,7 @@ func LoadBudget() (Budget, error) {
 	var b Budget
 	var err error
 
-	if b.MonthlyUSD, err = envFloat("VKLLM_BUDGET_MONTH_USD", 30); err != nil {
+	if b.MonthlyUSD, err = envFloat("VKLLM_BUDGET_MONTH_USD", 35); err != nil {
 		return Budget{}, err
 	}
 	if b.WarnFraction, err = envFloat("VKLLM_BUDGET_WARN_FRACTION", 0.8); err != nil {

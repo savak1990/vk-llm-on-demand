@@ -103,6 +103,15 @@
             "required": ["safety"]
           }
         },
+        "cache": {
+          "type": "object",
+          "properties": {
+            "maxCaches": { "type": "integer", "minimum": 0, "maximum": 3 },
+            "retention": { "type": "string" },
+            "preferThreshold": { "type": "number", "minimum": 0, "exclusiveMaximum": 1 },
+            "maxStoragePriceUSDPerGBMonth": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
         "onDemand": {
           "type": "object",
           "properties": {

@@ -43,6 +43,7 @@ type Deps struct {
 	ModelAlias     string // e.g. "qwen3.6-35b-a3b"; owned by model.* config, not config.Controller
 	ModelSize      modelsize.Resolver
 	ModelURL       string
+	ModelSHA256    string
 	Config         config.Controller
 	Reg            prometheus.Registerer
 	Log            *slog.Logger

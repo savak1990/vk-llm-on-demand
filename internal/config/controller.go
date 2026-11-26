@@ -36,6 +36,16 @@ type Controller struct {
 
 	TunnelDialer     string
 	TunnelDirectAddr string
+
+	Cache CacheConfig
+}
+
+// CacheConfig bounds the model cache on Vast.ai volumes.
+type CacheConfig struct {
+	MaxCaches                    int
+	Retention                    time.Duration
+	PreferThreshold              float64
+	MaxStoragePriceUSDPerGBMonth float64
 }
 
 // ProviderFilter mirrors provider.OfferFilter minus the caps (set from
@@ -156,6 +166,31 @@ func LoadController() (Controller, error) {
 	}
 	if c.DemandGrace <= 0 {
 		return Controller{}, fmt.Errorf("config: VKLLM_ONDEMAND_DEMAND_GRACE must be positive, got %v", c.DemandGrace)
+	}
+
+	if c.Cache.MaxCaches, err = envInt("VKLLM_CACHE_MAX_CACHES", 1); err != nil {
+		return Controller{}, err
+	}
+	if c.Cache.MaxCaches < 0 || c.Cache.MaxCaches > 3 {
+		return Controller{}, fmt.Errorf("config: VKLLM_CACHE_MAX_CACHES must be 0..3, got %d", c.Cache.MaxCaches)
+	}
+	if c.Cache.Retention, err = envDuration("VKLLM_CACHE_RETENTION", 72*time.Hour); err != nil {
+		return Controller{}, err
+	}
+	if c.Cache.Retention <= 0 {
+		return Controller{}, fmt.Errorf("config: VKLLM_CACHE_RETENTION must be > 0, got %v", c.Cache.Retention)
+	}
+	if c.Cache.PreferThreshold, err = envFloat("VKLLM_CACHE_PREFER_THRESHOLD", 0.15); err != nil {
+		return Controller{}, err
+	}
+	if c.Cache.PreferThreshold < 0 || c.Cache.PreferThreshold >= 1 {
+		return Controller{}, fmt.Errorf("config: VKLLM_CACHE_PREFER_THRESHOLD must be in [0, 1), got %v", c.Cache.PreferThreshold)
+	}
+	if c.Cache.MaxStoragePriceUSDPerGBMonth, err = envFloat("VKLLM_CACHE_MAX_STORAGE_PRICE_USD_PER_GB_MONTH", 0.40); err != nil {
+		return Controller{}, err
+	}
+	if !positiveFinite(c.Cache.MaxStoragePriceUSDPerGBMonth) {
+		return Controller{}, fmt.Errorf("config: VKLLM_CACHE_MAX_STORAGE_PRICE_USD_PER_GB_MONTH must be a positive finite number, got %v", c.Cache.MaxStoragePriceUSDPerGBMonth)
 	}
 	return c, nil
 }

@@ -37,7 +37,7 @@ vk-llm stop       # releases the GPU now; otherwise 30 min after the last infere
 - Installs from one Helm chart on GHCR into any Kubernetes cluster with
   three Secrets; exports Prometheus metrics and JSON logs.
 
-Defaults: $30 per month, $0.80 per hour, one instance, 30-minute rolling
+Defaults: $35 per month, $0.80 per hour, one instance, 30-minute rolling
 inactivity timeout, 60-second drain on stop.
 
 ## 3. How it differs from Vast.ai Serverless
