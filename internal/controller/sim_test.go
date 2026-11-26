@@ -1992,3 +1992,69 @@ func TestReportUpstreamFailureStopsOnShutdown(t *testing.T) {
 		t.Fatal("a probe cancelled via Run's context must not post EvWorkerFailed")
 	}
 }
+
+func TestRentalRecordControllerStages(t *testing.T) {
+	h := newHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S", Geolocation: "Quebec, CA", InetDownMbps: 2400})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusOther, provider.StatusOther)
+	h.worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable, ProbeLoading, ProbeLoading, ProbeLoading, ProbeReady)
+
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	h.Settle(t0.Add(40 * time.Second))
+	if snap := h.ctl.Status(); snap.Public != "READY" {
+		t.Fatalf("Public = %q, want READY", snap.Public)
+	}
+
+	doc, _, err := h.store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(doc.Rentals) != 1 {
+		t.Fatalf("len(Rentals) = %d, want 1", len(doc.Rentals))
+	}
+	r := doc.Rentals[0]
+	want := map[string]int64{"search": 0, "create": 0, "boot": 15, "link": 0, "ready": 25}
+	for k, v := range want {
+		if got, ok := r.Stages[k]; !ok || got != v {
+			t.Fatalf("Stages[%s] = %d (present %v), want %d; all %v", k, got, ok, v, r.Stages)
+		}
+	}
+	if r.Gen != 1 || r.MachineID != 42 || r.Geo != "Quebec, CA" || r.Outcome != "ready" || r.ReadyAt == nil {
+		t.Fatalf("record = %+v", r)
+	}
+}
+
+func TestFirstTokenRecordedForEachGeneration(t *testing.T) {
+	h := newHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S"})
+	for _, id := range []provider.InstanceID{1, 2} {
+		h.prov.SetStatusSequence(id, provider.StatusOther, provider.StatusOther)
+	}
+	start := func() {
+		t.Helper()
+		h.worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable, ProbeLoading, ProbeLoading, ProbeLoading, ProbeReady)
+		if _, err := h.ctl.Start(context.Background()); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		h.Settle(h.clk.Now().Add(40 * time.Second))
+		if snap := h.ctl.Status(); snap.Public != "READY" {
+			t.Fatalf("Public = %q, want READY", snap.Public)
+		}
+	}
+	h.Settle(h.clk.Now().Add(time.Second))
+	start()
+	h.ctl.ObserveFirstToken(1, 800*time.Millisecond)
+	if _, err := h.ctl.Stop(context.Background(), false); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	h.Settle(h.clk.Now().Add(2 * time.Minute))
+	start()
+	h.ctl.ObserveFirstToken(2, 900*time.Millisecond)
+	if got := h.ctl.Status().Stages["first_token"]; got != 900*time.Millisecond {
+		t.Fatalf("first_token = %v, want 900ms for generation 2", got)
+	}
+}
