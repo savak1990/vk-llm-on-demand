@@ -112,3 +112,7 @@ open-webui:
     # The admin's email/password login stays as break-glass.
     - name: ENABLE_LOGIN_FORM
       value: "true"
+    # Without it a model with no access entry is admin-only, and every model
+    # rename hides the chat model from all users until an admin edits it.
+    - name: BYPASS_MODEL_ACCESS_CONTROL
+      value: "true"

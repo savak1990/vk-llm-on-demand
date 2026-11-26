@@ -73,6 +73,7 @@ signing in with email and password.
 | `DEFAULT_USER_ROLE` | `pending` | set explicitly; a new account sees nothing until the admin activates it |
 | `OAUTH_MERGE_ACCOUNTS_BY_EMAIL` | `true` | an account the admin created with the same email is linked, not refused as "email taken"; Google verifies its emails |
 | `ENABLE_LOGIN_FORM` | `true` | the admin's email/password login stays (break-glass) |
+| `BYPASS_MODEL_ACCESS_CONTROL` | `true` | `utils/models.py:643-654`: a model with no access entry is admin-only, so an activated `user` saw no model, and every model rename would hide the new one again; pending accounts stay blocked earlier, at `get_verified_user` |
 | `ENABLE_PASSWORD_AUTH` | `true` (default, not set) | the server keeps accepting the admin password |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | from Secret `open-webui-env` | the Google OAuth client |
 | `GOOGLE_REDIRECT_URI` | `https://chat.<fqdn>/oauth/google/login/callback`, in ConfigMap `open-webui-config` | needs `fqdn`, which is never committed; explicit because behind Envoy the app could otherwise build an `http://` callback, which Google rejects |
@@ -138,6 +139,9 @@ Google project and this repository is public, so it follows the same path.
   or R6 change.
 - R9. Removing a person MUST be one admin action (delete the user or set
   role `pending`) and MUST end their access at their next request.
+- R10. An activated `user` MUST see the chat model without an admin edit,
+  also after a model rename (`BYPASS_MODEL_ACCESS_CONTROL=true`, pinned by
+  `make gitops-check`).
 
 ## Implementation steps
 
