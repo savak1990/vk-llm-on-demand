@@ -181,12 +181,12 @@ func TestStorageEntrySeparateFromGPUEntry(t *testing.T) {
 	d, _ := store.NewDocument("abc")
 	t0 := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
 	d.Ledger.Month = "2026-11"
-	c.OpenEntry(&d, t0, 11, 0.64, 0)
 	c.OpenStorageEntry(&d, t0, 11, "vkllm_abc_v11", 34*0.4/730)
 	c.OpenStorageEntry(&d, t0, 11, "vkllm_abc_v11", 34*0.4/730) // idempotent
+	c.OpenEntry(&d, t0, 11, 0.64, 0)
 	c.CloseEntry(&d, t0.Add(time.Hour), 11)
-	if len(d.Ledger.Entries) != 2 || d.Ledger.Entries[0].End == nil || d.Ledger.Entries[1].End != nil {
-		t.Fatalf("entries = %+v; GPU closed, storage still open", d.Ledger.Entries)
+	if len(d.Ledger.Entries) != 2 || d.Ledger.Entries[0].End != nil || d.Ledger.Entries[1].End == nil {
+		t.Fatalf("entries = %+v; storage still open, GPU closed", d.Ledger.Entries)
 	}
 	c.RefreshOpenEntry(&d, t0.Add(730*time.Hour))
 	if got := c.EstimatedMTD(d); got < 0.64+13.59 || got > 0.64+13.61 {
