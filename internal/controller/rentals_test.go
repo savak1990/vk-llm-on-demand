@@ -203,22 +203,31 @@ func TestSummarizeWorkerStages(t *testing.T) {
 
 // TestReadWorkerStagesRetriesForServerHealthy: the worker only stamps
 // server_healthy inside its own poll loop, so the read right after READY
-// commonly misses it; readWorkerStages must retry rather than give up.
+// commonly misses it; readWorkerStages must retry rather than give up, and
+// must not drop what an earlier, incomplete read already found (a stop
+// that tears the connection down mid-retry must not erase the download stage).
 func TestReadWorkerStagesRetriesForServerHealthy(t *testing.T) {
 	c, _, clk, _, w := newTestController(t)
+	logs := captureLog(c)
 	c.state, c.generation = Ready, 3
 	c.conn = tunnelConnForTest(func() error { return nil })
 	putDoc(t, c, func(d *store.Document) {
 		d.Generation = 3
 		d.Instance = &store.Instance{State: Ready.String(), Label: "vkllm:iid:3", ProviderID: "9"}
 		mark := clk.Now()
-		d.Rentals = []store.Rental{{Gen: 3, StartedAt: mark}}
+		d.Rentals = []store.Rental{{Gen: 3, StartedAt: mark, ModelBytes: 28595763840}}
 	})
 	w0 := clk.Now()
-	w.SetProgressSequence(
-		DownloadProgress{Times: map[string]time.Time{"server_spawn": w0}},
-		DownloadProgress{Times: map[string]time.Time{"server_spawn": w0, "server_healthy": w0.Add(9 * time.Second)}},
-	)
+	noHealthy := map[string]time.Time{
+		"download_begin": w0, "download_end": w0.Add(285 * time.Second),
+		"verified": w0.Add(300 * time.Second), "server_spawn": w0.Add(301 * time.Second),
+	}
+	healthy := map[string]time.Time{}
+	for k, v := range noHealthy {
+		healthy[k] = v
+	}
+	healthy["server_healthy"] = w0.Add(310 * time.Second)
+	w.SetProgressSequence(DownloadProgress{Times: noHealthy}, DownloadProgress{Times: healthy})
 
 	done := make(chan struct{})
 	go func() {
@@ -226,6 +235,9 @@ func TestReadWorkerStagesRetriesForServerHealthy(t *testing.T) {
 		close(done)
 	}()
 	clk.BlockUntil(1)
+	if ws := c.workerStagesFor(3); ws == nil || ws.stages["download"] != 300 {
+		t.Fatalf("mid-wait workerStages = %+v, want download 300 cached from the first read", ws)
+	}
 	clk.Advance(pollInterval)
 	select {
 	case <-done:
@@ -234,11 +246,62 @@ func TestReadWorkerStagesRetriesForServerHealthy(t *testing.T) {
 	}
 
 	ws := c.workerStagesFor(3)
-	if ws == nil || ws.stages["load"] != 9 {
-		t.Fatalf("workerStages = %+v, want load 9", ws)
+	if ws == nil || ws.stages["download"] != 300 || ws.stages["load"] != 9 {
+		t.Fatalf("workerStages = %+v, want download 300, load 9", ws)
 	}
 	if calls := w.progressCallCount(); calls != 2 {
 		t.Fatalf("Progress calls = %d, want 2", calls)
+	}
+	if got := logs.lines("rental_ready"); len(got) != 1 {
+		t.Fatalf("rental_ready lines = %q, want exactly 1", got)
+	}
+}
+
+// TestReadWorkerStagesKeepsEarlierReadWhenConnDrops: a stop that closes the
+// connection between retries must not erase what the first read found.
+func TestReadWorkerStagesKeepsEarlierReadWhenConnDrops(t *testing.T) {
+	c, _, clk, _, w := newTestController(t)
+	logs := captureLog(c)
+	c.state, c.generation = Ready, 3
+	c.conn = tunnelConnForTest(func() error { return nil })
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Ready.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+		mark := clk.Now()
+		d.Rentals = []store.Rental{{Gen: 3, StartedAt: mark, ModelBytes: 28595763840}}
+	})
+	w0 := clk.Now()
+	w.SetProgressSequence(DownloadProgress{Times: map[string]time.Time{
+		"download_begin": w0, "download_end": w0.Add(285 * time.Second),
+		"verified": w0.Add(300 * time.Second), "server_spawn": w0.Add(301 * time.Second),
+	}})
+
+	done := make(chan struct{})
+	go func() {
+		c.readWorkerStages(context.Background(), 3)
+		close(done)
+	}()
+	clk.BlockUntil(1)
+	// Simulate Stop tearing the connection and generation down mid-retry.
+	c.mu.Lock()
+	c.conn, c.generation = nil, 4
+	c.mu.Unlock()
+	clk.Advance(pollInterval)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readWorkerStages did not finish after the clock advanced")
+	}
+
+	ws := c.workerStagesFor(3)
+	if ws == nil || ws.stages["download"] != 300 {
+		t.Fatalf("workerStages = %+v, want the first read's download 300 preserved", ws)
+	}
+	if _, hasLoad := ws.stages["load"]; hasLoad {
+		t.Fatalf("workerStages = %+v, want no load (server_healthy never read)", ws)
+	}
+	if got := logs.lines("rental_ready"); len(got) != 1 {
+		t.Fatalf("rental_ready lines = %q, want exactly 1", got)
 	}
 }
 

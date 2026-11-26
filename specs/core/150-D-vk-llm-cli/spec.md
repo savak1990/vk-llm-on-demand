@@ -82,7 +82,7 @@ package constant, not a flag.
 | `start` | `--detach`, `--timeout` (default `defaults.startupTimeout`, 15m), `--json` | POST start; unless detached, poll status until a terminal outcome (below) |
 | `status` | `--json` | GET status; table or raw body |
 | `stop` | `--detach`, `--timeout` (default 5m), `--json` | POST stop; unless detached, poll until `STOPPED` |
-| `budget` | `--json` | no args: GET status; `set <amount>`: POST budget; table (budget view) or raw body |
+| `budget` | `--json` | no args: GET status; `set <amount>`: POST /api/v1/gpu/budget; table (budget view) or raw body |
 | `rentals` | `--json` | GET /api/v1/gpu/rentals; table or raw body |
 | `version` | none | prints `vk-llm <version>`; no config, no network |
 

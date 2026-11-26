@@ -140,15 +140,16 @@ starts the download at container start, so on a fast boot part of
 sha256 time is not in the speed. If the worker wrote `download_skipped`, the
 `download` stage is `0` and `downloadMBps` is absent.
 
-After the READY transition, the controller reads the worker stage log once
-in the background, over the existing link, with `worker.ProgressCommand`.
+After the READY transition, the controller reads the worker stage log in
+the background, over the existing link, with `worker.ProgressCommand`,
+rereading up to 4 times 5 s apart until `server_healthy` appears.
 `ParseStages` already returns the timestamps
 (`internal/worker/stages.go:17`). The values stay in memory, the
-`rental_ready` line is logged after the read, and the destroy transition
-writes them into the record. A failed read leaves the worker stages out of
-the record and never delays READY. A controller restart between READY and
-destroy also loses them; the controller stages and the offer data are
-already in the record from the READY transition.
+`rental_ready` line is logged after the last read, and the destroy
+transition writes them into the record. A failed read leaves the worker
+stages out of the record and never delays READY. A controller restart
+between READY and destroy also loses them; the controller stages and the
+offer data are already in the record from the READY transition.
 
 Each known stage value goes to `vkllm_coldstart_stage_seconds{stage}`. The
 label set does not change.

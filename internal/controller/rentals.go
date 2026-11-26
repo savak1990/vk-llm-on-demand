@@ -204,33 +204,11 @@ func (c *Controller) workerStagesFor(gen int64) *workerStages {
 // commonly misses it and must be retried a few times, not failed.
 const workerStageReadAttempts = 4
 
+// readWorkerStages caches the latest reading after every successful read,
+// not only the last one, so a stop that tears the connection down between
+// retries still keeps whatever a prior read already found; the histogram
+// and the log line use only that final cached reading, once.
 func (c *Controller) readWorkerStages(ctx context.Context, gen int64) {
-	var got DownloadProgress
-	for attempt := 0; ; attempt++ {
-		c.mu.Lock()
-		live := c.generation == gen && c.conn != nil
-		conn := c.conn
-		c.mu.Unlock()
-		if !live || ctx.Err() != nil {
-			return
-		}
-		rctx, cancel := context.WithTimeout(ctx, progressReadTimeout)
-		p, err := c.deps.Worker.Progress(rctx, conn.Exec)
-		cancel()
-		if err != nil {
-			c.warn("controller: worker stage read failed", "gen", gen, "err", err)
-			return
-		}
-		got = p
-		if _, ok := got.Times["server_healthy"]; ok || attempt == workerStageReadAttempts-1 {
-			break
-		}
-		select {
-		case <-c.deps.Clock.After(pollInterval):
-		case <-ctx.Done():
-			return
-		}
-	}
 	doc, _, err := c.deps.Store.Load(ctx)
 	if err != nil {
 		c.warn("controller: worker stage store load failed", "gen", gen, "err", err)
@@ -240,10 +218,43 @@ func (c *Controller) readWorkerStages(ctx context.Context, gen int64) {
 	if r == nil {
 		return
 	}
-	stages, mbps := summarizeWorkerStages(got.Times, r.ModelBytes)
-	c.workerStagesMu.Lock()
-	c.workerStages = &workerStages{gen: gen, stages: stages, mbps: mbps}
-	c.workerStagesMu.Unlock()
+
+	var stages map[string]int64
+	var mbps float64
+	var read bool
+attempts:
+	for attempt := 0; attempt < workerStageReadAttempts; attempt++ {
+		c.mu.Lock()
+		live := c.generation == gen && c.conn != nil
+		conn := c.conn
+		c.mu.Unlock()
+		if !live || ctx.Err() != nil {
+			break
+		}
+		rctx, cancel := context.WithTimeout(ctx, progressReadTimeout)
+		p, err := c.deps.Worker.Progress(rctx, conn.Exec)
+		cancel()
+		if err != nil {
+			c.warn("controller: worker stage read failed", "gen", gen, "err", err)
+			break
+		}
+		stages, mbps = summarizeWorkerStages(p.Times, r.ModelBytes)
+		read = true
+		c.workerStagesMu.Lock()
+		c.workerStages = &workerStages{gen: gen, stages: stages, mbps: mbps}
+		c.workerStagesMu.Unlock()
+		if _, ok := p.Times["server_healthy"]; ok || attempt == workerStageReadAttempts-1 {
+			break
+		}
+		select {
+		case <-c.deps.Clock.After(pollInterval):
+		case <-ctx.Done():
+			break attempts
+		}
+	}
+	if !read {
+		return
+	}
 	for k, v := range stages {
 		coldstartStageSeconds.WithLabelValues(k).Observe(float64(v))
 	}
