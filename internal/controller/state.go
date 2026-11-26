@@ -110,6 +110,7 @@ type Event struct {
 	Breakdown     offercost.Breakdown
 	Filter        provider.OfferFilter
 	SearchStarted time.Time
+	CachePlan     cachePlan
 	Reason        string // "" (gate ok) | "backoff" (pacing, not a denial) | "no_offer" | "budget_exhausted" | "balance_low" | "attempts_exhausted"
 	ProviderID    provider.InstanceID
 	Err           error

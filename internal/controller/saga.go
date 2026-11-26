@@ -53,7 +53,8 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 		c.postEvent(Event{Kind: EvNoOffer, Reason: "no_offer"})
 		return
 	}
-	c.postEvent(Event{Kind: EvOfferChosen, Offer: ranked[0].Offer, Breakdown: ranked[0].Breakdown, Filter: f, SearchStarted: started})
+	choice, plan := c.cacheChoice(ctx, ranked, bytes, disk)
+	c.postEvent(Event{Kind: EvOfferChosen, Offer: choice.Offer, Breakdown: choice.Breakdown, Filter: f, SearchStarted: started, CachePlan: plan})
 }
 
 func horizon(cfg config.Controller) time.Duration {
