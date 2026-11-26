@@ -10,9 +10,12 @@ adrs: ["0014", "0003", "0004", "0005", "0015", "0018"]
 
 **Status note:** DRAFT, rewritten 2026-11-26 after a design session with the
 operator; it replaces the 2026-11-01 draft (one volume, `vk-llm cache init`,
-no expiry). It waits for [CORE-320](../320-P-vast-volume-spike/spec.md): each
-place that depends on a spike answer names it (V1 to V8). If V1 (a volume
-survives destroy) is false, this spec is cancelled.
+no expiry). [CORE-320](../320-D-vast-volume-spike/spec.md) is DONE
+(2026-11-26): a volume survives the destroy of its GPU (V1), and a hit made
+the model ready in about 126 s against about 368 s for a miss, and saved the
+$1.12 download fee. The answers V2 to V9 are written into the sections below.
+One design question from the spike is open (see Open questions); it is
+decided before implementation.
 [CORE-310](../310-A-cold-start-recording/spec.md) comes first, because it
 gives the rental records that this spec extends.
 
@@ -20,7 +23,7 @@ gives the rental records that this spec extends.
 **Risk:** medium — a forgotten volume bills with nothing using it; a wrong attach serves stale weights
 **Estimated effort:** 1 to 2 days after CORE-320
 **Recommended model:** standard
-**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-A-cold-start-recording/spec.md), [CORE-320](../320-P-vast-volume-spike/spec.md)
+**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-A-cold-start-recording/spec.md), [CORE-320](../320-D-vast-volume-spike/spec.md)
 
 ## Problem
 
@@ -94,7 +97,7 @@ The reserved `cache` key holds one object:
     {
       "volumeId": "987",
       "machineId": 12345,
-      "label": "vkllm:<installationId>:v11",
+      "label": "vkllm_<installationId>_v11",
       "modelURL": "https://huggingface.co/.../Qwen3.8-27B-Q8_0.gguf",
       "sha256": "…",
       "sizeGB": 34,
@@ -142,14 +145,20 @@ machine (CORE-320 V5), the result is a miss.
 ### Seeding on a miss
 
 A volume is created on the chosen offer's machine only if all of these hold:
-`maxCaches > 0`; the offer's storage price ≤ `maxStoragePriceUSDPerGBMonth`
-(CORE-320 V3 says which price); the month-to-date spend plus the volume's
-cost for one retention period is below the budget. Otherwise the rental runs
+`maxCaches > 0`; the machine has a volume offer (`search volumes
+"machine_id==M"`; 5 of 6 machines had one, CORE-320 V9) with enough space;
+that volume offer's `storage_cost` ≤ `maxStoragePriceUSDPerGBMonth` (the
+volume has its own price, not the GPU offer's `storage_cost`, CORE-320 V3);
+the month-to-date spend plus the volume's cost for one retention period is
+below the budget. The controller keeps that price in `storageUSDPerGBMonth`,
+because `show volumes` returns `storage_cost: null`. Otherwise the rental runs
 the unchanged ADR 0005 path on the ephemeral disk.
 
 If the slots are full, the volume with the oldest `expiresAt` that is not in
 use goes to `deleting` in the same transition. The new volume is created and
-attached with the instance (CORE-320 V2), mounted at `/models`, and recorded
+attached with the instance in one create call (`volume_info{create_new:
+true, volume_id: <volume offer id>, size, mount_path: "/models", name}`,
+CORE-320 V2), and recorded
 as `seeding` before `CreateInstance` is sent, so that a crash leaves a record
 that the sweep can resolve. When the worker writes `verified`, the volume
 becomes `ready` in the READY transition.
@@ -178,15 +187,18 @@ The reconcile loop (every minute) does these steps, in this order:
 | a document volume is absent at the provider for two observations | remove the entry |
 
 A failed `ListVolumes` never deletes anything. Empty-store recovery deletes
-every volume under our label prefix (constitution C-13). If CORE-320 V4 shows
-that a delete can fail while someone else rents the machine, the volume
-stays `deleting` and keeps counting in the ledger until the delete succeeds,
-and `vkllm_cache_delete_failures_total` makes it visible.
+every volume under our label prefix (constitution C-13). Vast refuses a
+delete while an instance uses the volume (`409`, CORE-320 V4), so a delete
+runs only after our GPU on it is destroyed. A delete while another customer
+rents the machine, or while it is offline, was not observed; if one fails,
+the volume stays `deleting` and keeps counting in the ledger until the
+delete succeeds, and `vkllm_cache_delete_failures_total` makes it visible.
 
-The volume label uses a form that the instance label parser rejects (for
-example `vkllm:<installationId>:v<gen>`), so the instance sweep never acts
-on a volume and the volume sweep never acts on an instance (CORE-320 V6
-gives the field that carries it).
+The volume label is `vkllm_<installationId>_v<gen>`: Vast allows only
+letters, digits and underscore, at most 64 characters, and returns it as
+`label` in `show volumes` (CORE-320 V6). The instance labels start with
+`vkllm:`, so the instance sweep never acts on a volume and the volume sweep
+never acts on an instance.
 
 ### Cost and budget
 
@@ -292,13 +304,11 @@ $35 is safe only when storage counts in it.
 
 ## Open questions
 
-| Question | Settled by |
-|---|---|
-| Request shape to create and attach a volume; mount path | CORE-320 V2 |
-| Which storage price applies, and how to read it before create | CORE-320 V3 |
-| Can a delete fail while the machine is rented or offline | CORE-320 V4 |
-| Does the search return the cached machine | CORE-320 V5 |
-| Which volume field carries our label | CORE-320 V6 |
+| Question | Why it matters | Settled by |
+|---|---|---|
+| Prefer offers whose machine has a volume offer (operator proposal, 2026-11-26)? If yes, by how much in the session-cost ranking? | Only a machine with a volume offer can start a cache. In the spike, 5 of 6 machines had one, but at most 1 per snapshot was at or below $0.25/GB-month with enough space | Operator decision before implementation |
+| Is `maxStoragePriceUSDPerGBMonth: 0.25` the right default? | Volume prices were $0.20–0.667/GB-month; at $0.25, a new cache could start on 1 of 6 machines per snapshot | Same decision |
+| Can a delete fail while another customer rents the machine, or while it is offline? | The release and budget rules need the delete to stop the billing | Observed in production through `vkllm_cache_delete_failures_total` |
 
 ## Evidence
 

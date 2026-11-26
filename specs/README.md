@@ -90,7 +90,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [290](core/290-P-large-moe-cpu-offload/spec.md) | Spike: larger MoE models with experts in CPU RAM; offer filter sized to the model (no design yet) | 070, 210 |
 | [300](core/300-A-concurrent-sessions-kv-cache/spec.md) | Concurrent sessions: KV cache type (f16/q8_0/q4_0) and context per session | 070, 080, 130 |
 | [310](core/310-A-cold-start-recording/spec.md) | Cold-start recording: rental history in the state document, real stage durations, `vk-llm rentals` | 040, 050, 090, 210 |
-| [320](core/320-P-vast-volume-spike/spec.md) | Spike: Vast.ai volumes as a model cache (survive destroy, billing, delete, label) | 020, 070 |
+| [320](core/320-D-vast-volume-spike/spec.md) | Spike: Vast.ai volumes as a model cache (survive destroy, billing, delete, label) | 020, 070 |
 
 ## Order of work
 
