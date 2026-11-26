@@ -11,7 +11,7 @@ adrs: ["0003", "0005", "0014"]
 **Status note:** DRAFT, problem statement and spike plan only. Written
 2026-11-26. The design in [CORE-180](../180-P-persistent-volume-cache/spec.md)
 and ADR 0014 depends on the answers; if volumes cannot do what the table
-below asks, CORE-180 stops and [CORE-310](../310-P-cold-start-recording/spec.md)
+below asks, CORE-180 stops and [CORE-310](../310-A-cold-start-recording/spec.md)
 still stands alone.
 
 **Complexity:** S

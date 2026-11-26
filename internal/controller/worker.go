@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 )
@@ -32,4 +33,5 @@ type Worker interface {
 type DownloadProgress struct {
 	Bytes  int64
 	Stages []string
+	Times  map[string]time.Time
 }

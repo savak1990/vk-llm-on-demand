@@ -58,14 +58,14 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 		return 2
 	}
 	if sub == "" {
-		_, _ = fmt.Fprintln(stderr, "usage: vk-llm <start|status|stop|budget|version> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: vk-llm <start|status|stop|budget|rentals|version> [flags]")
 		return 2
 	}
 	if sub == "version" {
 		return cmdVersion(stdout)
 	}
 	switch sub {
-	case "start", "status", "stop", "budget":
+	case "start", "status", "stop", "budget", "rentals":
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", sub)
 		return 2
@@ -98,6 +98,8 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 		return cmdStop(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag)
 	case "budget":
 		return cmdBudget(cl, stdout, stderr, subArgs, *jsonFlag)
+	case "rentals":
+		return cmdRentals(cl, stdout, stderr, *jsonFlag)
 	default:
 		return 2
 	}

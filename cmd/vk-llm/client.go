@@ -112,6 +112,10 @@ func (c *client) status(ctx context.Context) (apiResult, int, error) {
 	return c.do(ctx, http.MethodGet, "/api/v1/gpu/status", nil)
 }
 
+func (c *client) rentals(ctx context.Context) (apiResult, int, error) {
+	return c.do(ctx, http.MethodGet, "/api/v1/gpu/rentals", nil)
+}
+
 func (c *client) stop(ctx context.Context, force bool) (apiResult, int, error) {
 	var body io.Reader
 	if force {

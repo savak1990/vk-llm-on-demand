@@ -162,6 +162,20 @@ func selectionOf(snap controller.Snapshot) *selectionDoc {
 	}
 }
 
+type rentalsDocument struct {
+	Rentals []store.Rental `json:"rentals"`
+}
+
+func buildRentalsDocument(snap controller.Snapshot) rentalsDocument {
+	out := make([]store.Rental, 0, len(snap.Rentals))
+	for i := len(snap.Rentals) - 1; i >= 0; i-- {
+		r := snap.Rentals[i]
+		r.MarkAt = nil
+		out = append(out, r)
+	}
+	return rentalsDocument{Rentals: out}
+}
+
 // resultFor classifies an op against the snapshot the caller already
 // holds, so start/stop never need a second controller call just to
 // tell "already there" apart from "just requested".

@@ -1,6 +1,6 @@
 ---
 id: "CORE-310"
-status: "DRAFT"
+status: "IN_PROGRESS"
 updated: "2026-11-26"
 depends_on: ["CORE-040", "CORE-050", "CORE-055", "CORE-090", "CORE-150", "CORE-210"]
 adrs: ["0004", "0005", "0018"]
@@ -95,7 +95,8 @@ before CORE-180); Postgres or any other new store (the operator decided on
 
 | Field | Source |
 |---|---|
-| `gen`, `origin`, `startedAt` | the start transition (`generation`, `startOrigin`) |
+| `gen`, `origin` | the start transition (`generation`, `startOrigin`) |
+| `startedAt` | search dispatch — the controller reads the clock when the search effect starts |
 | `machineId`, `geo`, `gpu`, `dph`, `inetDownMbps`, `estDownloadSeconds`, `modelBytes` | `instance.offer` and `instance.offer.estimate` of the chosen offer |
 | `readyAt` | the transition to READY |
 | `outcome` | `ready`, or the provision outcome label of `vkllm_provision_attempts_total` (`failed_status`, `deadline_exceeded`, `cancelled`, …) |
@@ -103,8 +104,9 @@ before CORE-180); Postgres or any other new store (the operator decided on
 | `endedAt`, `costUSD` | the destroy transition; `costUSD` is the ledger entry's `estUsd` for this `gen` |
 
 The list keeps the last 50 records, oldest first; `Encode` trims it the same
-way it trims `ops`. 50 records are about 15 KB, well inside the 256 KiB
-document limit. The field is additive with `omitempty`, so no schema bump: an
+way it trims `ops`. 50 realistic records are about 24 KB; the full capped
+document measured 37,070 bytes, well inside the 256 KiB document limit. The
+field is additive with `omitempty`, so no schema bump: an
 older binary ignores it and drops it on its next write, the same rule as
 `budgetMonthUsd` (ADR 0015).
 
@@ -118,13 +120,16 @@ and one worker timestamp, because the two clocks can differ by seconds.
 
 | Stage | From | To | Clock |
 |---|---|---|---|
-| `search` | start accepted | offer chosen | controller |
+| `search` | search dispatch | offer chosen | controller |
 | `create` | create sent | provider returns the instance id | controller |
 | `boot` | instance id | provider reports `running` with an SSH endpoint | controller |
 | `link` | `running` | link up (`EvLinkUp`) | controller |
 | `download` | `download_begin` | `verified` (fetch plus sha256) | worker |
 | `load` | `server_spawn` | `server_healthy` | worker |
 | `ready` | link up | READY (probe passed) | controller |
+
+`load` can include up to `POLL_SECONDS` (15 s) of worker poll lag, because
+the worker stamps `server_healthy` in its poll loop.
 
 `ready` is the whole model phase as the controller sees it, so it is at
 least `download + load` when the download starts after link up. The worker
@@ -135,15 +140,16 @@ starts the download at container start, so on a fast boot part of
 sha256 time is not in the speed. If the worker wrote `download_skipped`, the
 `download` stage is `0` and `downloadMBps` is absent.
 
-After the READY transition, the controller reads the worker stage log once
-in the background, over the existing link, with `worker.ProgressCommand`.
+After the READY transition, the controller reads the worker stage log in
+the background, over the existing link, with `worker.ProgressCommand`,
+rereading up to 4 times 5 s apart until `server_healthy` appears.
 `ParseStages` already returns the timestamps
 (`internal/worker/stages.go:17`). The values stay in memory, the
-`rental_ready` line is logged after the read, and the destroy transition
-writes them into the record. A failed read leaves the worker stages out of
-the record and never delays READY. A controller restart between READY and
-destroy also loses them; the controller stages and the offer data are
-already in the record from the READY transition.
+`rental_ready` line is logged after the last read, and the destroy
+transition writes them into the record. A failed read leaves the worker
+stages out of the record and never delays READY. A controller restart
+between READY and destroy also loses them; the controller stages and the
+offer data are already in the record from the READY transition.
 
 Each known stage value goes to `vkllm_coldstart_stage_seconds{stage}`. The
 label set does not change.
@@ -204,8 +210,9 @@ GEN  STARTED           WHERE       $/H    BOOT  DOWNLOAD      LOAD  TOTAL  OUTCO
    with all seven stages, `downloadMBps > 0`, `endedAt` and `costUSD` set.
 2. AC2. A simulated start that ends in `failed_status` holds one record with
    that outcome and no `readyAt`.
-3. AC3. With 60 simulated rentals the document holds 50, and its size stays
-   below 30 KB.
+3. AC3. With 60 simulated rentals the document holds 50. The full document
+   (100 ledger entries, 20 ops, 10 denylist entries, 50 rentals) stays
+   below 64 KiB; AC10 of CORE-040 is unchanged.
 4. AC4. `/metrics` shows `vkllm_coldstart_stage_seconds_count` ≥ 1 for each
    of the seven start stages after one good simulated start.
 5. AC5. On the lab, after one real start (operator go-ahead needed, about
@@ -224,4 +231,8 @@ None.
 
 ## Evidence
 
-None yet.
+2026-11-26, branch core-310-cold-start-recording at 493bba4. Full document size with 50 rentals: 37070 bytes.
+
+AC1–AC4: `TestRentalRecordGoodStartAndStop`, `TestRentalRecordFailedStatus`, `TestRentalsCapped`, `TestFullDocumentWithRentalsSize`; pass in `make go-test`.
+
+AC5: pending a lab start (operator go-ahead).

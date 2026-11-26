@@ -112,8 +112,12 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		Cfg: c.deps.Config, Budget: c.deps.Budget,
 	})
 
+	outcome, outcomeOK := provisionOutcome(state, next, ev)
+	var change rentalChange
+	in := rentalInput{now: now, searchStart: ev.SearchStarted, outcome: outcome, worker: c.workerStagesFor(doc.Generation)}
+
 	if mutate != nil {
-		committed, txErr := store.Transition(ctx, c.deps.Store, c.flushAndRun(mutate))
+		committed, txErr := store.Transition(ctx, c.deps.Store, c.flushAndRun(withRental(mutate, in, &change)))
 		switch {
 		case errors.Is(txErr, errStale):
 			return errStale
@@ -130,6 +134,9 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 			gpuUptimeSecondsTotal.Add(now.Sub(doc.Instance.CreatedAt).Seconds())
 		}
 		doc = committed
+		if change.stage != "" {
+			coldstartStageSeconds.WithLabelValues(change.stage).Observe(float64(change.secs))
+		}
 		if ev.Kind == EvStop && ev.Origin == originDemand && c.deps.Log != nil {
 			c.deps.Log.Info("gpu_start_cancelled", "reason", "demand_expired", "generation", doc.Generation, "state", state.String())
 		}
@@ -142,7 +149,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 			c.noOfferMu.Unlock()
 		}
 	}
-	if outcome, ok := provisionOutcome(state, next, ev); ok {
+	if outcomeOK {
 		provisionAttemptsTotal.WithLabelValues(outcome).Inc()
 	}
 
@@ -152,6 +159,9 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	if doc.Generation != c.generation {
 		c.inFlight = 0
 		c.suspect = false
+		c.stagesMu.Lock()
+		c.stages = make(map[string]time.Duration)
+		c.stagesMu.Unlock()
 	}
 	c.generation = doc.Generation
 	if next == Destroying {
@@ -188,6 +198,10 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	c.syncTimers(state, next, doc)
 
 	c.queueEffects(effects)
+	if state == Loading && next == Ready {
+		gen := doc.Generation
+		c.spawn(func() { c.readWorkerStages(c.effCtx(), gen) })
+	}
 	if state == Idle && next == Searching && c.deps.Log != nil {
 		keyID := ev.KeyID
 		if keyID == "" && doc.StartOrigin == originDemand {

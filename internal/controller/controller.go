@@ -101,6 +101,8 @@ type Snapshot struct {
 	LastError        string
 	AttemptsThisHour int
 	NextCreateAt     time.Time
+
+	Rentals []store.Rental
 }
 
 type timerKind int
@@ -177,6 +179,9 @@ type Controller struct {
 	progress        DownloadProgress
 	progressGen     int64
 	progressReading atomic.Bool // single-flights readProgress across overlapping Loading polls
+
+	workerStagesMu sync.Mutex
+	workerStages   *workerStages
 
 	reconciling    atomic.Bool
 	reconcileMu    sync.Mutex

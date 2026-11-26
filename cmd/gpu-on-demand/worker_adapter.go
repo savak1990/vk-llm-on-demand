@@ -63,7 +63,7 @@ func (a *workerAdapter) Progress(ctx context.Context, exec func(context.Context,
 	if err != nil {
 		return controller.DownloadProgress{}, err
 	}
-	return controller.DownloadProgress{Bytes: p.Bytes, Stages: p.Stages}, nil
+	return controller.DownloadProgress{Bytes: p.Bytes, Stages: p.Stages, Times: p.Times}, nil
 }
 
 func (a *workerAdapter) Scrape(ctx context.Context, rt http.RoundTripper) error {

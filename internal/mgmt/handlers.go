@@ -16,6 +16,7 @@ func (s *server) routes() {
 	s.mux.HandleFunc("/api/v1/gpu/stop", s.method(http.MethodPost, s.handleStop))
 	s.mux.HandleFunc("/api/v1/gpu/cost", s.method(http.MethodGet, s.handleCost))
 	s.mux.HandleFunc("/api/v1/gpu/budget", s.method(http.MethodPost, s.handleBudget))
+	s.mux.HandleFunc("/api/v1/gpu/rentals", s.method(http.MethodGet, s.handleRentals))
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "", "")
 	})
@@ -90,6 +91,10 @@ func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
 func (s *server) handleCost(w http.ResponseWriter, _ *http.Request) {
 	snap := s.d.Controller.Status()
 	writeJSON(w, http.StatusOK, buildCostDocument(snap, s.d.Config, s.d.Clock.Now()))
+}
+
+func (s *server) handleRentals(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, buildRentalsDocument(s.d.Controller.Status()))
 }
 
 type budgetRequest struct {

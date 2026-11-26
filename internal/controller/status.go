@@ -36,6 +36,7 @@ func (c *Controller) Status() Snapshot {
 		return snap
 	}
 	snap.Desired = doc.Desired
+	snap.Rentals = append([]store.Rental(nil), doc.Rentals...)
 	snap.AttemptsThisHour = doc.AttemptsThisHour.Count
 	snap.SpendMTDUSD = c.deps.Budget.EstimatedMTD(doc)
 	snap.BudgetMonthUSD = c.deps.Budget.CapUSD(doc)

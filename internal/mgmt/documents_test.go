@@ -193,3 +193,15 @@ func TestStatusDocumentBudgetFromSnapshot(t *testing.T) {
 		t.Fatalf("Cost.BudgetMonthUSD = %v, want 40 (from the snapshot)", doc.Cost.BudgetMonthUSD)
 	}
 }
+
+func TestBuildRentalsDocumentNewestFirst(t *testing.T) {
+	mark := time.Unix(100, 0)
+	snap := controller.Snapshot{Rentals: []store.Rental{{Gen: 1, MarkAt: &mark}, {Gen: 2}}}
+	doc := buildRentalsDocument(snap)
+	if len(doc.Rentals) != 2 || doc.Rentals[0].Gen != 2 || doc.Rentals[1].Gen != 1 || doc.Rentals[1].MarkAt != nil {
+		t.Fatalf("rentals = %+v", doc.Rentals)
+	}
+	if snap.Rentals[0].MarkAt == nil {
+		t.Fatal("buildRentalsDocument changed the snapshot")
+	}
+}

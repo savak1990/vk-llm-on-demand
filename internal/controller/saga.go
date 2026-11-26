@@ -22,6 +22,7 @@ var (
 // dispatchSearch is saga step 1: size the model, size the disk, search,
 // then rank by estimated session cost.
 func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
+	started := c.deps.Clock.Now()
 	cfg := c.deps.Config
 	bytes, err := c.deps.ModelSize.Bytes(ctx, c.deps.ModelURL)
 	if err != nil {
@@ -52,7 +53,7 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 		c.postEvent(Event{Kind: EvNoOffer, Reason: "no_offer"})
 		return
 	}
-	c.postEvent(Event{Kind: EvOfferChosen, Offer: ranked[0].Offer, Breakdown: ranked[0].Breakdown, Filter: f})
+	c.postEvent(Event{Kind: EvOfferChosen, Offer: ranked[0].Offer, Breakdown: ranked[0].Breakdown, Filter: f, SearchStarted: started})
 }
 
 func horizon(cfg config.Controller) time.Duration {

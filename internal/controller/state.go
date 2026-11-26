@@ -106,18 +106,19 @@ type Event struct {
 	Origin string // "" means explicit; set to originDemand by Demand and by its own cancellation
 	KeyID  string
 
-	Offer      provider.Offer
-	Breakdown  offercost.Breakdown
-	Filter     provider.OfferFilter
-	Reason     string // "" (gate ok) | "backoff" (pacing, not a denial) | "no_offer" | "budget_exhausted" | "balance_low" | "attempts_exhausted"
-	ProviderID provider.InstanceID
-	Err        error
-	Class      provider.Class
-	Duplicate  bool
-	HostKey    string
-	Status     provider.InstanceStatus
-	SSHHost    string
-	SSHPort    int
+	Offer         provider.Offer
+	Breakdown     offercost.Breakdown
+	Filter        provider.OfferFilter
+	SearchStarted time.Time
+	Reason        string // "" (gate ok) | "backoff" (pacing, not a denial) | "no_offer" | "budget_exhausted" | "balance_low" | "attempts_exhausted"
+	ProviderID    provider.InstanceID
+	Err           error
+	Class         provider.Class
+	Duplicate     bool
+	HostKey       string
+	Status        provider.InstanceStatus
+	SSHHost       string
+	SSHPort       int
 }
 
 // Facts is everything decide reads, snapshotted before its own CAS; the
