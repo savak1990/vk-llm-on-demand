@@ -143,13 +143,20 @@ func TestRentalEndFallsBackToCreateOpOutcome(t *testing.T) {
 	}
 }
 
+// TestMarkStageSkipsAlreadyPresentStage is a pod restart during Loading:
+// recovery rewrites the state to Booting, and the second EvLinkUp that
+// follows must not re-observe or overwrite the "link" stage.
 func TestMarkStageSkipsAlreadyPresentStage(t *testing.T) {
+	d, _ := store.NewDocument("iid")
+	d.Generation = 1
+	d.Instance = &store.Instance{State: Booting.String(), ProviderID: "7", SSHHost: "203.0.113.9", Offer: rentalOffer()}
 	mark := rentalT0
-	r := store.Rental{MarkAt: &mark, Stages: map[string]int64{"link": 5}}
-	got := markStage(&r, "link", rentalT0.Add(10*time.Second))
+	d.Rentals = []store.Rental{{Gen: 1, MarkAt: &mark, Stages: map[string]int64{"link": 5}}}
+	got := step(t, &d, rentalT0.Add(10*time.Second), "", func(d *store.Document) { d.Instance.State = Loading.String() })
 	if got != (rentalChange{}) {
 		t.Fatalf("change = %+v, want zero value", got)
 	}
+	r := d.Rentals[0]
 	if r.Stages["link"] != 5 {
 		t.Fatalf("Stages[link] = %d, want unchanged 5", r.Stages["link"])
 	}
