@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -197,6 +198,47 @@ func TestSummarizeWorkerStages(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReadWorkerStagesRetriesForServerHealthy: the worker only stamps
+// server_healthy inside its own poll loop, so the read right after READY
+// commonly misses it; readWorkerStages must retry rather than give up.
+func TestReadWorkerStagesRetriesForServerHealthy(t *testing.T) {
+	c, _, clk, _, w := newTestController(t)
+	c.state, c.generation = Ready, 3
+	c.conn = tunnelConnForTest(func() error { return nil })
+	putDoc(t, c, func(d *store.Document) {
+		d.Generation = 3
+		d.Instance = &store.Instance{State: Ready.String(), Label: "vkllm:iid:3", ProviderID: "9"}
+		mark := clk.Now()
+		d.Rentals = []store.Rental{{Gen: 3, StartedAt: mark}}
+	})
+	w0 := clk.Now()
+	w.SetProgressSequence(
+		DownloadProgress{Times: map[string]time.Time{"server_spawn": w0}},
+		DownloadProgress{Times: map[string]time.Time{"server_spawn": w0, "server_healthy": w0.Add(9 * time.Second)}},
+	)
+
+	done := make(chan struct{})
+	go func() {
+		c.readWorkerStages(context.Background(), 3)
+		close(done)
+	}()
+	clk.BlockUntil(1)
+	clk.Advance(pollInterval)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readWorkerStages did not finish after the clock advanced")
+	}
+
+	ws := c.workerStagesFor(3)
+	if ws == nil || ws.stages["load"] != 9 {
+		t.Fatalf("workerStages = %+v, want load 9", ws)
+	}
+	if calls := w.progressCallCount(); calls != 2 {
+		t.Fatalf("Progress calls = %d, want 2", calls)
 	}
 }
 

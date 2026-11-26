@@ -2148,11 +2148,11 @@ func TestRentalRecordFailedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(doc.Rentals) < 1 {
-		t.Fatal("no rental record")
+	if len(doc.Rentals) != 1 {
+		t.Fatalf("len(Rentals) = %d, want 1", len(doc.Rentals))
 	}
 	r := doc.Rentals[0]
-	if r.Outcome != "failed_status" || r.ReadyAt != nil || r.EndedAt == nil {
-		t.Fatalf("record = %+v, want failed_status, no readyAt, endedAt set", r)
+	if r.Gen != 1 || r.Outcome != "failed_status" || r.ReadyAt != nil || r.EndedAt == nil {
+		t.Fatalf("record = %+v, want gen 1, failed_status, no readyAt, endedAt set", r)
 	}
 }

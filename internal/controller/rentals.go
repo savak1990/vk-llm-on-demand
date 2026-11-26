@@ -199,29 +199,48 @@ func (c *Controller) workerStagesFor(gen int64) *workerStages {
 	return c.workerStages
 }
 
+// workerStageReadAttempts bounds the wait for server_healthy: the worker
+// only stamps it inside its own poll loop, so the read right after READY
+// commonly misses it and must be retried a few times, not failed.
+const workerStageReadAttempts = 4
+
 func (c *Controller) readWorkerStages(ctx context.Context, gen int64) {
-	c.mu.Lock()
-	conn := c.conn
-	c.mu.Unlock()
-	if conn == nil {
-		return
-	}
-	rctx, cancel := context.WithTimeout(ctx, progressReadTimeout)
-	defer cancel()
-	p, err := c.deps.Worker.Progress(rctx, conn.Exec)
-	if err != nil {
-		c.warn("controller: worker stage read failed", "gen", gen, "err", err)
-		return
+	var got DownloadProgress
+	for attempt := 0; ; attempt++ {
+		c.mu.Lock()
+		live := c.generation == gen && c.conn != nil
+		conn := c.conn
+		c.mu.Unlock()
+		if !live || ctx.Err() != nil {
+			return
+		}
+		rctx, cancel := context.WithTimeout(ctx, progressReadTimeout)
+		p, err := c.deps.Worker.Progress(rctx, conn.Exec)
+		cancel()
+		if err != nil {
+			c.warn("controller: worker stage read failed", "gen", gen, "err", err)
+			return
+		}
+		got = p
+		if _, ok := got.Times["server_healthy"]; ok || attempt == workerStageReadAttempts-1 {
+			break
+		}
+		select {
+		case <-c.deps.Clock.After(pollInterval):
+		case <-ctx.Done():
+			return
+		}
 	}
 	doc, _, err := c.deps.Store.Load(ctx)
 	if err != nil {
+		c.warn("controller: worker stage store load failed", "gen", gen, "err", err)
 		return
 	}
 	r := findRental(&doc, gen)
 	if r == nil {
 		return
 	}
-	stages, mbps := summarizeWorkerStages(p.Times, r.ModelBytes)
+	stages, mbps := summarizeWorkerStages(got.Times, r.ModelBytes)
 	c.workerStagesMu.Lock()
 	c.workerStages = &workerStages{gen: gen, stages: stages, mbps: mbps}
 	c.workerStagesMu.Unlock()

@@ -53,6 +53,8 @@ type fakeWorker struct {
 	keyCalls      int
 	buildCalls    int
 	progress      DownloadProgress
+	progressSeq   []DownloadProgress // if set, each call advances up to the last entry, then repeats it
+	progressIdx   int
 	progressErr   error
 	progressBlock chan struct{} // if set, Progress blocks until this closes or ctx ends
 	progressCalls int
@@ -104,10 +106,22 @@ func (w *fakeWorker) probes() int {
 
 func (w *fakeWorker) Scrape(context.Context, http.RoundTripper) error { return nil }
 
+func (w *fakeWorker) SetProgressSequence(seq ...DownloadProgress) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.progressSeq, w.progressIdx = seq, 0
+}
+
 func (w *fakeWorker) Progress(ctx context.Context, _ func(context.Context, string) ([]byte, error)) (DownloadProgress, error) {
 	w.mu.Lock()
 	w.progressCalls++
 	p, err, block := w.progress, w.progressErr, w.progressBlock
+	if len(w.progressSeq) > 0 {
+		p = w.progressSeq[w.progressIdx]
+		if w.progressIdx < len(w.progressSeq)-1 {
+			w.progressIdx++
+		}
+	}
 	w.mu.Unlock()
 	if block != nil {
 		select {

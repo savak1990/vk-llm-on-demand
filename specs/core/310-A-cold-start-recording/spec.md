@@ -95,7 +95,8 @@ before CORE-180); Postgres or any other new store (the operator decided on
 
 | Field | Source |
 |---|---|
-| `gen`, `origin`, `startedAt` | the start transition (`generation`, `startOrigin`) |
+| `gen`, `origin` | the start transition (`generation`, `startOrigin`) |
+| `startedAt` | search dispatch — the controller reads the clock when the search effect starts |
 | `machineId`, `geo`, `gpu`, `dph`, `inetDownMbps`, `estDownloadSeconds`, `modelBytes` | `instance.offer` and `instance.offer.estimate` of the chosen offer |
 | `readyAt` | the transition to READY |
 | `outcome` | `ready`, or the provision outcome label of `vkllm_provision_attempts_total` (`failed_status`, `deadline_exceeded`, `cancelled`, …) |
@@ -103,8 +104,9 @@ before CORE-180); Postgres or any other new store (the operator decided on
 | `endedAt`, `costUSD` | the destroy transition; `costUSD` is the ledger entry's `estUsd` for this `gen` |
 
 The list keeps the last 50 records, oldest first; `Encode` trims it the same
-way it trims `ops`. 50 records are about 15 KB, well inside the 256 KiB
-document limit. The field is additive with `omitempty`, so no schema bump: an
+way it trims `ops`. 50 realistic records are about 24 KB; the full capped
+document measured 37,070 bytes, well inside the 256 KiB document limit. The
+field is additive with `omitempty`, so no schema bump: an
 older binary ignores it and drops it on its next write, the same rule as
 `budgetMonthUsd` (ADR 0015).
 
@@ -118,13 +120,16 @@ and one worker timestamp, because the two clocks can differ by seconds.
 
 | Stage | From | To | Clock |
 |---|---|---|---|
-| `search` | start accepted | offer chosen | controller |
+| `search` | search dispatch | offer chosen | controller |
 | `create` | create sent | provider returns the instance id | controller |
 | `boot` | instance id | provider reports `running` with an SSH endpoint | controller |
 | `link` | `running` | link up (`EvLinkUp`) | controller |
 | `download` | `download_begin` | `verified` (fetch plus sha256) | worker |
 | `load` | `server_spawn` | `server_healthy` | worker |
 | `ready` | link up | READY (probe passed) | controller |
+
+`load` can include up to `POLL_SECONDS` (15 s) of worker poll lag, because
+the worker stamps `server_healthy` in its poll loop.
 
 `ready` is the whole model phase as the controller sees it, so it is at
 least `download + load` when the download starts after link up. The worker

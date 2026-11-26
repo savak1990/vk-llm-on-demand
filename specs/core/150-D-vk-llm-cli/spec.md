@@ -39,7 +39,7 @@ Binaries for darwin/linux × amd64/arm64 come from GitHub Releases with
 
 - `cmd/vk-llm`: one `package main` with `main.go`, `config.go`,
   `client.go`, `commands.go`, `render.go` and their `_test.go` files.
-- Subcommands `start`, `status`, `stop`, `rentals`, `version`; stdlib `flag`;
+- Subcommands `start`, `status`, `stop`, `budget`, `rentals`, `version`; stdlib `flag`;
   config file via `gopkg.in/yaml.v3` (ADR 0012 Alternatives, architecture §2).
 - Install instructions with checksum verification in `README.md`.
 - Tests: tier 1 against an `httptest` fake management server; tier 2 one
@@ -82,6 +82,7 @@ package constant, not a flag.
 | `start` | `--detach`, `--timeout` (default `defaults.startupTimeout`, 15m), `--json` | POST start; unless detached, poll status until a terminal outcome (below) |
 | `status` | `--json` | GET status; table or raw body |
 | `stop` | `--detach`, `--timeout` (default 5m), `--json` | POST stop; unless detached, poll until `STOPPED` |
+| `budget` | `--json` | no args: GET status; `set <amount>`: POST budget; table (budget view) or raw body |
 | `rentals` | `--json` | GET /api/v1/gpu/rentals; table or raw body |
 | `version` | none | prints `vk-llm <version>`; no config, no network |
 
@@ -138,7 +139,7 @@ defaults:
 
 | Code | When |
 |---|---|
-| 0 | `start` reached `READY` (or `--detach` got 200/202); `stop` reached `STOPPED` (or `--detach` got 200/202); `status` got 200; `version` |
+| 0 | `start` reached `READY` (or `--detach` got 200/202); `stop` reached `STOPPED` (or `--detach` got 200/202); `status` got 200; `budget` got 200; `rentals` got 200; `version` |
 | 1 | 503 `gpu_unavailable` (prints `reason` verbatim), 400/404/405/413/500, network or TLS error on the first call, timeout while polling, `start` sees `STOPPED` with non-empty `unavailable`, 3xx |
 | 2 | usage error, bad flag, bad duration, missing endpoint or token, bad config file, token key in the file, plain `http://` to a non-loopback host |
 | 3 | 401 `invalid_token` or 403 `permission_denied` on any call |
