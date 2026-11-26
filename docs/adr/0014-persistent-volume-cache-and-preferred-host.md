@@ -2,10 +2,10 @@
 
 ## Status
 
-**Proposed** (2026-11-01, revised 2026-11-26). The spike in
-[CORE-320](../../specs/core/320-D-vast-volume-spike/spec.md) confirmed on
-2026-11-26 that a volume survives the destroy of its GPU. The ADR is Accepted
-when the open ranking question in CORE-180 is decided. Extends
+**Accepted** (2026-11-26; proposed 2026-11-01, revised 2026-11-26). The
+spike in [CORE-320](../../specs/core/320-D-vast-volume-spike/spec.md)
+confirmed that a volume survives the destroy of its GPU, and the operator
+decided the ranking and the price cap on the same day. Extends
 [ADR 0005](0005-model-storage.md), whose Status carries a pointer here. The
 2026-11-01 version (one volume made by `vk-llm cache init`, no expiry,
 several volumes rejected) is replaced by this one after a design session
@@ -21,7 +21,7 @@ a row, because it was the cheapest. Vast.ai volumes are tied to one machine
 and stay after its GPU is destroyed ([research §1.7](../research.md)). A
 stopped instance is not an option (ADR 0003 §6).
 
-## Decision (proposed)
+## Decision
 
 1. **Seed during a normal rental.** When a rental downloads the model and a
    cache slot is free (or the oldest can be replaced), the controller
@@ -30,14 +30,19 @@ stopped instance is not an option (ADR 0003 §6).
 2. **Prefer a cached host, within a threshold.** Among the offers that pass
    every filter and cap, an offer on a machine with a verified cached volume
    wins unless an offer without a cache is at least `cache.preferThreshold`
-   (default 15 %) cheaper in session cost. The cached host gets no price
-   premium above any cap.
+   (default 15 %) cheaper in session cost. On a miss, an offer whose
+   machine can start a cache (it has a volume offer within the price cap)
+   wins in the same way, unless an offer that cannot is at least
+   `preferThreshold` cheaper. Neither preference gets a price premium above
+   any cap.
 3. **Bounded count, rolling retention.** At most `cache.maxCaches` (default
    1) volumes. A volume expires `cache.retention` (default 72 h) after the
    end of its last use; each use extends it. A new cache replaces the oldest.
 4. **Cost is capped and counted.** A volume is created only on a host whose
    storage price is at most `cache.maxStoragePriceUSDPerGBMonth` (default
-   $0.25), so the worst case is about $8.50 per month at one volume. Storage
+   $0.40, set by the operator after the spike found volume prices of
+   $0.20–0.667/GB-month), so the worst case is about $13.60 per month at one
+   volume. Storage
    counts in the monthly budget; when the budget is used up, every volume
    not in use is deleted. The budget default goes from $30 to $35 with this
    change.
