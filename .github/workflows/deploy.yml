@@ -37,7 +37,7 @@ jobs:
       - id: v
         run: |
           set -euo pipefail
-          version="$(./scripts/version.sh main "${{ github.sha }}")"
+          version="$(./scripts/version.sh main "${{ github.sha }}" "${{ github.run_number }}")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "### Version \`$version\`" >> "$GITHUB_STEP_SUMMARY"
 

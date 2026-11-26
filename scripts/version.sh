@@ -2,7 +2,7 @@
 # Prints the version this build publishes under. One number names the whole
 # repository on every channel, and the image tag equals the chart version.
 #
-#   version.sh main <sha>      0.2.1-main.a1b2c3d
+#   version.sh main <sha> <run>  0.2.1-main.57.ga1b2c3d
 #   version.sh pr <number> <sha>  0.2.1-pr-42.a1b2c3d
 #   version.sh release <level> 0.2.1 | 0.3.0 | 1.0.0   (patch|minor|major)
 #   version.sh base            0.2.1
@@ -14,6 +14,7 @@ set -euo pipefail
 channel="${1:-}"
 arg="${2:-}"
 sha="${3:-}"
+run="${3:-}"
 
 last="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 last="${last#v}"
@@ -54,7 +55,11 @@ case "$channel" in
     ;;
   main)
     [ -n "$arg" ] || { echo "VERSION: main needs a commit sha." >&2; exit 1; }
-    echo "$base-main.${arg:0:7}"
+    case "$run" in
+      ''|*[!0-9]*) echo "VERSION: main needs a numeric run number." >&2; exit 1 ;;
+    esac
+    # The run number orders builds; the g keeps an all-digit sha a valid identifier.
+    echo "$base-main.$run.g${arg:0:7}"
     ;;
   pr)
     [ -n "$arg" ] || { echo "VERSION: pr needs a pull request number." >&2; exit 1; }
