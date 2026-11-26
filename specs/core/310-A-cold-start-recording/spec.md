@@ -225,4 +225,8 @@ None.
 
 ## Evidence
 
-None yet.
+2026-11-26, branch core-310-cold-start-recording at 493bba4. Full document size with 50 rentals: 37070 bytes.
+
+AC1–AC4: `TestRentalRecordGoodStartAndStop`, `TestRentalRecordFailedStatus`, `TestRentalsCapped`, `TestFullDocumentWithRentalsSize`; pass in `make go-test`.
+
+AC5: pending a lab start (operator go-ahead).

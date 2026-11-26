@@ -141,6 +141,7 @@ redeploy. It cannot exceed the ceiling set by `config.budget.maxMonthlyUSD`
 ```bash
 vk-llm budget            # current budget and spend this month
 vk-llm budget set 40     # raise or lower the monthly budget
+vk-llm rentals          # one row per rental: where, $/h, boot, download, load, total
 ```
 
 After you set the budget with `vk-llm budget set`, the stored value
@@ -176,6 +177,7 @@ Read the GPU state and the running cost:
 ```bash
 curl -s "$H/api/v1/gpu/status" -H "Authorization: Bearer $MGMT" | jq '{state, ready, secondsUntilIdleShutdown, installationId}'
 curl -s "$H/api/v1/gpu/cost"   -H "Authorization: Bearer $MGMT" | jq
+curl -s -H "Authorization: Bearer $MGMT" "$H/api/v1/gpu/rentals" | jq
 ```
 
 Expected while no GPU runs: `"state": "STOPPED"`, `"ready": false`,

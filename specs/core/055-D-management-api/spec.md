@@ -63,6 +63,7 @@ Port 9090 never serves it (ADR 0012 §6).
 | any other path or method under `/api/v1/` | — | — | 404 `not_found` / 405 `method_not_allowed`, after auth |
 
 CORE-190 adds `POST /api/v1/gpu/budget`; see that spec.
+CORE-310 adds `GET /api/v1/gpu/rentals`: the last 50 rental records, newest first.
 
 The `result` field (in start/stop responses) and HTTP status are equivalent and redundant by design: both carry `already_running`/`already_stopped` (200) versus `accepted` (202); no 409 is ever returned (plan R-O). `503 gpu_unavailable` carries no `Retry-After`.
 
