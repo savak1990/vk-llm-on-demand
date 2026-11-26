@@ -14,9 +14,41 @@ type Provider interface {
 	ListInstances(ctx context.Context, labelPrefix string) ([]Instance, error)
 	DestroyInstance(ctx context.Context, id InstanceID) error
 	Balance(ctx context.Context) (Money, error)
+	SearchVolumeOffers(ctx context.Context, machineIDs []int64, minSizeGB int) ([]VolumeOffer, error)
+	ListVolumes(ctx context.Context, labelPrefix string) ([]Volume, error)
+	DeleteVolume(ctx context.Context, id VolumeID) error
 }
 
 type InstanceID int64
+
+type VolumeID int64
+
+// VolumeOffer is a machine's offer to host a new volume; its price is
+// separate from the GPU offer's storage price.
+type VolumeOffer struct {
+	ID, MachineID     int64
+	StoragePerGBMonth Money
+	DiskSpaceGB       float64
+}
+
+type Volume struct {
+	ID        VolumeID
+	Label     string
+	MachineID int64
+	Status    string
+	SizeGB    float64
+	Instances []InstanceID
+}
+
+// VolumeAttach mounts a volume on the new instance: CreateNew makes one
+// from the volume offer ID, otherwise ID is an existing volume's id.
+type VolumeAttach struct {
+	CreateNew bool
+	ID        int64
+	SizeGB    int
+	MountPath string
+	Name      string
+}
 
 // Money is micro-USD; avoids float drift when the ledger sums many values.
 type Money int64
@@ -60,6 +92,7 @@ type CreateRequest struct {
 	Env     map[string]string
 	Onstart string
 	Label   string
+	Volume  *VolumeAttach
 }
 
 type InstanceStatus int

@@ -22,5 +22,6 @@ func (e *Error) Error() string { return e.Op + ": " + e.Err.Error() }
 func (e *Error) Unwrap() error { return e.Err }
 
 var ErrNotFound = errors.New("provider: instance not found")
+var ErrVolumeInUse = errors.New("provider: volume in use")
 var ErrDuplicateLabel = errors.New("provider: duplicate label")
 var ErrOutcomeUnknown = errors.New("provider: create outcome unknown")

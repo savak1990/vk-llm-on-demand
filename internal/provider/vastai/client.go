@@ -469,10 +469,21 @@ func (c *Client) CreateInstance(ctx context.Context, r provider.CreateRequest) (
 		return id, nil
 	}
 
-	body, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"image": r.Image, "disk": r.DiskGB, "runtype": r.RunType,
 		"env": r.Env, "onstart": r.Onstart, "label": r.Label,
-	})
+	}
+	if v := r.Volume; v != nil {
+		vi := map[string]any{"create_new": v.CreateNew, "volume_id": v.ID, "mount_path": v.MountPath}
+		if v.CreateNew {
+			vi["size"] = v.SizeGB
+		}
+		if v.Name != "" {
+			vi["name"] = v.Name
+		}
+		payload["volume_info"] = vi
+	}
+	body, _ := json.Marshal(payload)
 	status, respBody, err := c.do(ctx, "create", 60*time.Second, 0, func() (*http.Request, error) {
 		return http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/v0/asks/%d", c.baseURL, r.OfferID), bytes.NewReader(body))
 	}, "label", r.Label)
