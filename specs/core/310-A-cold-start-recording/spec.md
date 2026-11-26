@@ -1,6 +1,6 @@
 ---
 id: "CORE-310"
-status: "DRAFT"
+status: "IN_PROGRESS"
 updated: "2026-11-26"
 depends_on: ["CORE-040", "CORE-050", "CORE-055", "CORE-090", "CORE-150", "CORE-210"]
 adrs: ["0004", "0005", "0018"]
@@ -204,8 +204,9 @@ GEN  STARTED           WHERE       $/H    BOOT  DOWNLOAD      LOAD  TOTAL  OUTCO
    with all seven stages, `downloadMBps > 0`, `endedAt` and `costUSD` set.
 2. AC2. A simulated start that ends in `failed_status` holds one record with
    that outcome and no `readyAt`.
-3. AC3. With 60 simulated rentals the document holds 50, and its size stays
-   below 30 KB.
+3. AC3. With 60 simulated rentals the document holds 50. The full document
+   (100 ledger entries, 20 ops, 10 denylist entries, 50 rentals) stays
+   below 64 KiB; AC10 of CORE-040 is unchanged.
 4. AC4. `/metrics` shows `vkllm_coldstart_stage_seconds_count` ≥ 1 for each
    of the seven start stages after one good simulated start.
 5. AC5. On the lab, after one real start (operator go-ahead needed, about

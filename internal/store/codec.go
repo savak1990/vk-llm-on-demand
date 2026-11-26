@@ -7,9 +7,15 @@ import (
 
 const maxDocumentBytes = 256 << 10
 
+// MaxRentals bounds the rentals list; Encode keeps the newest.
+const MaxRentals = 50
+
 func Encode(d Document) ([]byte, error) {
 	if len(d.Ops) > 20 {
 		d.Ops = append([]Op{}, d.Ops[len(d.Ops)-20:]...)
+	}
+	if len(d.Rentals) > MaxRentals {
+		d.Rentals = append([]Rental{}, d.Rentals[len(d.Rentals)-MaxRentals:]...)
 	}
 	b, err := json.Marshal(d)
 	if err != nil {

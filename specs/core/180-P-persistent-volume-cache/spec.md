@@ -13,14 +13,14 @@ operator; it replaces the 2026-11-01 draft (one volume, `vk-llm cache init`,
 no expiry). It waits for [CORE-320](../320-P-vast-volume-spike/spec.md): each
 place that depends on a spike answer names it (V1 to V8). If V1 (a volume
 survives destroy) is false, this spec is cancelled.
-[CORE-310](../310-P-cold-start-recording/spec.md) comes first, because it
+[CORE-310](../310-A-cold-start-recording/spec.md) comes first, because it
 gives the rental records that this spec extends.
 
 **Complexity:** M
 **Risk:** medium — a forgotten volume bills with nothing using it; a wrong attach serves stale weights
 **Estimated effort:** 1 to 2 days after CORE-320
 **Recommended model:** standard
-**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-P-cold-start-recording/spec.md), [CORE-320](../320-P-vast-volume-spike/spec.md)
+**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-A-cold-start-recording/spec.md), [CORE-320](../320-P-vast-volume-spike/spec.md)
 
 ## Problem
 

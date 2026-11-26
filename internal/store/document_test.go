@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -66,5 +67,22 @@ func TestDocumentOldJSONHasNoOriginOrGeo(t *testing.T) {
 	b, _ := json.Marshal(d)
 	if !bytes.Contains(b, []byte(`"startOrigin":"demand"`)) || !bytes.Contains(b, []byte(`"geo":"Sweden"`)) {
 		t.Fatalf("marshal lost fields: %s", b)
+	}
+}
+
+func TestDocumentWithoutRentals(t *testing.T) {
+	d, err := Decode([]byte(`{"schemaVersion":2,"installationId":"4f2c1a9b0e77","desired":"STOPPED"}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if d.Rentals != nil {
+		t.Fatalf("Rentals = %v, want nil", d.Rentals)
+	}
+	b, err := Encode(d)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if strings.Contains(string(b), `"rentals"`) {
+		t.Fatalf("encoded document has a rentals key: %s", b)
 	}
 }

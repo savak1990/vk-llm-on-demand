@@ -190,3 +190,65 @@ func TestEncodeDecodeKeepsOfferPricesAndEstimate(t *testing.T) {
 		t.Fatalf("round trip lost data: %+v", got.Instance.Offer)
 	}
 }
+
+func TestRentalsCapped(t *testing.T) {
+	d, _ := NewDocument("4f2c1a9b0e77")
+	for i := 1; i <= 60; i++ {
+		d.Rentals = append(d.Rentals, Rental{Gen: int64(i)})
+	}
+	b, err := Encode(d)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := Decode(b)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(got.Rentals) != MaxRentals {
+		t.Fatalf("len(Rentals) = %d, want %d", len(got.Rentals), MaxRentals)
+	}
+	if got.Rentals[0].Gen != 11 || got.Rentals[MaxRentals-1].Gen != 60 {
+		t.Fatalf("kept gens %d..%d, want 11..60", got.Rentals[0].Gen, got.Rentals[MaxRentals-1].Gen)
+	}
+	if len(d.Rentals) != 60 {
+		t.Fatalf("Encode changed the caller's slice: len = %d", len(d.Rentals))
+	}
+}
+
+func fullRental(gen int64) Rental {
+	start := time.Date(2026, 11, 25, 9, 37, 40, 722152706, time.UTC)
+	ready, end, mark := start.Add(6*time.Minute), start.Add(10*time.Minute), start.Add(6*time.Minute)
+	return Rental{
+		Gen: gen, Origin: "demand", StartedAt: start, ReadyAt: &ready, EndedAt: &end, MarkAt: &mark,
+		Outcome: "deadline_exceeded", MachineID: 151852, Geo: "South Korea, KR", GPU: "RTX 6000Ada",
+		DPH: 0.6433333333333333, InetDownMbps: 2402.4, EstDownloadSeconds: 96, ModelBytes: 28595763840,
+		Stages:       map[string]int64{"search": 1, "create": 1, "boot": 105, "link": 6, "download": 285, "load": 9, "ready": 296},
+		DownloadMBps: 100.3, CostUSD: 0.18436672083333333,
+	}
+}
+
+func TestFullDocumentWithRentalsSize(t *testing.T) {
+	d, _ := NewDocument("4f2c1a9b0e77")
+	readyAt := time.Now().UTC()
+	d.Instance = &Instance{ProviderID: "12345678", Label: "vkllm:4f2c1a9b0e77:7", ReadyAt: &readyAt}
+	for i := 0; i < 20; i++ {
+		d.Ops = append(d.Ops, Op{Key: "create-123456789"})
+	}
+	for i := 0; i < 100; i++ {
+		d.Ledger.Entries = append(d.Ledger.Entries, LedgerEntry{Gen: int64(i), DPH: 0.71})
+	}
+	for i := 0; i < 10; i++ {
+		d.MachineDenylist = append(d.MachineDenylist, DenyEntry{MachineID: int64(i)})
+	}
+	for i := 0; i < MaxRentals; i++ {
+		d.Rentals = append(d.Rentals, fullRental(int64(10000+i)))
+	}
+	b, err := Encode(d)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	t.Logf("full document size with %d rentals: %d bytes", MaxRentals, len(b))
+	if len(b) >= 65536 {
+		t.Fatalf("full document size %d >= 65536", len(b))
+	}
+}

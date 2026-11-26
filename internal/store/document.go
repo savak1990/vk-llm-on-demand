@@ -27,6 +27,7 @@ type Document struct {
 	Cache            json.RawMessage `json:"cache"`
 	BudgetMonthUSD   *float64        `json:"budgetMonthUsd,omitempty"`
 	StartOrigin      string          `json:"startOrigin,omitempty"`
+	Rentals          []Rental        `json:"rentals,omitempty"`
 }
 
 type Instance struct {
@@ -42,6 +43,28 @@ type Instance struct {
 	LastInferenceFinishedAt *time.Time `json:"lastInferenceFinishedAt"`
 	IdleDeadline            *time.Time `json:"idleDeadline"`
 	LastError               string     `json:"lastError"`
+}
+
+// Rental is the record of one start. MarkAt is the controller-clock time
+// of the last stage boundary; it is cleared once the start is ready or ends.
+type Rental struct {
+	Gen                int64            `json:"gen"`
+	Origin             string           `json:"origin,omitempty"`
+	StartedAt          time.Time        `json:"startedAt"`
+	ReadyAt            *time.Time       `json:"readyAt,omitempty"`
+	EndedAt            *time.Time       `json:"endedAt,omitempty"`
+	MarkAt             *time.Time       `json:"markAt,omitempty"`
+	Outcome            string           `json:"outcome,omitempty"`
+	MachineID          int64            `json:"machineId"`
+	Geo                string           `json:"geo,omitempty"`
+	GPU                string           `json:"gpu,omitempty"`
+	DPH                float64          `json:"dph"`
+	InetDownMbps       float64          `json:"inetDownMbps"`
+	EstDownloadSeconds int64            `json:"estDownloadSeconds,omitempty"`
+	ModelBytes         int64            `json:"modelBytes,omitempty"`
+	Stages             map[string]int64 `json:"stages,omitempty"`
+	DownloadMBps       float64          `json:"downloadMBps,omitempty"`
+	CostUSD            float64          `json:"costUSD,omitempty"`
 }
 
 type Offer struct {
