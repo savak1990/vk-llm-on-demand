@@ -101,3 +101,14 @@ open-webui:
       value: "false"
     - name: USER_PERMISSIONS_FEATURES_API_KEYS
       value: "false"
+    # Google sign-in creates the account as pending; the admin activates it.
+    # An account with the same email is linked, not refused as taken.
+    - name: ENABLE_OAUTH_SIGNUP
+      value: "true"
+    - name: DEFAULT_USER_ROLE
+      value: pending
+    - name: OAUTH_MERGE_ACCOUNTS_BY_EMAIL
+      value: "true"
+    # The admin's email/password login stays as break-glass.
+    - name: ENABLE_LOGIN_FORM
+      value: "true"

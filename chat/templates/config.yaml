@@ -6,3 +6,5 @@ metadata:
   name: open-webui-config
 data:
   WEBUI_URL: {{ printf "https://%s.%s" .Values.hostPrefix (required "fqdn is required" .Values.fqdn) | quote }}
+  # Explicit: behind Envoy the app could build an http:// callback, which Google rejects.
+  GOOGLE_REDIRECT_URI: {{ printf "https://%s.%s/oauth/google/login/callback" .Values.hostPrefix (required "fqdn is required" .Values.fqdn) | quote }}

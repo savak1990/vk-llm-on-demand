@@ -88,4 +88,22 @@ if yq 'select(.kind == "Deployment" and .metadata.name == "open-webui") | .spec.
   exit 1
 fi
 
+env_of() {
+  yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$1\") | .value" "$tmp/chat.yaml"
+}
+for pair in ENABLE_OAUTH_SIGNUP=true DEFAULT_USER_ROLE=pending OAUTH_MERGE_ACCOUNTS_BY_EMAIL=true ENABLE_LOGIN_FORM=true ENABLE_SIGNUP=false; do
+  [ "$(env_of "${pair%%=*}")" = "${pair#*=}" ] || {
+    echo "gitops-check: chat must render ${pair} (Google sign-in creates pending accounts; the admin keeps a password login)" >&2
+    exit 1
+  }
+done
+[ -z "$(env_of ENABLE_PASSWORD_AUTH)" ] || [ "$(env_of ENABLE_PASSWORD_AUTH)" = "true" ] || {
+  echo "gitops-check: ENABLE_PASSWORD_AUTH must stay true: it is the admin's break-glass login" >&2
+  exit 1
+}
+[ "$(yq 'select(.kind == "ConfigMap" and .metadata.name == "open-webui-config") | .data.GOOGLE_REDIRECT_URI' "$tmp/chat.yaml")" = "https://chat.lab.example.com/oauth/google/login/callback" ] || {
+  echo "gitops-check: open-webui-config must render GOOGLE_REDIRECT_URI https://chat.<fqdn>/oauth/google/login/callback" >&2
+  exit 1
+}
+
 echo "gitops-check: ok (chart $version)"
