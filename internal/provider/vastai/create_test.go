@@ -651,6 +651,27 @@ func TestCreateVastReasonRedactsEnv(t *testing.T) {
 	}
 }
 
+func TestCreateVastReasonKeepsShortEnvValues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"success":false,"error":"invalid_args","msg":"error 404/3603: no_such_ask  Instance type by id 60356224 is not available.","ask_id":60356224}`))
+	}))
+	defer srv.Close()
+
+	cl, _ := newTestClient(t, srv, fakeclock.New(time.Unix(0, 0)))
+	_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+		OfferID: 60356224, Image: "img", Label: "vkllm:test:short",
+		Env: map[string]string{"PARALLEL": "4", "DEADMAN_SECONDS": "120", "K_CACHE_TYPE": "q8_0"},
+	})
+	if err == nil || !contains(err.Error(), "error 404/3603: no_such_ask") {
+		t.Fatalf("err = %v, want Vast's text unchanged by short env values", err)
+	}
+}
+
 func TestCreateVastReasonTruncated(t *testing.T) {
 	long := strings.Repeat("é", 1000)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

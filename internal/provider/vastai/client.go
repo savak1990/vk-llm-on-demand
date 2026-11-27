@@ -545,7 +545,9 @@ func vastReason(body []byte, env map[string]string) (code, msg string) {
 	}
 	_ = json.Unmarshal(body, &r)
 	for _, v := range env {
-		if v != "" {
+		// Short values are settings like "4" or "q8_0"; masking them would
+		// garble Vast's own text, and secrets are always longer.
+		if len(v) >= 8 {
 			r.Error, r.Msg = strings.ReplaceAll(r.Error, v, "***"), strings.ReplaceAll(r.Msg, v, "***")
 		}
 	}
