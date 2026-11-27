@@ -54,7 +54,7 @@ Requests reach it through an existing Envoy gateway.
 
 The management API, at `/api/v1/gpu/*`, uses a management token. It
 starts and stops one NVIDIA RTX 6000 Ada GPU (48 GB) on Vast.ai. The GPU runs
-`llama-server` with the `Qwen3.8-27B` model (Q8_0 GGUF, 28.6 GB).
+`llama-server` with the `Inkling 2 Mini` model (Q8_0 GGUF, 27.8 GB).
 
 The inference API, at `/v1/*`, uses an inference key. It proxies
 OpenAI-compatible chat completions, streaming, and tool calls to the
@@ -170,7 +170,7 @@ curl -sv "$H/v1/models" -H "Authorization: Bearer $INF" 2>&1 | grep -E 'issuer|^
 ```
 
 Expected: `HTTP/2 200`, an issuer line that names Let's Encrypt, and
-`"id": "qwen3.8-27b"`.
+`"id": "inkling-2-mini"`.
 
 Read the GPU state and the running cost:
 
@@ -188,7 +188,7 @@ Send a chat request while the GPU is stopped:
 ```bash
 curl -s -X POST "$H/v1/chat/completions" \
   -H "Authorization: Bearer $INF" -H 'Content-Type: application/json' \
-  -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"Say hello."}]}'
+  -d '{"model":"inkling-2-mini","messages":[{"role":"user","content":"Say hello."}]}'
 ```
 
 Expected, in explicit mode (the default): HTTP 503 with
@@ -340,12 +340,12 @@ raising `parallel` to run more sessions at once costs more VRAM even with
 
 VRAM is roughly the model file plus the KV cache plus about 1.5 GB of
 buffers. These are estimates, not measured numbers — confirm on your own
-GPU before relying on them. For the lab's `Qwen3.8-27B` Q8_0 model
-(28.6 GB), an `f16` KV cache costs about 12 GB per 262144 tokens of total
+GPU before relying on them. For the lab's `Inkling 2 Mini` Q8_0 model
+(27.8 GB), an `f16` KV cache costs about 4 GB per 131072 tokens of total
 reserved context; `config.model.kCacheType` and `config.model.vCacheType`
 shrink that: `q8_0` is about 53% of the `f16` size, `q4_0` about 28%. Four
 sessions of 131072 tokens each (`contextSize: 131072`, `parallel: 4`) with
-`q8_0` comes to roughly 28.6 + 13 + 1.5 ≈ 43 GB on a 48 GB GPU. The K cache
+`q8_0` comes to roughly 27.8 + 8.5 + 1.5 ≈ 38 GB on a 48 GB GPU. The K cache
 is more sensitive to quantization than the V
 cache: `kCacheType: q4_0` hurts quality the most of the three settings; if
 you need to go below `q8_0`, quantize `vCacheType` first.
@@ -356,7 +356,7 @@ the total.
 
 ## OpenCode
 
-This example uses the lab's model alias, `qwen3.8-27b`, not the chart
+This example uses the lab's model alias, `inkling-2-mini`, not the chart
 default (`config.model.alias: qwen3.6-35b-a3b`) — set it to whatever
 `config.model.alias` your own install uses.
 
@@ -373,7 +373,7 @@ Then, in `~/.config/opencode/opencode.jsonc`:
 
 ```jsonc
 {
-  "model": "vk-llm/qwen3.8-27b",
+  "model": "vk-llm/inkling-2-mini",
   "providers": {
     "vk-llm": {
       "name": "vk-llm (on-demand GPU)",
@@ -383,9 +383,9 @@ Then, in `~/.config/opencode/opencode.jsonc`:
         "apiKey": "{env:VK_LLM_INFERENCE_KEY}"
       },
       "models": {
-        "qwen3.8-27b": {
-          "name": "Qwen3.8 27B (RTX 6000 Ada)",
-          "limit": { "context": 262144, "output": 16384 },
+        "inkling-2-mini": {
+          "name": "Inkling 2 Mini (RTX 6000 Ada)",
+          "limit": { "context": 131072, "output": 16384 },
           "variants": [
             { "id": "low",    "body": { "reasoning_effort": "low" } },
             { "id": "medium", "body": { "reasoning_effort": "medium" } },
