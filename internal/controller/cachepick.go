@@ -27,6 +27,53 @@ type pickInput struct {
 	threshold float64
 }
 
+// cacheReason is why a machine's offer did or did not carry a cache, for
+// the offer_choice log; it never changes which offer wins.
+type cacheReason string
+
+const (
+	reasonCached          cacheReason = "cached"
+	reasonSeedable        cacheReason = "seedable"
+	reasonNoVolumeOffer   cacheReason = "no_volume_offer"
+	reasonOverPriceCap    cacheReason = "volume_over_price_cap"
+	reasonOverBudget      cacheReason = "over_budget"
+	reasonHasOurVolume    cacheReason = "machine_has_our_volume"
+	reasonCacheDisabled   cacheReason = "cache_disabled"
+	reasonSearchFailed    cacheReason = "volume_search_failed"
+	reasonNoSeedRoom      cacheReason = "no_seed_room"
+	reasonStoreLoadFailed cacheReason = "store_load_failed"
+)
+
+type machineCache struct {
+	reason        cacheReason
+	volumeOfferID int64
+	priceUSD      float64
+	sizeGB        float64
+}
+
+// offerDecision is the rule that decided pickOfferWhy's choice and, when a
+// comparison decided it, the two session costs it compared.
+type offerDecision struct {
+	rule       string
+	prefUSD    float64
+	otherUSD   float64
+	threshold  float64
+	hasCompare bool
+}
+
+type offerChoiceLog struct {
+	decision offerDecision
+	machines map[int64]machineCache
+}
+
+func allMachinesReason(ranked []offercost.Ranked, reason cacheReason) map[int64]machineCache {
+	out := make(map[int64]machineCache, len(ranked))
+	for _, r := range ranked {
+		out[r.Offer.MachineID] = machineCache{reason: reason}
+	}
+	return out
+}
+
 func volumeSizeGB(modelBytes int64) int {
 	return int(math.Ceil(float64(modelBytes)*1.1/1e9)) + 2
 }
@@ -58,6 +105,13 @@ func prefers(pref, other offercost.Ranked, threshold float64) bool {
 // pickOffer chooses only among in.ranked, which holds admitted offers in
 // session-cost order: a cached host first, then a host that can start a cache.
 func pickOffer(in pickInput) (offercost.Ranked, cachePlan) {
+	r, p, _ := pickOfferWhy(in)
+	return r, p
+}
+
+// pickOfferWhy is pickOffer plus the rule that decided it, for the
+// offer_choice log; the offer and plan it returns are identical to pickOffer.
+func pickOfferWhy(in pickInput) (offercost.Ranked, cachePlan, offerDecision) {
 	var hit, hitRanked, plain *offercost.Ranked
 	var vol store.CacheVolume
 	for i := range in.ranked {
@@ -77,7 +131,18 @@ func pickOffer(in pickInput) (offercost.Ranked, cachePlan) {
 	// The hit wins on its estimate without the download, but keeps the
 	// ranked download fee so a failed checksum's re-download is budgeted.
 	if hit != nil && (plain == nil || prefers(*hit, *plain, in.threshold)) {
-		return *hitRanked, cachePlan{mode: "hit", volumeID: vol.VolumeID}
+		d := offerDecision{rule: "cached_within_threshold", threshold: in.threshold, prefUSD: hit.Breakdown.SessionUSD.USD()}
+		if plain != nil {
+			d.otherUSD, d.hasCompare = plain.Breakdown.SessionUSD.USD(), true
+		}
+		return *hitRanked, cachePlan{mode: "hit", volumeID: vol.VolumeID}, d
+	}
+	// A hit that lost keeps "uncached_cheaper" no matter which uncached
+	// offer the scan below settles on: it is the uncached side that won.
+	lost := hit != nil
+	var lostDecision offerDecision
+	if lost {
+		lostDecision = offerDecision{rule: "uncached_cheaper", threshold: in.threshold, prefUSD: hit.Breakdown.SessionUSD.USD(), otherUSD: plain.Breakdown.SessionUSD.USD(), hasCompare: true}
 	}
 	var seed, other *offercost.Ranked
 	var vo provider.VolumeOffer
@@ -95,24 +160,38 @@ func pickOffer(in pickInput) (offercost.Ranked, cachePlan) {
 		}
 	}
 	if seed != nil && (other == nil || prefers(*seed, *other, in.threshold)) {
-		return *seed, cachePlan{mode: "seed", volumeOfferID: vo.ID, storageUSD: vo.StoragePerGBMonth.USD()}
+		d := offerDecision{rule: "seedable_within_threshold", threshold: in.threshold, prefUSD: seed.Breakdown.SessionUSD.USD()}
+		if other != nil {
+			d.otherUSD, d.hasCompare = other.Breakdown.SessionUSD.USD(), true
+		}
+		if lost {
+			d = lostDecision
+		}
+		return *seed, cachePlan{mode: "seed", volumeOfferID: vo.ID, storageUSD: vo.StoragePerGBMonth.USD()}, d
 	}
 	if other != nil {
-		return *other, cachePlan{}
+		d := offerDecision{rule: "no_seedable"}
+		if seed != nil {
+			d = offerDecision{rule: "unseedable_cheaper", threshold: in.threshold, prefUSD: seed.Breakdown.SessionUSD.USD(), otherUSD: other.Breakdown.SessionUSD.USD(), hasCompare: true}
+		}
+		if lost {
+			d = lostDecision
+		}
+		return *other, cachePlan{}, d
 	}
-	return in.ranked[0], cachePlan{}
+	return in.ranked[0], cachePlan{}, offerDecision{rule: "cheapest"}
 }
 
 // cacheChoice never fails the search: a store or provider error only
 // removes the cache from the choice.
-func (c *Controller) cacheChoice(ctx context.Context, ranked []offercost.Ranked, modelBytes int64, disk int) (offercost.Ranked, cachePlan) {
+func (c *Controller) cacheChoice(ctx context.Context, ranked []offercost.Ranked, modelBytes int64, disk int) (offercost.Ranked, cachePlan, offerChoiceLog) {
 	cfg := c.deps.Config.Cache
 	if cfg.MaxCaches == 0 {
-		return ranked[0], cachePlan{}
+		return ranked[0], cachePlan{}, offerChoiceLog{decision: offerDecision{rule: "cheapest"}, machines: allMachinesReason(ranked, reasonCacheDisabled)}
 	}
 	doc, _, err := c.deps.Store.Load(ctx)
 	if err != nil {
-		return ranked[0], cachePlan{}
+		return ranked[0], cachePlan{}, offerChoiceLog{decision: offerDecision{rule: "cheapest"}, machines: allMachinesReason(ranked, reasonStoreLoadFailed)}
 	}
 	ready := usableReady(doc, c.deps.ModelURL, c.deps.ModelSHA256)
 	in := pickInput{ranked: ranked, ready: ready, hit: map[int64]offercost.Ranked{}, seedable: map[int64]provider.VolumeOffer{}, threshold: cfg.PreferThreshold}
@@ -125,6 +204,10 @@ func (c *Controller) cacheChoice(ctx context.Context, ranked []offercost.Ranked,
 			}
 		}
 	}
+	status := map[int64]machineCache{}
+	for m := range ready {
+		status[m] = machineCache{reason: reasonCached}
+	}
 	size := volumeSizeGB(modelBytes)
 	if hasSeedRoom(doc, cfg.MaxCaches) {
 		occupied := occupiedMachines(doc)
@@ -134,33 +217,65 @@ func (c *Controller) cacheChoice(ctx context.Context, ranked []offercost.Ranked,
 		var machines []int64
 		for _, r := range ranked {
 			m := r.Offer.MachineID
-			if _, seen := downloadUSD[m]; !seen && !occupied[m] {
-				downloadUSD[m] = r.Breakdown.DownloadUSD.USD()
-				machines = append(machines, m)
+			if _, seen := downloadUSD[m]; seen {
+				continue
 			}
+			if occupied[m] {
+				if _, cached := status[m]; !cached {
+					status[m] = machineCache{reason: reasonHasOurVolume}
+				}
+				continue
+			}
+			downloadUSD[m] = r.Breakdown.DownloadUSD.USD()
+			machines = append(machines, m)
 		}
 		offers, err := c.deps.Provider.SearchVolumeOffers(ctx, machines, size)
 		if err != nil {
 			c.warn("controller: volume offer search failed", "err", err)
+			for _, m := range machines {
+				status[m] = machineCache{reason: reasonSearchFailed}
+			}
 		}
 		for _, o := range offers {
 			dl, asked := downloadUSD[o.MachineID]
+			if !asked {
+				continue
+			}
 			price := o.StoragePerGBMonth.USD()
-			if !asked || price > cfg.MaxStoragePriceUSDPerGBMonth {
+			_, seeded := in.seedable[o.MachineID]
+			if price > cfg.MaxStoragePriceUSDPerGBMonth {
+				if !seeded {
+					status[o.MachineID] = machineCache{reason: reasonOverPriceCap, priceUSD: price}
+				}
 				continue
 			}
 			pending := float64(size)*price*cfg.Retention.Hours()/730 + dl
 			if c.deps.Budget.Exhausted(doc, pending) {
+				if !seeded {
+					status[o.MachineID] = machineCache{reason: reasonOverBudget, priceUSD: price}
+				}
 				continue
 			}
 			if cur, ok := in.seedable[o.MachineID]; !ok || o.StoragePerGBMonth < cur.StoragePerGBMonth {
 				in.seedable[o.MachineID] = o
+				status[o.MachineID] = machineCache{reason: reasonSeedable, volumeOfferID: o.ID, priceUSD: price, sizeGB: o.DiskSpaceGB}
+			}
+		}
+		for _, m := range machines {
+			if _, ok := status[m]; !ok {
+				status[m] = machineCache{reason: reasonNoVolumeOffer}
+			}
+		}
+	} else {
+		for _, r := range ranked {
+			if _, ok := status[r.Offer.MachineID]; !ok {
+				status[r.Offer.MachineID] = machineCache{reason: reasonNoSeedRoom}
 			}
 		}
 	}
-	choice, plan := pickOffer(in)
+	choice, plan, decision := pickOfferWhy(in)
 	plan.sizeGB, plan.modelURL, plan.sha256 = size, c.deps.ModelURL, c.deps.ModelSHA256
-	return choice, plan
+	return choice, plan, offerChoiceLog{decision: decision, machines: status}
 }
 
 // occupiedMachines holds every machine with a live volume of ours, so a

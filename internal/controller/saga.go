@@ -3,7 +3,9 @@ package controller
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,8 +55,66 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 		c.postEvent(Event{Kind: EvNoOffer, Reason: "no_offer"})
 		return
 	}
-	choice, plan := c.cacheChoice(ctx, ranked, bytes, disk)
+	choice, plan, choiceLog := c.cacheChoice(ctx, ranked, bytes, disk)
+	c.logOfferChoice(ranked, choice, plan, choiceLog)
 	c.postEvent(Event{Kind: EvOfferChosen, Offer: choice.Offer, Breakdown: choice.Breakdown, Filter: f, SearchStarted: started, CachePlan: plan})
+}
+
+func formatUSD(usd float64) string {
+	return strconv.FormatFloat(usd, 'f', 4, 64)
+}
+
+func (c *Controller) logOfferChoice(ranked []offercost.Ranked, choice offercost.Ranked, plan cachePlan, cl offerChoiceLog) {
+	if c.deps.Log == nil {
+		return
+	}
+	planMode := plan.mode
+	if planMode == "" {
+		planMode = "none"
+	}
+	args := []any{
+		"gen_next", c.currentGen() + 1,
+		"offers", len(ranked),
+		"rule", cl.decision.rule,
+		slog.Group("chosen",
+			"id", choice.Offer.ID, "machine_id", choice.Offer.MachineID, "geo", choice.Offer.Geolocation,
+			"dph", formatUSD(choice.Offer.Hourly.USD()), "download_s", choice.Breakdown.DownloadSeconds,
+			"download_usd", formatUSD(choice.Breakdown.DownloadUSD.USD()), "session_usd", formatUSD(choice.Breakdown.SessionUSD.USD()),
+			"plan", planMode),
+	}
+	if cl.decision.hasCompare {
+		args = append(args, slog.Group("compare",
+			"pref_usd", formatUSD(cl.decision.prefUSD), "other_usd", formatUSD(cl.decision.otherUSD), "threshold", cl.decision.threshold))
+	}
+	args = append(args, topOffersAttr(ranked, choice.Offer.ID, cl.machines))
+	c.deps.Log.Info("offer_choice", args...)
+}
+
+func topOffersAttr(ranked []offercost.Ranked, chosenID int64, machines map[int64]machineCache) slog.Attr {
+	var groups []any
+	for _, r := range ranked {
+		if r.Offer.ID == chosenID || len(groups) >= 5 {
+			continue
+		}
+		groups = append(groups, offerAttr(strconv.Itoa(len(groups)), r, machines[r.Offer.MachineID]))
+	}
+	return slog.Group("top", groups...)
+}
+
+func offerAttr(key string, r offercost.Ranked, mc machineCache) slog.Attr {
+	attrs := []any{
+		"id", r.Offer.ID, "machine_id", r.Offer.MachineID, "geo", r.Offer.Geolocation,
+		"dph", formatUSD(r.Offer.Hourly.USD()), "download_s", r.Breakdown.DownloadSeconds,
+		"download_usd", formatUSD(r.Breakdown.DownloadUSD.USD()), "session_usd", formatUSD(r.Breakdown.SessionUSD.USD()),
+		"cache", string(mc.reason),
+	}
+	switch mc.reason {
+	case reasonSeedable:
+		attrs = append(attrs, "cache_volume_offer_id", mc.volumeOfferID, "cache_price_usd", formatUSD(mc.priceUSD), "cache_size_gb", mc.sizeGB)
+	case reasonOverPriceCap, reasonOverBudget:
+		attrs = append(attrs, "cache_price_usd", formatUSD(mc.priceUSD))
+	}
+	return slog.Group(key, attrs...)
 }
 
 func horizon(cfg config.Controller) time.Duration {

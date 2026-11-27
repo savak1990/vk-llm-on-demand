@@ -74,6 +74,113 @@ func TestPickOfferNoCacheIsPlainOrder(t *testing.T) {
 	}
 }
 
+func TestPickOfferWhyRuleCachedBoundary(t *testing.T) {
+	cached := ranked(1, 100, 0.40)
+	ready := map[int64]store.CacheVolume{100: {VolumeID: 987, State: store.CacheReady}}
+	for _, c := range []struct {
+		other float64
+		want  string
+	}{{0.35, "cached_within_threshold"}, {0.34, "uncached_cheaper"}, {0.33, "uncached_cheaper"}} {
+		other := ranked(2, 200, c.other)
+		_, _, d := pickOfferWhy(pickInput{ranked: []offercost.Ranked{other, cached}, hit: map[int64]offercost.Ranked{1: cached}, ready: ready, threshold: 0.15})
+		if d.rule != c.want {
+			t.Fatalf("other %.2f: rule = %q, want %q", c.other, d.rule, c.want)
+		}
+	}
+}
+
+func TestPickOfferWhyRuleSeedableBoundary(t *testing.T) {
+	seed := ranked(3, 300, 0.40)
+	seedable := map[int64]provider.VolumeOffer{300: {ID: 55800361, MachineID: 300, StoragePerGBMonth: provider.FromUSD(0.30)}}
+	for _, c := range []struct {
+		other float64
+		want  string
+	}{{0.35, "seedable_within_threshold"}, {0.34, "unseedable_cheaper"}} {
+		other := ranked(4, 400, c.other)
+		_, _, d := pickOfferWhy(pickInput{ranked: []offercost.Ranked{other, seed}, seedable: seedable, threshold: 0.15})
+		if d.rule != c.want {
+			t.Fatalf("other %.2f: rule = %q, want %q", c.other, d.rule, c.want)
+		}
+	}
+}
+
+func TestPickOfferWhyComparePrefersActualCompetitor(t *testing.T) {
+	cached := ranked(1, 100, 0.40)
+	ready := map[int64]store.CacheVolume{100: {VolumeID: 987, State: store.CacheReady}}
+	other := ranked(2, 200, 0.34)
+	_, _, d := pickOfferWhy(pickInput{ranked: []offercost.Ranked{other, cached}, hit: map[int64]offercost.Ranked{1: cached}, ready: ready, threshold: 0.15})
+	if !d.hasCompare || d.prefUSD != 0.40 || d.otherUSD != 0.34 || d.threshold != 0.15 {
+		t.Fatalf("decision = %+v, want compare 0.40 vs 0.34 at 0.15", d)
+	}
+}
+
+func TestCacheChoiceMachineCacheReasons(t *testing.T) {
+	const modelURL, sha = "https://example.invalid/model.gguf", "s"
+	ctl, prov, _, _, _ := newTestController(t)
+	ctl.deps.ModelURL, ctl.deps.ModelSHA256 = modelURL, sha
+	ctl.deps.Config.Cache.MaxCaches = 5
+	ctl.deps.Config.Cache.Retention = 730 * time.Hour
+	ctl.deps.Config.Cache.PreferThreshold = 0.15
+	ctl.deps.Config.Cache.MaxStoragePriceUSDPerGBMonth = 0.40
+	prov.SetVolumeOffers(
+		provider.VolumeOffer{ID: 200, MachineID: 2, StoragePerGBMonth: provider.FromUSD(0.20), DiskSpaceGB: 100},
+		// A pricier second offer on the same, already-seedable machine must
+		// not downgrade its reason away from "seedable".
+		provider.VolumeOffer{ID: 201, MachineID: 2, StoragePerGBMonth: provider.FromUSD(0.50), DiskSpaceGB: 100},
+		provider.VolumeOffer{ID: 300, MachineID: 3, StoragePerGBMonth: provider.FromUSD(0.50), DiskSpaceGB: 100},
+	)
+	st := ctl.deps.Store.(*fakestore.Fake)
+	doc, _ := store.NewDocument("iid")
+	doc.Cache = &store.CacheState{Volumes: []store.CacheVolume{
+		{Label: "m1", MachineID: 1, VolumeID: 11, State: store.CacheReady, ModelURL: modelURL, SHA256: sha},
+		{Label: "m5", MachineID: 5, State: store.CacheSeeding},
+	}}
+	st.Put(doc)
+
+	rankedOffers := []offercost.Ranked{
+		ranked(1, 1, 0.30), ranked(2, 2, 0.35), ranked(3, 3, 0.36), ranked(4, 4, 0.37), ranked(5, 5, 0.38),
+	}
+	_, _, cl := ctl.cacheChoice(context.Background(), rankedOffers, 1_000_000_000, 10)
+
+	for _, c := range []struct {
+		machine int64
+		want    cacheReason
+	}{
+		{1, reasonCached},        // (a) a usable ready volume
+		{2, reasonSeedable},      // (b) a seedable volume offer
+		{3, reasonOverPriceCap},  // (c) a volume offer over the price cap
+		{4, reasonNoVolumeOffer}, // (d) no volume offer
+		{5, reasonHasOurVolume},  // (e) our volume already there
+	} {
+		if got := cl.machines[c.machine].reason; got != c.want {
+			t.Fatalf("machine %d reason = %q, want %q", c.machine, got, c.want)
+		}
+	}
+	if m := cl.machines[2]; m.volumeOfferID != 200 || m.priceUSD != 0.20 || m.sizeGB != 100 {
+		t.Fatalf("machine 2 cache = %+v", m)
+	}
+	if m := cl.machines[3]; m.priceUSD != 0.50 {
+		t.Fatalf("machine 3 cache = %+v", m)
+	}
+}
+
+// (f) cache disabled: every ranked machine is reported disabled, and the
+// rule is "cheapest" since no cache was ever consulted.
+func TestCacheChoiceDisabledMarksEveryMachineCacheDisabled(t *testing.T) {
+	ctl, _, _, _, _ := newTestController(t)
+	ctl.deps.Config.Cache.MaxCaches = 0
+	rankedOffers := []offercost.Ranked{ranked(1, 1, 0.30), ranked(2, 2, 0.31)}
+	_, _, cl := ctl.cacheChoice(context.Background(), rankedOffers, 1_000_000_000, 10)
+	for _, m := range []int64{1, 2} {
+		if got := cl.machines[m].reason; got != reasonCacheDisabled {
+			t.Fatalf("machine %d reason = %q, want cache_disabled", m, got)
+		}
+	}
+	if cl.decision.rule != "cheapest" {
+		t.Fatalf("rule = %q, want cheapest", cl.decision.rule)
+	}
+}
+
 func TestVolumeSizeGB(t *testing.T) {
 	if got := volumeSizeGB(28595763840); got != 34 {
 		t.Fatalf("volumeSizeGB = %d, want 34", got)
@@ -162,7 +269,7 @@ func TestCacheChoice(t *testing.T) {
 			if c.failLoad {
 				st.FailNext(1, errors.New("boom"))
 			}
-			got, plan := ctl.cacheChoice(context.Background(), []offercost.Ranked{plain, seedOffer}, 1_000_000_000, 10)
+			got, plan, _ := ctl.cacheChoice(context.Background(), []offercost.Ranked{plain, seedOffer}, 1_000_000_000, 10)
 			if got.Offer.ID != c.wantID || plan.mode != c.wantMode {
 				t.Fatalf("chose %d %q, want %d %q", got.Offer.ID, plan.mode, c.wantID, c.wantMode)
 			}

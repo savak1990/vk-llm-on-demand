@@ -154,6 +154,9 @@ from one `search volumes` call per search, joined to the GPU offers by
 `machine_id`; a failed volume search makes every offer a `U` and never fails
 the start (R9).
 
+Each choice logs `offer_choice` with the chosen offer, the deciding rule and
+up to 5 losing offers with their cache status.
+
 The cached host never gets a price premium above a cap: it must pass every
 filter like any other offer. If the search does not return the cached
 machine (CORE-320 V5), the result is a miss.
