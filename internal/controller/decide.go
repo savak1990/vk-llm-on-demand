@@ -164,6 +164,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			if f.Budget != nil {
 				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, downloadUSD(d.Instance.Offer))
 			}
+			if ev.VolumeDropped {
+				releaseRefusedVolume(d, f.Now)
+			}
 			if dest {
 				d.Instance.State = Destroying.String()
 				op.Outcome = "cancelled"

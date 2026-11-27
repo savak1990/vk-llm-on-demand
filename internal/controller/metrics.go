@@ -99,7 +99,7 @@ func RegisterMetrics(reg prometheus.Registerer) {
 	for _, s := range []string{store.CacheSeeding, store.CacheReady, store.CacheDeleting} {
 		cacheVolumesGauge.WithLabelValues(s)
 	}
-	for _, r := range []string{"replaced", "over_limit", "seed_failed", "expired", "budget", "model_changed", "orphan"} {
+	for _, r := range []string{"replaced", "over_limit", "seed_failed", "attach_failed", "hit_failed", "expired", "budget", "model_changed", "orphan"} {
 		cacheDeletedTotal.WithLabelValues(r)
 	}
 }

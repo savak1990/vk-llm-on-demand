@@ -28,6 +28,7 @@ type Fake struct {
 		err error
 	}
 	failDestroyN int
+	failAttachN  int
 	calls        map[string]int
 
 	volumeOffers []provider.VolumeOffer
@@ -87,6 +88,10 @@ func (f *Fake) FailNext(op string, n int, err error) {
 	}{n, err}
 }
 func (f *Fake) FailDestroy(n int) { f.mu.Lock(); defer f.mu.Unlock(); f.failDestroyN = n }
+
+// FailVolumeAttach refuses the next n creates that carry a volume, before
+// any volume or instance is made, as the provider rejects bad volume_info.
+func (f *Fake) FailVolumeAttach(n int) { f.mu.Lock(); defer f.mu.Unlock(); f.failAttachN = n }
 func (f *Fake) SetStatusSequence(id provider.InstanceID, s ...provider.InstanceStatus) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -166,6 +171,12 @@ func (f *Fake) CreateInstance(ctx context.Context, r provider.CreateRequest) (pr
 	f.nextID++
 	f.instances[id] = provider.Instance{ID: id, Label: r.Label, MachineID: machine, Status: provider.StatusOther}
 	if v := r.Volume; v != nil {
+		if f.failAttachN > 0 {
+			f.failAttachN--
+			delete(f.instances, id)
+			f.mu.Unlock()
+			return 0, &provider.Error{Op: "create", Class: provider.Terminal, Status: 400, Err: fmt.Errorf("fake: volume_info refused")}
+		}
 		vid := provider.VolumeID(v.ID)
 		if v.CreateNew {
 			vid = provider.VolumeID(f.nextVolumeID)

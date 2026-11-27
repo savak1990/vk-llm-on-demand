@@ -65,12 +65,14 @@ func ownVolume(label, prefix string) bool {
 }
 
 // matchVolumes pairs each entry with its listed volume: by id once known,
-// else by label, preferring one attached to an instance, then the lowest id.
+// else by label on the entry's machine, preferring one attached to an
+// instance, then the lowest id.
 func matchVolumes(entries []store.CacheVolume, vols []provider.Volume) map[string]provider.Volume {
 	m := map[string]provider.Volume{}
 	for _, e := range entries {
 		for _, v := range vols {
-			if v.Label != e.Label || (e.VolumeID != 0 && int64(v.ID) != e.VolumeID) {
+			if v.Label != e.Label || (e.VolumeID != 0 && int64(v.ID) != e.VolumeID) ||
+				(e.VolumeID == 0 && e.MachineID != 0 && v.MachineID != e.MachineID) {
 				continue
 			}
 			b, ok := m[e.Label]

@@ -58,6 +58,9 @@ func withCache(mutate func(*store.Document) error, now time.Time, retention time
 			case after == nil && v.State == store.CacheSeeding:
 				v.InUseGen = 0
 				markDeleting(v, now, "seed_failed")
+			case after == nil && v.State == store.CacheReady && before.ReadyAt == nil:
+				v.InUseGen = 0
+				markDeleting(v, now, "hit_failed")
 			case after == nil:
 				v.InUseGen = 0
 				exp := now.Add(retention)
@@ -67,6 +70,21 @@ func withCache(mutate func(*store.Document) error, now time.Time, retention time
 			}
 		}
 		return nil
+	}
+}
+
+// releaseRefusedVolume frees the volume the provider would not attach, so
+// the next search never offers it again.
+func releaseRefusedVolume(d *store.Document, now time.Time) {
+	d.Instance.Cache = "none"
+	if d.Cache == nil {
+		return
+	}
+	for i := range d.Cache.Volumes {
+		if v := &d.Cache.Volumes[i]; v.InUseGen == d.Generation {
+			v.InUseGen = 0
+			markDeleting(v, now, "attach_failed")
+		}
 	}
 }
 

@@ -116,6 +116,7 @@ type Event struct {
 	Err           error
 	Class         provider.Class
 	Duplicate     bool
+	VolumeDropped bool
 	HostKey       string
 	Status        provider.InstanceStatus
 	SSHHost       string

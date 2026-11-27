@@ -58,7 +58,7 @@ func prefers(pref, other offercost.Ranked, threshold float64) bool {
 // pickOffer chooses only among in.ranked, which holds admitted offers in
 // session-cost order: a cached host first, then a host that can start a cache.
 func pickOffer(in pickInput) (offercost.Ranked, cachePlan) {
-	var hit, plain *offercost.Ranked
+	var hit, hitRanked, plain *offercost.Ranked
 	var vol store.CacheVolume
 	for i := range in.ranked {
 		r := in.ranked[i]
@@ -68,14 +68,16 @@ func pickOffer(in pickInput) (offercost.Ranked, cachePlan) {
 				h = r
 			}
 			if hit == nil || h.Breakdown.SessionUSD < hit.Breakdown.SessionUSD {
-				hit, vol = &h, v
+				hit, hitRanked, vol = &h, &in.ranked[i], v
 			}
 		} else if plain == nil {
 			plain = &in.ranked[i]
 		}
 	}
+	// The hit wins on its estimate without the download, but keeps the
+	// ranked download fee so a failed checksum's re-download is budgeted.
 	if hit != nil && (plain == nil || prefers(*hit, *plain, in.threshold)) {
-		return *hit, cachePlan{mode: "hit", volumeID: vol.VolumeID}
+		return *hitRanked, cachePlan{mode: "hit", volumeID: vol.VolumeID}
 	}
 	var seed, other *offercost.Ranked
 	var vo provider.VolumeOffer

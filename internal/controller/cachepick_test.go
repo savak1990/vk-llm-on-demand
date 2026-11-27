@@ -172,8 +172,8 @@ func TestCacheChoice(t *testing.T) {
 			if plan.mode == "seed" && (plan.volumeOfferID != 500 || plan.storageUSD != 0.30 || plan.sizeGB != 4) {
 				t.Fatalf("seed plan = %+v", plan)
 			}
-			if plan.mode == "hit" && plan.volumeID != 7 {
-				t.Fatalf("hit plan = %+v", plan)
+			if plan.mode == "hit" && (plan.volumeID != 7 || got.Breakdown.DownloadUSD != seedOffer.Breakdown.DownloadUSD) {
+				t.Fatalf("hit plan = %+v download %v, want the ranked download fee", plan, got.Breakdown.DownloadUSD)
 			}
 		})
 	}
@@ -199,5 +199,22 @@ func TestHasSeedRoom(t *testing.T) {
 		if got := hasSeedRoom(doc, c.max); got != c.want {
 			t.Fatalf("%s: hasSeedRoom = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// The hit wins on its zero-download estimate, but the offer it returns
+// keeps the ranked download fee, so the ledger never charges $0.
+func TestPickOfferHitKeepsRankedDownloadFee(t *testing.T) {
+	cached := ranked(1, 100, 0.50)
+	cached.Breakdown.DownloadUSD = provider.FromUSD(0.10)
+	estimate := ranked(1, 100, 0.40)
+	ready := map[int64]store.CacheVolume{100: {VolumeID: 987, State: store.CacheReady}}
+	other := ranked(2, 200, 0.35)
+	got, plan := pickOffer(pickInput{ranked: []offercost.Ranked{other, cached}, hit: map[int64]offercost.Ranked{1: estimate}, ready: ready, threshold: 0.15})
+	if got.Offer.ID != 1 || plan.mode != "hit" {
+		t.Fatalf("chose %d %q, want the hit", got.Offer.ID, plan.mode)
+	}
+	if got.Breakdown != cached.Breakdown {
+		t.Fatalf("breakdown = %+v, want the ranked %+v", got.Breakdown, cached.Breakdown)
 	}
 }

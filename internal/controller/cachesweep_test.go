@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
@@ -51,6 +52,25 @@ func TestMarkForRelease(t *testing.T) {
 		}
 		if !slices.Equal(del, c.wantDel) {
 			t.Fatalf("%s: deleting %v, want %v", c.name, del, c.wantDel)
+		}
+	}
+}
+
+func TestMatchVolumesByLabelNeedsSameMachine(t *testing.T) {
+	vols := []provider.Volume{{ID: 5, Label: "l", MachineID: 43}, {ID: 6, Label: "l", MachineID: 42}}
+	for _, c := range []struct {
+		name  string
+		entry store.CacheVolume
+		want  provider.VolumeID
+	}{
+		{"machine known", store.CacheVolume{Label: "l", MachineID: 42}, 6},
+		{"machine unknown", store.CacheVolume{Label: "l"}, 5},
+		{"no volume on the machine", store.CacheVolume{Label: "l", MachineID: 44}, 0},
+		{"id known", store.CacheVolume{Label: "l", VolumeID: 5, MachineID: 42}, 5},
+	} {
+		got := matchVolumes([]store.CacheVolume{c.entry}, vols)["l"]
+		if got.ID != c.want {
+			t.Fatalf("%s: matched %d, want %d", c.name, got.ID, c.want)
 		}
 	}
 }

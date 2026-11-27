@@ -2250,6 +2250,9 @@ func TestCacheHitLinksVolume(t *testing.T) {
 	if v := doc.Cache.Volumes[0]; v.InUseGen != 1 || v.ExpiresAt != nil || doc.Instance.Cache != "hit" {
 		t.Fatalf("after hit volume = %+v instance cache %q", v, doc.Instance.Cache)
 	}
+	if e := doc.Instance.Offer.Estimate; e == nil || e.DownloadUSD <= 0 {
+		t.Fatalf("hit estimate %+v, want the offer's download fee kept", e)
+	}
 }
 
 // reconcileTicks runs exactly n reconcile passes; recovery armed the first
@@ -2343,6 +2346,9 @@ func TestCacheBudgetReleasesWithNoGPU(t *testing.T) {
 	}
 	if got := counterDelta(cacheDeletedTotal.WithLabelValues("budget"), before); got != 1 {
 		t.Fatalf("deleted_total{budget} delta = %v, want 1", got)
+	}
+	if len(h.cacheVolumes()) != 0 || !h.storageClosed(label) {
+		t.Fatalf("doc volumes %+v, want removed with its storage entry closed", h.cacheVolumes())
 	}
 }
 
@@ -2503,4 +2509,103 @@ func TestCacheVolumeInUseNotDeleted(t *testing.T) {
 			t.Fatalf("delete_failures_total delta = %v, want 1", got)
 		}
 	})
+}
+
+// startReady starts a GPU and settles until READY, so the fallback and
+// expiry sims are not confused with a failed start.
+func (h *harness) startReady(at time.Time) store.Document {
+	h.t.Helper()
+	h.worker.SetProbeSequence(ProbeReady)
+	h.Settle(at)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		h.t.Fatalf("Start: %v", err)
+	}
+	h.Settle(at.Add(40 * time.Second))
+	doc, _, _ := h.store.Load(context.Background())
+	if doc.Instance == nil || doc.Instance.ReadyAt == nil {
+		h.t.Fatalf("instance %+v, want READY", doc.Instance)
+	}
+	return doc
+}
+
+func TestCacheHitAttachRefusedStartsWithoutVolume(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 1)
+	vid := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 43})
+	h.putVolumes(1, h.readyVol(label, vid, h.clk.Now().Add(48*time.Hour)))
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S", InetDownMbps: 2400})
+	before := testutil.ToFloat64(cacheDeletedTotal.WithLabelValues("attach_failed"))
+
+	doc := h.startReady(h.clk.Now().Add(time.Second))
+	if n := h.prov.Calls("create"); n != 2 || h.prov.LastCreate().Volume != nil {
+		t.Fatalf("creates %d last volume %+v, want a second create without a volume", n, h.prov.LastCreate().Volume)
+	}
+	if v := doc.Cache.Volumes[0]; v.State != store.CacheDeleting || v.DeleteReason != "attach_failed" || v.InUseGen != 0 || doc.Instance.Cache != "none" {
+		t.Fatalf("volume %+v instance cache %q, want deleting attach_failed and cache none", v, doc.Instance.Cache)
+	}
+	h.Settle(h.clk.Now().Add(3 * time.Minute))
+	if len(h.prov.Volumes()) != 0 || len(h.cacheVolumes()) != 0 || !h.storageClosed(label) {
+		t.Fatalf("fake %v doc %v, want both empty and storage closed", h.prov.Volumes(), h.cacheVolumes())
+	}
+	if got := counterDelta(cacheDeletedTotal.WithLabelValues("attach_failed"), before); got != 1 {
+		t.Fatalf("deleted_total{attach_failed} delta = %v, want 1", got)
+	}
+}
+
+func TestCacheSeedAttachRefusedStartsWithoutVolume(t *testing.T) {
+	h := newCacheHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S", InetDownMbps: 2400})
+	h.prov.SetVolumeOffers(provider.VolumeOffer{ID: 900, MachineID: 42, StoragePerGBMonth: provider.FromUSD(0.30), DiskSpaceGB: 500})
+	h.prov.FailVolumeAttach(1)
+	label := volumeLabel(h.iid, 1)
+
+	doc := h.startReady(h.clk.Now().Add(time.Second))
+	if n := h.prov.Calls("create"); n != 2 || h.prov.LastCreate().Volume != nil || len(h.prov.Volumes()) != 0 {
+		t.Fatalf("creates %d last volume %+v fake %v, want a second create and no volume", n, h.prov.LastCreate().Volume, h.prov.Volumes())
+	}
+	if v := doc.Cache.Volumes[0]; v.Label != label || v.State != store.CacheDeleting || v.DeleteReason != "attach_failed" || v.InUseGen != 0 || doc.Instance.Cache != "none" {
+		t.Fatalf("volume %+v instance cache %q, want deleting attach_failed and cache none", v, doc.Instance.Cache)
+	}
+	h.reconcileTicks(1)
+	if len(h.cacheVolumes()) != 1 {
+		t.Fatal("tick 1: record removed after one absence")
+	}
+	h.reconcileTicks(1)
+	if len(h.cacheVolumes()) != 0 || !h.storageClosed(label) {
+		t.Fatalf("tick 2: doc volumes %+v, want removed with its storage entry closed", h.cacheVolumes())
+	}
+}
+
+func TestCacheUseAt71hMovesExpiry(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 1)
+	vid := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 42})
+	t0 := h.clk.Now()
+	h.putVolumes(1, h.readyVol(label, vid, t0.Add(72*time.Hour)))
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S", InetDownMbps: 2400})
+
+	if doc := h.startReady(t0.Add(71 * time.Hour)); doc.Instance.Cache != "hit" {
+		t.Fatalf("instance cache %q, want hit", doc.Instance.Cache)
+	}
+	if _, err := h.ctl.Stop(context.Background(), false); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	h.Settle(t0.Add(71*time.Hour + 5*time.Minute))
+	vols := h.cacheVolumes()
+	if len(vols) != 1 || vols[0].State != store.CacheReady || vols[0].InUseGen != 0 || vols[0].ExpiresAt == nil || vols[0].ExpiresAt.Before(t0.Add(143*time.Hour)) {
+		t.Fatalf("after stop doc volumes %+v, want ready, free, expiring 72h after the stop", vols)
+	}
+	exp := *vols[0].ExpiresAt
+	h.Settle(t0.Add(72*time.Hour + time.Minute))
+	if len(h.prov.Volumes()) != 1 || len(h.cacheVolumes()) != 1 {
+		t.Fatalf("at the old expiry + 1 tick fake %v doc %v, want kept", h.prov.Volumes(), h.cacheVolumes())
+	}
+	h.Settle(exp.Add(-time.Second))
+	if len(h.prov.Volumes()) != 1 {
+		t.Fatalf("just before the new expiry fake %v, want kept", h.prov.Volumes())
+	}
+	h.Settle(exp.Add(2 * time.Minute))
+	if len(h.prov.Volumes()) != 0 || len(h.cacheVolumes()) != 0 || !h.storageClosed(label) {
+		t.Fatalf("after the new expiry fake %v doc %v, want both empty and storage closed", h.prov.Volumes(), h.cacheVolumes())
+	}
 }
