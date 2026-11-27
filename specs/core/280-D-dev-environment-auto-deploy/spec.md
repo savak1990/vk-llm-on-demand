@@ -64,7 +64,7 @@ a separate Vast.ai account; a dashboard namespace selector.
 | Model alias | the `values.yaml` alias | `dev-` + that alias |
 | Alerts, dashboard | on | off |
 | Smoke hook | off | on |
-| Mode, budget, idle timeout | on-demand, $30, 30 min | the same |
+| Mode, budget, idle timeout | on-demand, $35, 30 min | the same |
 | AppProject | `vk-llm-on-demand`, `llm` only | `vk-llm-on-demand-dev`, `llm-dev` only |
 
 The release name is `gpu-on-demand` in both; the default `installationId`

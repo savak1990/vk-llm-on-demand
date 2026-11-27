@@ -137,7 +137,7 @@ release; P2 and P3 are future.
 | NFR-10.3 | Inference metrics from llama-server re-exported | Pulled over the tunnel every 15 s | 090 | V |
 | NFR-10.4 | Cost metrics: hourly price, uptime, estimated instance and month spend, budget ratio, provider balance, labelled as estimates | Catalog present | 090, 100 | — |
 | NFR-10.5 | Structured JSON logs with request id; no high-cardinality labels | Label audit | 090 | — |
-| NFR-10.6 | One Grafana dashboard and four alerts (orphan destroyed, provisioning failing, budget 80 %, destroy stuck) | Rendered when `serviceMonitor.enabled` | 090 | — |
+| NFR-10.6 | One Grafana dashboard and five alerts (orphan destroyed, provisioning failing, budget 80 %, destroy stuck, cache delete stuck) | Rendered when `serviceMonitor.enabled` | 090 | — |
 
 ## 11. Performance targets (initial, to be measured)
 

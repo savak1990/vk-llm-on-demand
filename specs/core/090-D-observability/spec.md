@@ -34,7 +34,7 @@ other packages each add metrics and log fields independently
 the process-wide `*prometheus.Registry`, the `slog` JSON logger with
 redaction, and request-id propagation. Every metric any package in this
 repository emits appears, under one name, in the catalog below. A Grafana
-dashboard ConfigMap and a `PrometheusRule` with four alerts ship with the
+dashboard ConfigMap and a `PrometheusRule` with five alerts ship with the
 chart. `curl :9090/metrics` on a kind cluster shows exactly 40 of the 43
 catalogued metric families when the fake provider is wired (43 with the real
 Vast.ai provider; see AC6), and no label outside the bounded enumerations.
@@ -53,7 +53,7 @@ Vast.ai provider; see AC6), and no label outside the bounded enumerations.
 - Two templates under CORE-080's chart: the dashboard ConfigMap (panel
   list and query table below; the exact file path and chart templating are
   CORE-080's, this spec hands it the JSON and the label) and the
-  `PrometheusRule` (four alerts, below).
+  `PrometheusRule` (five alerts, below).
 - Tests: catalog golden list, label-denylist audit, redaction (including
   `Logger.With`), request-id round trip, the `vkllm_inference_*` fixture
   delta beyond CORE-070's AC11, dashboard JSON schema check, `promtool
@@ -189,7 +189,7 @@ requires pre-initializing every declared combination at startup.
 | `vkllm_provider_balance_usd` | gauge | none | Last observed Vast.ai account balance (research §1.5) | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 | `vkllm_cache_lookups_total` | counter | `result`∈{hit,miss} | Offer choices with the model cache on: `hit` links a ready volume, `miss` does not | 180 |
 | `vkllm_cache_volumes` | gauge | `state`∈{seeding,ready,deleting} | Model cache volumes on record, by state | 180 |
-| `vkllm_cache_volumes_deleted_total` | counter | `reason`∈{replaced,over_limit,seed_failed,expired,budget,model_changed,orphan} | Model cache volumes deleted, by the reason they were released | 180 |
+| `vkllm_cache_volumes_deleted_total` | counter | `reason`∈{replaced,over_limit,seed_failed,attach_failed,hit_failed,expired,budget,model_changed,orphan} | Model cache volumes deleted, by the reason they were released | 180 |
 | `vkllm_cache_checksum_mismatch_total` | counter | none | Attached cache volumes whose model file failed the sha256 check and was downloaded again | 180 |
 | `vkllm_cache_delete_failures_total` | counter | none | Failed provider calls to delete a model cache volume | 180 |
 
@@ -292,7 +292,7 @@ CORE-080. Nothing in this spec depends on its exact YAML.
 
 ### Alerts
 
-Four alerts. C-4 treats a persistently failing destroy as its own paged condition, distinct from a
+Five alerts; `VkllmCacheDeleteStuck` comes from CORE-180. C-4 treats a persistently failing destroy as its own paged condition, distinct from a
 provisioning (create-side) failure: the remediation is different (a stuck
 destroy risks unbounded GPU billing; a provisioning failure risks no
 service). `VkllmDestroyStuck` uses `vkllm_gpu_state` with a `for:` clause
@@ -339,6 +339,11 @@ spec:
           expr: vkllm_budget_used_ratio >= 0.8
           labels: {severity: warning}
           annotations: {summary: "Month-to-date spend has reached 80% of budget"}
+        - alert: VkllmCacheDeleteStuck
+          expr: vkllm_cache_volumes{state="deleting"} > 0
+          for: 30m
+          labels: {severity: warning}
+          annotations: {summary: "A cache volume has been waiting for deletion for over 30 minutes"}
 ```
 
 `no_offer` is deliberately excluded from `VkllmProvisioningFailing`:
@@ -356,7 +361,7 @@ retried on the next demand, not a failure.
 - R7. `RequestIDMiddleware` MUST generate a 32-character lowercase-hex id when the inbound `X-Request-Id` does not match `^[0-9a-f]{32}$`, and MUST echo the id on every response. (source: NFR-10.5)
 - R8. `internal/obs` MUST register `vkllm_budget_used_ratio`, `vkllm_cost_estimated_usd_total`, `vkllm_cost_instance_usd`, `vkllm_provider_balance_usd` and `vkllm_inference_scrape_errors_total` directly, pre-initialized, so the catalog is complete independent of CORE-100's and CORE-070's status. (source: NFR-10.4, FR-6.4, FR-6.8)
 - R9. Every metric with a label MUST have every declared label-value combination initialized to zero at process start, so `/metrics` always lists the full combination set. (source: C-34, golden-list testability)
-- R10. The `PrometheusRule` MUST contain exactly four alerts in one group and MUST pass `promtool check rules` with exit code 0. (source: NFR-10.6)
+- R10. The `PrometheusRule` MUST contain exactly five alerts in one group and MUST pass `promtool check rules` with exit code 0. (source: NFR-10.6)
 - R11. The dashboard ConfigMap MUST carry the label `grafana_dashboard: "1"` and exactly nine panels. (source: NFR-10.6)
 - R12. `vkllm_gpu_state`'s `state` label MUST carry only the eight public states; the controller MUST emit `PublicState()`, never an internal stage name. (source: ADR 0011 §6)
 
@@ -370,7 +375,7 @@ retried on the next demand, not a failure.
 6. `Catalog()` plus the golden-list test. Test: `TestCatalogGolden` (register one fake collector per package per the catalog, call every setter/initializer so every label combination exists once, `Gather()`, assert the sorted family-name list has exactly 43 entries equal to `Catalog()`'s names).
 7. Scrape-error delta test. Test: `TestInferenceScrapeErrorIncrement` (fixture: a 500 from the worker `/metrics` endpoint increments `vkllm_inference_scrape_errors_total` by 1 and `vkllm_inference_up` reads 0 — the rest of the mapping is CORE-070 AC11, not repeated here).
 8. The dashboard ConfigMap's `dashboard.json` with the nine panels above. Test: `TestDashboardSchema` — `jq -e '(.panels | length) == 9 and (.panels | all(.targets[0].expr | test("vkllm_")))' dashboard.json` exits 0.
-9. The `PrometheusRule`'s four alerts. Test: `yq '.spec' prometheusrule.yaml | promtool check rules /dev/stdin` exits 0 and reports `4 rules found`.
+9. The `PrometheusRule`'s five alerts. Test: `yq '.spec' prometheusrule.yaml | promtool check rules /dev/stdin` exits 0 and reports `5 rules found`.
 
 ## Tests / acceptance criteria
 

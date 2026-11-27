@@ -193,6 +193,8 @@ The reconcile loop (every minute) does these steps, in this order:
 |---|---|
 | `maxCaches` is lower than the number of volumes | the volumes with the oldest `expiresAt`, not in use, go to `deleting` |
 | the GPU of a `seeding` volume is destroyed before `verified` (a failed or cancelled start) | `deleting` at once (reason `seed_failed`); it never takes a slot for 72 h |
+| the GPU of a hit is destroyed before READY (a failed or cancelled start) | `deleting` at once (reason `hit_failed`): the worker may have removed a file that failed sha256 |
+| the provider refuses a create because of its `volume_info` (not a duplicate label) | the create is sent once more without a volume; on success the volume goes to `deleting` (reason `attach_failed`) and the rental records `cache: "none"` (R9) |
 | a volume is not in use and `now ≥ expiresAt` | `deleting` (reason `expired`) |
 | month-to-date spend ≥ budget | every volume not in use goes to `deleting` (reason `budget`) |
 | `modelURL` or `sha256` in the config differs from the volume | `deleting` (reason `model_changed`) |
@@ -200,7 +202,9 @@ The reconcile loop (every minute) does these steps, in this order:
 | a provider volume under our label prefix is not in the document | delete after two observations (reason `orphan`), the same rule as instances (constitution C-6) |
 | a document volume is absent at the provider for two observations | remove the entry |
 
-A failed `ListVolumes` never deletes anything. Empty-store recovery deletes
+A delete that returns success counts as confirmed; a volume that is still
+listed later is deleted by the orphan rule. A failed `ListVolumes` never
+deletes anything. Empty-store recovery deletes
 every volume under our label prefix (constitution C-13). Vast refuses a
 delete while an instance uses the volume (`409`, CORE-320 V4), so a delete
 runs only after our GPU on it is destroyed. A delete while another customer
@@ -259,6 +263,8 @@ entries, after which it mistakes them for GPU entries. Before a rollback:
   `vkllm_cache_volumes_deleted_total{reason}`,
   `vkllm_cache_checksum_mismatch_total`,
   `vkllm_cache_delete_failures_total`.
+- The alert `VkllmCacheDeleteStuck` fires when a volume has been `deleting`
+  for over 30 minutes.
 - `vk-llm status` shows each volume: machine, state, expiry.
 
 ## Requirements
