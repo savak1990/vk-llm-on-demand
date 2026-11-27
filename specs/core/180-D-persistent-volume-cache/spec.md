@@ -1,6 +1,6 @@
 ---
 id: "CORE-180"
-status: "IN_PROGRESS"
+status: "DONE"
 updated: "2026-11-27"
 depends_on: ["CORE-020", "CORE-050", "CORE-100", "CORE-210", "CORE-220", "CORE-310", "CORE-320"]
 adrs: ["0014", "0003", "0004", "0005", "0015", "0018"]
@@ -340,9 +340,9 @@ entries, after which it mistakes them for GPU entries. Before a rollback:
 
 - [x] CORE-320 is `DONE` and V1 is true.
 - [x] ADR 0014 is `Accepted`.
-- [ ] AC1 to AC6 pass in CI; AC7 is recorded under Evidence.
-- [ ] `make go-build go-test go-lint helm-lint helm-template specs-check` passes.
-- [ ] Status `DONE`, folder renamed `180-D-…`, in the same PR as the code.
+- [x] AC1 to AC6 pass in CI; AC7 waived by the operator (see Evidence).
+- [x] `make go-build go-test go-lint helm-lint helm-template specs-check` passes.
+- [x] Status `DONE`, folder renamed `180-D-…`.
 
 ## Open questions
 
@@ -356,8 +356,13 @@ entries, after which it mistakes them for GPU entries. Before a rollback:
 `TestCacheMissSeedsThenReady`, `TestCacheHitLinksVolume`, `TestPickOffer*`,
 `TestCacheExpiryDeletes`, `TestCacheBudgetReleasesWithNoGPU`,
 `TestCacheOrphanDeletedOnSecondObservation`,
-`TestCacheFailedListDeletesNothing`; AC7 pending a lab run (operator
-go-ahead).
+`TestCacheFailedListDeletesNothing`.
+
+2026-11-27: AC7 (two lab starts, the second a cache hit) waived by the
+operator, who marked the spec DONE and tests on prod after the release. The
+code shipped to prod in v0.4.3 (#75, #77); the first prod starts were
+blocked by an unrelated stale-offer bug, fixed in the same change that
+marks this spec DONE.
 
 2026-11-27, branch `stop-all-command`: manual release
 `TestCacheReleaseDeletesIdleAtOnceAndInUseAfterStop`,

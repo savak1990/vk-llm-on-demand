@@ -31,7 +31,7 @@ boundary on the cost-critical start path.
 [CORE-070](../070-D-worker-runtime/spec.md),
 [CORE-100](../100-D-cost-controls/spec.md),
 [CORE-130](../130-D-platform-integration/spec.md).
-Related, not required: [CORE-180](../180-A-persistent-volume-cache/spec.md)
+Related, not required: [CORE-180](../180-D-persistent-volume-cache/spec.md)
 (a cached model shortens every wait).
 
 ## Outcome

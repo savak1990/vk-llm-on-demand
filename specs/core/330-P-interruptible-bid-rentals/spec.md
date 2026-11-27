@@ -12,14 +12,14 @@ adrs: ["0023", "0003", "0011", "0014", "0018", "0019"]
 operator. Section 1 of the design (behavior and config) was agreed in
 chat; the operator reviews the rest in depth before READY. Decisions are in
 [ADR 0023](../../../docs/adr/0023-interruptible-bid-rentals.md) (Proposed).
-[CORE-180](../180-A-persistent-volume-cache/spec.md) is merged and comes
+[CORE-180](../180-D-persistent-volume-cache/spec.md) is merged and comes
 first; this spec builds on its offer choice.
 
 **Complexity:** M
 **Risk:** medium — a wrong price field over-bids; a missed interruption leaves a stopped instance billing storage
 **Estimated effort:** 1 to 2 days
 **Recommended model:** standard
-**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md), [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-180](../180-A-persistent-volume-cache/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-A-cold-start-recording/spec.md)
+**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md), [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-180](../180-D-persistent-volume-cache/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-A-cold-start-recording/spec.md)
 
 ## Problem
 

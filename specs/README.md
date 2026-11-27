@@ -77,7 +77,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [150](core/150-D-vk-llm-cli/spec.md) | `vk-llm` CLI: start, status, stop | 055 |
 | [160](core/160-D-github-actions-remote-control/spec.md) | `gpu-control.yml` manual workflow | 055 |
 | [170](core/170-P-security-ci-and-release/spec.md) | gitleaks, govulncheck, trivy, SECURITY.md, release checklist | 010, 120 |
-| [180](core/180-A-persistent-volume-cache/spec.md) | Model cache on Vast.ai volumes: preferred cached host, 72 h rolling retention, storage in the budget | 050, 100, 210, 220, 310, 320 |
+| [180](core/180-D-persistent-volume-cache/spec.md) | Model cache on Vast.ai volumes: preferred cached host, 72 h rolling retention, storage in the budget | 050, 100, 210, 220, 310, 320 |
 | [190](core/190-D-runtime-budget-reconfiguration/spec.md) | Runtime-mutable budget cap, with a fixed ceiling | 055, 100, 150, 160 |
 | [200](core/200-P-per-start-parameters/spec.md) | Problem statement: model, quantization, GPU, idle timeout and price cap as per-start parameters (no design yet) | 055, 130, 150, 190 |
 | [210](core/210-D-offer-cost-model/spec.md) | Offer selection by estimated session cost; caps on download, storage and disk | 020, 050, 070, 100 |
