@@ -34,7 +34,7 @@ other packages each add metrics and log fields independently
 the process-wide `*prometheus.Registry`, the `slog` JSON logger with
 redaction, and request-id propagation. Every metric any package in this
 repository emits appears, under one name, in the catalog below. A Grafana
-dashboard ConfigMap and a `PrometheusRule` with four alerts ship with the
+dashboard ConfigMap and a `PrometheusRule` with five alerts ship with the
 chart. `curl :9090/metrics` on a kind cluster shows exactly 40 of the 43
 catalogued metric families when the fake provider is wired (43 with the real
 Vast.ai provider; see AC6), and no label outside the bounded enumerations.
@@ -53,7 +53,7 @@ Vast.ai provider; see AC6), and no label outside the bounded enumerations.
 - Two templates under CORE-080's chart: the dashboard ConfigMap (panel
   list and query table below; the exact file path and chart templating are
   CORE-080's, this spec hands it the JSON and the label) and the
-  `PrometheusRule` (four alerts, below).
+  `PrometheusRule` (five alerts, below).
 - Tests: catalog golden list, label-denylist audit, redaction (including
   `Logger.With`), request-id round trip, the `vkllm_inference_*` fixture
   delta beyond CORE-070's AC11, dashboard JSON schema check, `promtool
@@ -187,8 +187,13 @@ requires pre-initializing every declared combination at startup.
 | `vkllm_cost_estimated_usd_total` | counter | none | Monotonic estimated spend; CORE-100 rolls it forward, never resets it within this process's lifetime (CORE-100 R6) | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 | `vkllm_cost_instance_usd` | gauge | none | Estimated cost of the current instance so far; 0 when no instance exists | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 | `vkllm_provider_balance_usd` | gauge | none | Last observed Vast.ai account balance (research §1.5) | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
+| `vkllm_cache_lookups_total` | counter | `result`∈{hit,miss} | Offer choices with the model cache on: `hit` links a ready volume, `miss` does not | 180 |
+| `vkllm_cache_volumes` | gauge | `state`∈{seeding,ready,deleting} | Model cache volumes on record, by state | 180 |
+| `vkllm_cache_volumes_deleted_total` | counter | `reason`∈{replaced,over_limit,seed_failed,attach_failed,hit_failed,expired,budget,model_changed,orphan} | Model cache volumes deleted, by the reason they were released | 180 |
+| `vkllm_cache_checksum_mismatch_total` | counter | none | Attached cache volumes whose model file failed the sha256 check and was downloaded again | 180 |
+| `vkllm_cache_delete_failures_total` | counter | none | Failed provider calls to delete a model cache volume | 180 |
 
-43 metric families total; 40 of them register unconditionally, the 3 `vkllm_provider_*` series only when the real Vast.ai provider is wired (see AC6). `vkllm_coldstart_stage_seconds` is pre-initialized to zero for all 8 stages at registration time (R9); only `first_token` is observed with a real duration today, the other 7 stages' instrumentation is out of this spec's scope (see Open questions). The pull interval for the inference metrics is 15 s over
+48 metric families total; 45 of them register unconditionally, the 3 `vkllm_provider_*` series only when the real Vast.ai provider is wired (see AC6). `vkllm_coldstart_stage_seconds` is pre-initialized to zero for all 8 stages at registration time (R9); only `first_token` is observed with a real duration today, the other 7 stages' instrumentation is out of this spec's scope (see Open questions). The pull interval for the inference metrics is 15 s over
 the tunnel while the instance is `Ready` or `Serving` (ADR 0006
 §Consequences: llama-server metrics are pulled and re-exported, never
 scraped directly); the loop itself is CORE-050's.
@@ -287,7 +292,7 @@ CORE-080. Nothing in this spec depends on its exact YAML.
 
 ### Alerts
 
-Four alerts. C-4 treats a persistently failing destroy as its own paged condition, distinct from a
+Five alerts; `VkllmCacheDeleteStuck` comes from CORE-180. C-4 treats a persistently failing destroy as its own paged condition, distinct from a
 provisioning (create-side) failure: the remediation is different (a stuck
 destroy risks unbounded GPU billing; a provisioning failure risks no
 service). `VkllmDestroyStuck` uses `vkllm_gpu_state` with a `for:` clause
@@ -334,6 +339,11 @@ spec:
           expr: vkllm_budget_used_ratio >= 0.8
           labels: {severity: warning}
           annotations: {summary: "Month-to-date spend has reached 80% of budget"}
+        - alert: VkllmCacheDeleteStuck
+          expr: vkllm_cache_volumes{state="deleting"} > 0
+          for: 30m
+          labels: {severity: warning}
+          annotations: {summary: "A cache volume has been waiting for deletion for over 30 minutes"}
 ```
 
 `no_offer` is deliberately excluded from `VkllmProvisioningFailing`:
@@ -351,7 +361,7 @@ retried on the next demand, not a failure.
 - R7. `RequestIDMiddleware` MUST generate a 32-character lowercase-hex id when the inbound `X-Request-Id` does not match `^[0-9a-f]{32}$`, and MUST echo the id on every response. (source: NFR-10.5)
 - R8. `internal/obs` MUST register `vkllm_budget_used_ratio`, `vkllm_cost_estimated_usd_total`, `vkllm_cost_instance_usd`, `vkllm_provider_balance_usd` and `vkllm_inference_scrape_errors_total` directly, pre-initialized, so the catalog is complete independent of CORE-100's and CORE-070's status. (source: NFR-10.4, FR-6.4, FR-6.8)
 - R9. Every metric with a label MUST have every declared label-value combination initialized to zero at process start, so `/metrics` always lists the full combination set. (source: C-34, golden-list testability)
-- R10. The `PrometheusRule` MUST contain exactly four alerts in one group and MUST pass `promtool check rules` with exit code 0. (source: NFR-10.6)
+- R10. The `PrometheusRule` MUST contain exactly five alerts in one group and MUST pass `promtool check rules` with exit code 0. (source: NFR-10.6)
 - R11. The dashboard ConfigMap MUST carry the label `grafana_dashboard: "1"` and exactly nine panels. (source: NFR-10.6)
 - R12. `vkllm_gpu_state`'s `state` label MUST carry only the eight public states; the controller MUST emit `PublicState()`, never an internal stage name. (source: ADR 0011 §6)
 
@@ -365,7 +375,7 @@ retried on the next demand, not a failure.
 6. `Catalog()` plus the golden-list test. Test: `TestCatalogGolden` (register one fake collector per package per the catalog, call every setter/initializer so every label combination exists once, `Gather()`, assert the sorted family-name list has exactly 43 entries equal to `Catalog()`'s names).
 7. Scrape-error delta test. Test: `TestInferenceScrapeErrorIncrement` (fixture: a 500 from the worker `/metrics` endpoint increments `vkllm_inference_scrape_errors_total` by 1 and `vkllm_inference_up` reads 0 — the rest of the mapping is CORE-070 AC11, not repeated here).
 8. The dashboard ConfigMap's `dashboard.json` with the nine panels above. Test: `TestDashboardSchema` — `jq -e '(.panels | length) == 9 and (.panels | all(.targets[0].expr | test("vkllm_")))' dashboard.json` exits 0.
-9. The `PrometheusRule`'s four alerts. Test: `yq '.spec' prometheusrule.yaml | promtool check rules /dev/stdin` exits 0 and reports `4 rules found`.
+9. The `PrometheusRule`'s five alerts. Test: `yq '.spec' prometheusrule.yaml | promtool check rules /dev/stdin` exits 0 and reports `5 rules found`.
 
 ## Tests / acceptance criteria
 
@@ -376,7 +386,7 @@ retried on the next demand, not a failure.
 - AC5. `TestObsOwnedMetricsPreInitialized`: immediately after `NewRegistry()` plus obs's own registration, `Gather()` shows `vkllm_budget_used_ratio` 0, `vkllm_cost_estimated_usd_total` 0, `vkllm_cost_instance_usd` 0, `vkllm_provider_balance_usd` 0, `vkllm_inference_scrape_errors_total` 0. (R8)
 - AC6. On a kind cluster with the fake provider, `curl :9090/metrics` returns HTTP 200 and `grep -c '^# TYPE vkllm_'` on the body equals `40`: `internal/provider/vastai`'s 3 series (`vkllm_provider_requests_total`, `vkllm_provider_request_seconds`, `vkllm_provider_rate_limited_total`) only register as a side effect of constructing the real Vast.ai client, which the fake provider path never does. A deployment with `config.provider.name=vastai` shows all 43. (R1, R6)
 - AC7. `jq` schema check on the rendered dashboard JSON exits 0 for the expression in implementation step 8; a dashboard with 8 panels fails it. (R11, NFR-10.6)
-- AC8. `promtool check rules deploy/helm/gpu-on-demand/files/alerts.yaml` exits 0 and its output reports `4 rules found`. The file's top-level `groups:` key is `promtool`'s own native rule-file format, so no Helm render or `yq` envelope-stripping step is needed; the chart's `PrometheusRule` template pulls this same file verbatim via `.Files.Get`. A fifth bogus rule added to a scratch copy changes that count, proving the test is not vacuous. (R10, NFR-10.6)
+- AC8. `promtool check rules deploy/helm/gpu-on-demand/files/alerts.yaml` exits 0 and its output reports `5 rules found`. The file's top-level `groups:` key is `promtool`'s own native rule-file format, so no Helm render or `yq` envelope-stripping step is needed; the chart's `PrometheusRule` template pulls this same file verbatim via `.Files.Get`. A sixth bogus rule added to a scratch copy changes that count, proving the test is not vacuous. (R10, NFR-10.6)
 - AC9. `TestInferenceScrapeErrorIncrement`: a fixture upstream returning 500 on `GET /metrics` leaves `vkllm_inference_up` at 0 and `vkllm_inference_scrape_errors_total` at 1 after one pull cycle. (R8, NFR-10.3)
 - AC10. `promtool test rules` against `deploy/helm/gpu-on-demand/files/alerts_test.yaml` that sets `vkllm_budget_used_ratio` to 0.79 at t=0 then 0.8 at t=1m: `VkllmBudgetHigh` is `inactive` at t=0 and `firing` at t=1m. (R10, FR-6.4, NFR-10.6)
 - AC11. `promtool test rules` against `deploy/helm/gpu-on-demand/files/alerts_test.yaml` that sets `vkllm_gpu_state{state="DELETING"}` to 1 at t=0 and holds it, and separately that sets `vkllm_gpu_state{state="FAILED"}` to 1 at t=0 and holds it: `VkllmDestroyStuck` is `inactive` at t=9m and `firing` at t=11m in both cases, because a destroy that fails outright reports `FAILED`, not `DELETING` (R10, NFR-10.6)

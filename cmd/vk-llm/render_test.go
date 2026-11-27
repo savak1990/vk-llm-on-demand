@@ -170,6 +170,22 @@ func TestStatusGolden(t *testing.T) {
 			}`),
 		},
 		{
+			"cache",
+			parseStatusDoc(t, `{
+				"provider": "vast.ai",
+				"state": "STOPPED",
+				"instance": null,
+				"model": {"alias": "qwen-35b", "contextSize": 32768},
+				"ready": false,
+				"uptimeSeconds": 0,
+				"lastInferenceFinishedAt": null,
+				"secondsUntilIdleShutdown": null,
+				"cost": {"estimatedInstanceUSD": 0, "estimatedMonthUSD": 0, "budgetMonthUSD": 30},
+				"unavailable": "",
+				"cacheVolumes": [{"machineId": 40508, "state": "ready", "expiresAt": "2026-11-29T10:00:00Z"}]
+			}`),
+		},
+		{
 			"desired_mismatch",
 			parseStatusDoc(t, `{
 				"provider": "vast.ai",

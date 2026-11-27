@@ -18,6 +18,15 @@ func rentalOffer() store.Offer {
 	}
 }
 
+func TestChecksumMismatchOnHit(t *testing.T) {
+	if !checksumMismatchOnHit("hit", map[string]time.Time{"download_begin": rentalT0}) {
+		t.Fatal("a hit that downloads again is a mismatch")
+	}
+	if checksumMismatchOnHit("hit", map[string]time.Time{"download_skipped": rentalT0}) || checksumMismatchOnHit("seeded", map[string]time.Time{"download_begin": rentalT0}) {
+		t.Fatal("no mismatch")
+	}
+}
+
 // step runs one transition's mutate through withRental, as processEvent does.
 func step(t *testing.T, d *store.Document, now time.Time, outcome string, mutate func(*store.Document)) rentalChange {
 	t.Helper()
@@ -318,5 +327,18 @@ func TestRentalEndMergesWorkerStages(t *testing.T) {
 	r := d.Rentals[0]
 	if r.Stages["download"] != 300 || r.Stages["load"] != 9 || r.Stages["boot"] != 15 || r.DownloadMBps != 100.3 {
 		t.Fatalf("record = %+v", r)
+	}
+}
+
+func TestRentalCostIgnoresStorageEntryOfSameGen(t *testing.T) {
+	d, _ := store.NewDocument("iid")
+	d.Generation = 6
+	d.Instance = &store.Instance{State: Destroying.String(), ProviderID: "9", Offer: rentalOffer()}
+	end := rentalT0
+	d.Ledger.Entries = []store.LedgerEntry{{Gen: 6, End: &end, EstUSD: 0.18}, {Gen: 6, Volume: "vkllm_iid_v6", End: &end, EstUSD: 9.99}}
+	d.Rentals = []store.Rental{{Gen: 6, Outcome: "ready"}}
+	step(t, &d, rentalT0, "", func(d *store.Document) { d.Instance = nil })
+	if d.Rentals[0].CostUSD != 0.18 {
+		t.Fatalf("CostUSD = %v, want the GPU entry 0.18", d.Rentals[0].CostUSD)
 	}
 }

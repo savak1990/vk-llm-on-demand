@@ -44,7 +44,7 @@ subsystem's spec and cite the constitution.
 | C-4 | Destroy is retried until the provider confirms absence. A destroy that keeps failing is an alert, not a log line. |
 | C-5 | Instances are destroyed, never stopped (ADR 0003 §6). |
 | C-6 | The provider's instance list is reconciled against the state store at least every 60 s; an instance carrying our label prefix and unknown to the store is destroyed (ADR 0003 §4). |
-| C-7 | The defaults $30 per month, $0.80 per hour, one instance, 30 minutes rolling inactivity, 60 seconds drain, 12 hours lifetime are chart defaults and never hard-coded elsewhere. |
+| C-7 | The defaults $35 per month, $0.80 per hour, one instance, 30 minutes rolling inactivity, 60 seconds drain, 12 hours lifetime are chart defaults and never hard-coded elsewhere. |
 | C-7a | Every GPU is subject to the rolling inactivity timeout (ADR 0011); nothing in the inference or management path can disable or extend it except a finished inference request. Provisioning happens only through the management API in the initial release (ADR 0010). |
 | C-8 | The worker exits on its own after `worker.deadManTimeout` without traffic (ADR 0003 §7). |
 | C-9 | A failed read of provider state never triggers a destroy; only a successful observation does, twice in a row. |

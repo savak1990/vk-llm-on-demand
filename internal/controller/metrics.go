@@ -58,6 +58,12 @@ var (
 	instanceHourlyPriceUSD = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "vkllm_instance_hourly_price_usd",
 	})
+
+	cacheLookupsTotal          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vkllm_cache_lookups_total"}, []string{"result"})
+	cacheVolumesGauge          = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "vkllm_cache_volumes"}, []string{"state"})
+	cacheDeletedTotal          = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "vkllm_cache_volumes_deleted_total"}, []string{"reason"})
+	cacheChecksumMismatchTotal = prometheus.NewCounter(prometheus.CounterOpts{Name: "vkllm_cache_checksum_mismatch_total"})
+	cacheDeleteFailuresTotal   = prometheus.NewCounter(prometheus.CounterOpts{Name: "vkllm_cache_delete_failures_total"})
 )
 
 // RegisterMetrics registers this package's collectors; main calls it once.
@@ -66,7 +72,8 @@ func RegisterMetrics(reg prometheus.Registerer) {
 		provisionAttemptsTotal, gpuUptimeSecondsTotal, gpuIdleSeconds,
 		gpuIdleDeadlineSeconds, gpuLastInferenceFinishedSeconds,
 		destroyAttemptsTotal, orphansDestroyedTotal, reconcileRunsTotal,
-		instanceHourlyPriceUSD)
+		instanceHourlyPriceUSD, cacheLookupsTotal, cacheVolumesGauge,
+		cacheDeletedTotal, cacheChecksumMismatchTotal, cacheDeleteFailuresTotal)
 	// Every declared stage must appear in /metrics at process start.
 	for _, stage := range []string{"search", "create", "boot", "link", "download", "load", "ready", "first_token"} {
 		coldstartStageSeconds.WithLabelValues(stage)
@@ -85,6 +92,15 @@ func RegisterMetrics(reg prometheus.Registerer) {
 	}
 	for _, o := range []string{"ok", "error"} {
 		reconcileRunsTotal.WithLabelValues(o)
+	}
+	for _, r := range []string{"hit", "miss"} {
+		cacheLookupsTotal.WithLabelValues(r)
+	}
+	for _, s := range []string{store.CacheSeeding, store.CacheReady, store.CacheDeleting} {
+		cacheVolumesGauge.WithLabelValues(s)
+	}
+	for _, r := range []string{"replaced", "over_limit", "seed_failed", "attach_failed", "hit_failed", "expired", "budget", "model_changed", "orphan"} {
+		cacheDeletedTotal.WithLabelValues(r)
 	}
 }
 
@@ -208,7 +224,7 @@ func provisionDenialOutcome(reason string) (string, bool) {
 	}
 }
 
-// recordDocGauges sets the 4 gauges that are pure functions of an
+// recordDocGauges sets the gauges that are pure functions of an
 // already-loaded document; every caller passes one in hand, so this
 // never triggers a provider or store call of its own.
 func recordDocGauges(doc store.Document, state State, inFlight int, now time.Time) {
@@ -235,4 +251,13 @@ func recordDocGauges(doc store.Document, state State, inFlight int, now time.Tim
 	gpuIdleDeadlineSeconds.Set(idleDeadline)
 	gpuLastInferenceFinishedSeconds.Set(lastInference)
 	instanceHourlyPriceUSD.Set(hourly)
+	volumes := map[string]float64{}
+	if doc.Cache != nil {
+		for _, v := range doc.Cache.Volumes {
+			volumes[v.State]++
+		}
+	}
+	for _, s := range []string{store.CacheSeeding, store.CacheReady, store.CacheDeleting} {
+		cacheVolumesGauge.WithLabelValues(s).Set(volumes[s])
+	}
 }

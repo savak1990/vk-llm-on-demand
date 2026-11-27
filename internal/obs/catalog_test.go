@@ -3,10 +3,10 @@ package obs
 
 import "testing"
 
-func TestCatalogHas43SortedUniqueNames(t *testing.T) {
+func TestCatalogHas48SortedUniqueNames(t *testing.T) {
 	c := Catalog()
-	if len(c) != 43 {
-		t.Fatalf("len(Catalog()) = %d, want 43", len(c))
+	if len(c) != 48 {
+		t.Fatalf("len(Catalog()) = %d, want 48", len(c))
 	}
 	seen := map[string]bool{}
 	for i, s := range c {

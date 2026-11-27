@@ -46,9 +46,15 @@ config:
       maxInstanceSpendUSD: 0
       maxProvisionAttemptsPerHour: 3
   budget:
-    monthlyUSD: 30
+    monthlyUSD: 35
     maxMonthlyUSD: 100
     warnFraction: 0.8
+  # Model cache on a Vast.ai volume. 0 disables it and releases every volume.
+  cache:
+    maxCaches: 1
+    retention: 72h
+    preferThreshold: 0.15
+    maxStoragePriceUSDPerGBMonth: 0.40
   controller:
     reconcileInterval: 60s
   gateway:

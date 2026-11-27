@@ -130,6 +130,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				CreatedAt: f.Now,
 			}
 			d.Ops = append(d.Ops, store.Op{Key: fmt.Sprintf("create-%d", d.Generation), StartedAt: f.Now})
+			applyCachePlan(d, ev.CachePlan, f.Now, f.Cfg.Cache.MaxCaches, f.Budget)
 			hour := f.Now.UTC().Format("2006-01-02T15")
 			if d.AttemptsThisHour.Hour == hour {
 				d.AttemptsThisHour.Count++
@@ -162,6 +163,9 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			d.Instance.ProviderID = providerIDString(ev.ProviderID)
 			if f.Budget != nil {
 				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, downloadUSD(d.Instance.Offer))
+			}
+			if ev.VolumeDropped {
+				releaseRefusedVolume(d, f.Now)
 			}
 			if dest {
 				d.Instance.State = Destroying.String()

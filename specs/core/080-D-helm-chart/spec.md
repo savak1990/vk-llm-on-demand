@@ -112,7 +112,7 @@ Each `config.<path>` value becomes one `VKLLM_<NAME>` entry in the rendered `Con
 | `config.lifecycle.safety.maxLifetime` | `12h` | `VKLLM_LIFECYCLE_SAFETY_MAX_LIFETIME` (was `6h`; a deliberate change, ADR 0011 §5) |
 | `config.lifecycle.safety.maxInstanceSpendUSD` | `0` | `VKLLM_LIFECYCLE_SAFETY_MAX_INSTANCE_SPEND_USD` — `0` = off; otherwise bounds one instance's estimated spend |
 | `config.lifecycle.safety.maxProvisionAttemptsPerHour` | `3` | `VKLLM_LIFECYCLE_SAFETY_MAX_PROVISION_ATTEMPTS_PER_HOUR` |
-| `config.budget.monthlyUSD` | `30` | `VKLLM_BUDGET_MONTH_USD` |
+| `config.budget.monthlyUSD` | `35` | `VKLLM_BUDGET_MONTH_USD` |
 | `config.budget.maxMonthlyUSD` | `100` | `VKLLM_BUDGET_MAX_MONTHLY_USD` |
 | `config.budget.warnFraction` | `0.8` | `VKLLM_BUDGET_WARN_FRACTION` |
 | `config.controller.reconcileInterval` | `60s` | `VKLLM_CONTROLLER_RECONCILE_INTERVAL` |

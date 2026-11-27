@@ -96,6 +96,7 @@ func openRental(d *store.Document, in rentalInput) rentalChange {
 	r := store.Rental{
 		Gen: d.Generation, Origin: origin, StartedAt: start,
 		MachineID: o.MachineID, Geo: o.Geo, GPU: o.GPU, DPH: o.DPH, InetDownMbps: o.InetDown,
+		Cache: d.Instance.Cache,
 	}
 	if o.Estimate != nil {
 		r.EstDownloadSeconds, r.ModelBytes = o.Estimate.DownloadSeconds, o.Estimate.ModelBytes
@@ -111,7 +112,7 @@ func endRental(d *store.Document, r *store.Rental, in rentalInput) {
 	end := in.now
 	r.EndedAt, r.MarkAt = &end, nil
 	for _, e := range d.Ledger.Entries {
-		if e.Gen == r.Gen && e.End != nil {
+		if e.Gen == r.Gen && e.Volume == "" && e.End != nil {
 			r.CostUSD = math.Round(e.EstUSD*1e4) / 1e4
 		}
 	}
@@ -221,6 +222,7 @@ func (c *Controller) readWorkerStages(ctx context.Context, gen int64) {
 
 	var stages map[string]int64
 	var mbps float64
+	var lastTimes map[string]time.Time
 	var read bool
 attempts:
 	for attempt := 0; attempt < workerStageReadAttempts; attempt++ {
@@ -239,6 +241,7 @@ attempts:
 			break
 		}
 		stages, mbps = summarizeWorkerStages(p.Times, r.ModelBytes)
+		lastTimes = p.Times
 		read = true
 		c.workerStagesMu.Lock()
 		c.workerStages = &workerStages{gen: gen, stages: stages, mbps: mbps}
@@ -255,10 +258,20 @@ attempts:
 	if !read {
 		return
 	}
+	if checksumMismatchOnHit(r.Cache, lastTimes) {
+		cacheChecksumMismatchTotal.Inc()
+	}
 	for k, v := range stages {
 		coldstartStageSeconds.WithLabelValues(k).Observe(float64(v))
 	}
 	c.logRentalReady(*r, stages, mbps)
+}
+
+// checksumMismatchOnHit reports a cached volume whose model failed its
+// checksum and had to re-download; a hit that instead skips the download is not a mismatch.
+func checksumMismatchOnHit(cache string, times map[string]time.Time) bool {
+	_, redownload := times["download_begin"]
+	return cache == "hit" && redownload
 }
 
 func (c *Controller) logRentalReady(r store.Rental, worker map[string]int64, mbps float64) {

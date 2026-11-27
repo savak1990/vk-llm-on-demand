@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsFresh(t *testing.T) {
@@ -84,5 +85,22 @@ func TestDocumentWithoutRentals(t *testing.T) {
 	}
 	if strings.Contains(string(b), `"rentals"`) {
 		t.Fatalf("encoded document has a rentals key: %s", b)
+	}
+}
+
+func TestCacheRoundTripAndNullCompat(t *testing.T) {
+	d, err := Decode([]byte(`{"schemaVersion":2,"installationId":"abc","desired":"STOPPED","cache":null}`))
+	if err != nil || d.Cache != nil {
+		t.Fatalf("Decode null cache: %+v, %v", d.Cache, err)
+	}
+	exp := time.Date(2026, 11, 29, 10, 0, 0, 0, time.UTC)
+	d.Cache = &CacheState{Volumes: []CacheVolume{{Label: "vkllm_abc_v11", VolumeID: 987, MachineID: 40508, State: CacheReady, SizeGB: 34, StorageUSDPerGBMonth: 0.4, ExpiresAt: &exp}}}
+	b, err := Encode(d)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, err := Decode(b)
+	if err != nil || got.Cache == nil || len(got.Cache.Volumes) != 1 || got.Cache.Volumes[0].VolumeID != 987 || !got.Cache.Volumes[0].ExpiresAt.Equal(exp) {
+		t.Fatalf("round trip = %+v, %v", got.Cache, err)
 	}
 }

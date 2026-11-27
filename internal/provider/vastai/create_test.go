@@ -31,9 +31,10 @@ type instanceEntry struct {
 type createTestServer struct {
 	srv *httptest.Server
 
-	mu        sync.Mutex
-	nextID    int64
-	instances []instanceEntry
+	mu          sync.Mutex
+	nextID      int64
+	instances   []instanceEntry
+	lastPutBody map[string]any
 
 	putCount  int32
 	listCount int32
@@ -55,10 +56,13 @@ func (s *createTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &body)
+		var full map[string]any
+		_ = json.Unmarshal(b, &full)
 
 		s.mu.Lock()
 		s.nextID++
 		s.instances = append(s.instances, instanceEntry{ID: s.nextID, Label: body.Label})
+		s.lastPutBody = full
 		s.mu.Unlock()
 
 		w.WriteHeader(http.StatusGatewayTimeout)
@@ -491,5 +495,94 @@ func TestMetricsCreateOk(t *testing.T) {
 	}
 	if got := counterValue(t, reg, "create", "ok"); got != 1 {
 		t.Fatalf("create/ok metric = %v, want 1", got)
+	}
+}
+
+func TestCreateVolumeInfo(t *testing.T) {
+	s := newCreateTestServer(0)
+	defer s.srv.Close()
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, s.srv, c)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+			OfferID: 1, Image: "img", Label: "vkllm:test:volume-create",
+			Volume: &provider.VolumeAttach{CreateNew: true, ID: 55800361, SizeGB: 34, MountPath: "/models", Name: "vkllm_abc_v11"},
+		})
+		done <- err
+	}()
+	c.BlockUntil(1)
+	c.Advance(2 * time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+
+	s.mu.Lock()
+	body := s.lastPutBody
+	s.mu.Unlock()
+	vi, _ := body["volume_info"].(map[string]any)
+	if vi["create_new"] != true || vi["volume_id"] != float64(55800361) || vi["size"] != float64(34) ||
+		vi["mount_path"] != "/models" || vi["name"] != "vkllm_abc_v11" {
+		t.Fatalf("volume_info = %v", vi)
+	}
+}
+
+func TestCreateVolumeInfoLinkExisting(t *testing.T) {
+	s := newCreateTestServer(0)
+	defer s.srv.Close()
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, s.srv, c)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+			OfferID: 1, Image: "img", Label: "vkllm:test:volume-link",
+			Volume: &provider.VolumeAttach{CreateNew: false, ID: 62762324, MountPath: "/models"},
+		})
+		done <- err
+	}()
+	c.BlockUntil(1)
+	c.Advance(2 * time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+
+	s.mu.Lock()
+	body := s.lastPutBody
+	s.mu.Unlock()
+	vi, _ := body["volume_info"].(map[string]any)
+	if _, hasSize := vi["size"]; hasSize {
+		t.Fatalf("volume_info = %v, want no size key for a link attach", vi)
+	}
+	if vi["create_new"] != false || vi["volume_id"] != float64(62762324) {
+		t.Fatalf("volume_info = %v", vi)
+	}
+}
+
+func TestCreateNoVolumeInfo(t *testing.T) {
+	s := newCreateTestServer(0)
+	defer s.srv.Close()
+	c := fakeclock.New(time.Unix(0, 0))
+	cl, _ := newTestClient(t, s.srv, c)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+			OfferID: 1, Image: "img", Label: "vkllm:test:no-volume",
+		})
+		done <- err
+	}()
+	c.BlockUntil(1)
+	c.Advance(2 * time.Second)
+	if err := <-done; err != nil {
+		t.Fatalf("CreateInstance: %v", err)
+	}
+
+	s.mu.Lock()
+	body := s.lastPutBody
+	s.mu.Unlock()
+	if _, ok := body["volume_info"]; ok {
+		t.Fatalf("volume_info = %v, want no key when Volume is nil", body["volume_info"])
 	}
 }

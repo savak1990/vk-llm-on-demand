@@ -107,7 +107,7 @@ The chart's own `externalSecrets.enabled`, `httpRoute.enabled`,
 set directly in `gitops/templates/application.yaml`'s `valuesObject`, not
 in this table: `httpRoute`, `serviceMonitor`, `prometheusRule`, `dashboard`
 are `true` (the chart default is `false` for each; without them the
-`HTTPRoute`, the dashboard, and the four alerts never render on the only
+`HTTPRoute`, the dashboard, and the five alerts never render on the only
 installation — NFR-9.5; C-4; FR-6.4). `externalSecrets.enabled` is left at
 the chart default `false`: the platform renders the three `ExternalSecret`
 objects itself (see "PR-B: secrets" below), so the chart must not render

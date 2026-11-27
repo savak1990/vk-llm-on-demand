@@ -71,7 +71,7 @@ func wire(d wireDeps) (http.Handler, *controller.Controller, *gateway.Gateway, e
 		Provider: d.Provider, Store: d.Store, Dialer: d.Dialer, Clock: d.Clock,
 		Budget: b, Worker: w, WorkerSeed: d.WorkerSeedFunc,
 		InstallationID: d.InstallationID, ModelAlias: d.ModelAlias,
-		ModelSize: d.ModelSize, ModelURL: d.Worker.ModelURL,
+		ModelSize: d.ModelSize, ModelURL: d.Worker.ModelURL, ModelSHA256: d.Worker.ModelSHA256,
 		Config: d.Controller, Reg: d.Reg, Log: d.Log,
 	})
 	if err != nil {

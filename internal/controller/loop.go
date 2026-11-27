@@ -117,7 +117,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 	in := rentalInput{now: now, searchStart: ev.SearchStarted, outcome: outcome, worker: c.workerStagesFor(doc.Generation)}
 
 	if mutate != nil {
-		committed, txErr := store.Transition(ctx, c.deps.Store, c.flushAndRun(withRental(mutate, in, &change)))
+		committed, txErr := store.Transition(ctx, c.deps.Store, c.flushAndRun(withRental(withCache(mutate, now, c.deps.Config.Cache.Retention), in, &change)))
 		switch {
 		case errors.Is(txErr, errStale):
 			return errStale
@@ -134,6 +134,13 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 			gpuUptimeSecondsTotal.Add(now.Sub(doc.Instance.CreatedAt).Seconds())
 		}
 		doc = committed
+		if state == Searching && next == Creating && doc.Instance != nil && (c.deps.Config.Cache.MaxCaches > 0 || doc.Instance.Cache == "hit") {
+			result := "miss"
+			if doc.Instance.Cache == "hit" {
+				result = "hit"
+			}
+			cacheLookupsTotal.WithLabelValues(result).Inc()
+		}
 		if change.stage != "" {
 			coldstartStageSeconds.WithLabelValues(change.stage).Observe(float64(change.secs))
 		}

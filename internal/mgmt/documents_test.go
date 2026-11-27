@@ -194,6 +194,22 @@ func TestStatusDocumentBudgetFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestCostDocumentStorage(t *testing.T) {
+	doc := buildCostDocument(controller.Snapshot{StorageMTDUSD: 1.25}, config.Mgmt{}, time.Unix(0, 0))
+	if doc.EstimatedStorageUSD != 1.25 {
+		t.Fatalf("EstimatedStorageUSD = %v", doc.EstimatedStorageUSD)
+	}
+}
+
+func TestStatusDocumentCacheVolumes(t *testing.T) {
+	exp := time.Date(2026, 11, 29, 10, 0, 0, 0, time.UTC)
+	snap := controller.Snapshot{Public: "STOPPED", CacheVolumes: []store.CacheVolume{{Label: "vkllm_x_v1", VolumeID: 9, MachineID: 40508, State: store.CacheReady, ExpiresAt: &exp}}}
+	doc := buildStatusDocument(snap, config.Mgmt{}, time.Unix(0, 0))
+	if len(doc.CacheVolumes) != 1 || doc.CacheVolumes[0].MachineID != 40508 || doc.CacheVolumes[0].State != "ready" || !doc.CacheVolumes[0].ExpiresAt.Equal(exp) {
+		t.Fatalf("CacheVolumes = %+v", doc.CacheVolumes)
+	}
+}
+
 func TestBuildRentalsDocumentNewestFirst(t *testing.T) {
 	mark := time.Unix(100, 0)
 	snap := controller.Snapshot{Rentals: []store.Rental{{Gen: 1, MarkAt: &mark}, {Gen: 2}}}

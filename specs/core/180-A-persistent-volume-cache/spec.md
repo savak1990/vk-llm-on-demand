@@ -1,6 +1,6 @@
 ---
 id: "CORE-180"
-status: "READY"
+status: "IN_PROGRESS"
 updated: "2026-11-26"
 depends_on: ["CORE-020", "CORE-050", "CORE-100", "CORE-210", "CORE-220", "CORE-310", "CORE-320"]
 adrs: ["0014", "0003", "0004", "0005", "0015", "0018"]
@@ -193,6 +193,8 @@ The reconcile loop (every minute) does these steps, in this order:
 |---|---|
 | `maxCaches` is lower than the number of volumes | the volumes with the oldest `expiresAt`, not in use, go to `deleting` |
 | the GPU of a `seeding` volume is destroyed before `verified` (a failed or cancelled start) | `deleting` at once (reason `seed_failed`); it never takes a slot for 72 h |
+| the GPU of a hit is destroyed before READY (a failed or cancelled start) | `deleting` at once (reason `hit_failed`): the worker may have removed a file that failed sha256 |
+| the provider refuses a create because of its `volume_info` (not a duplicate label) | the create is sent once more without a volume; on success the volume goes to `deleting` (reason `attach_failed`) and the rental records `cache: "none"` (R9) |
 | a volume is not in use and `now ≥ expiresAt` | `deleting` (reason `expired`) |
 | month-to-date spend ≥ budget | every volume not in use goes to `deleting` (reason `budget`) |
 | `modelURL` or `sha256` in the config differs from the volume | `deleting` (reason `model_changed`) |
@@ -200,7 +202,9 @@ The reconcile loop (every minute) does these steps, in this order:
 | a provider volume under our label prefix is not in the document | delete after two observations (reason `orphan`), the same rule as instances (constitution C-6) |
 | a document volume is absent at the provider for two observations | remove the entry |
 
-A failed `ListVolumes` never deletes anything. Empty-store recovery deletes
+A delete that returns success counts as confirmed; a volume that is still
+listed later is deleted by the orphan rule. A failed `ListVolumes` never
+deletes anything. Empty-store recovery deletes
 every volume under our label prefix (constitution C-13). Vast refuses a
 delete while an instance uses the volume (`409`, CORE-320 V4), so a delete
 runs only after our GPU on it is destroyed. A delete while another customer
@@ -223,14 +227,31 @@ entry, so the existing budget stop covers storage.
 
 Ledger entries are keyed by `gen` today (`internal/budget/ledger.go`), and a
 volume is created in the same generation as its GPU. `LedgerEntry` therefore
-gains `volumeId` (`omitempty`): a GPU entry has none, a storage entry has
-its volume id, and `CloseEntry` for storage matches on `volumeId`. `Rollover`
-already keeps an open entry with a new `Start` at the first of the month, so
-the new month counts storage from that moment; it must also copy
-`volumeId`. `GET /api/v1/gpu/cost`
-adds `estimatedStorageUSD`. The budget default goes to $35 in this PR: the
-chart value, `gitops/values.yaml`, constitution C-7 and `CLAUDE.md`, because
-$35 is safe only when storage counts in it.
+gains `volume` (the volume label, because the provider id is unknown when
+the entry opens at record time) (`omitempty`): a GPU entry has none, a
+storage entry has its label, and storage entries close by label. The
+ledger also keeps `storageTotalUsd`, the closed storage spend of the
+month, so `estimatedStorageUSD` (this total plus the open storage entries)
+stays correct after the ledger trims old entries; `Rollover` resets it.
+`Rollover` already keeps an open entry with a new `Start` at the first of
+the month, so the new month counts storage from that moment; it must also
+copy `volume`. `GET /api/v1/gpu/cost` adds `estimatedStorageUSD`. The
+budget default goes to $35 in this PR: the
+chart value, the Go default, constitution C-7, `CLAUDE.md` and the docs
+that state it (`gitops/values.yaml` has no budget key), because $35 is safe
+only when storage counts in it.
+
+### Rollback
+
+A controller older than this change does not know volumes: it never deletes
+them, and on its first write it drops the volume label from storage ledger
+entries, after which it mistakes them for GPU entries. Before a rollback:
+
+1. Run `vk-llm stop` and wait until `vk-llm status` shows `STOPPED`.
+2. Set `config.cache.maxCaches: 0` and deploy it.
+3. Wait until `vk-llm status` shows no `Cache:` row and `GET /api/v1/gpu/cost`
+   shows no open storage spend growing (one or two reconcile ticks).
+4. Then roll back.
 
 ### Progress, records and metrics
 
@@ -242,6 +263,8 @@ $35 is safe only when storage counts in it.
   `vkllm_cache_volumes_deleted_total{reason}`,
   `vkllm_cache_checksum_mismatch_total`,
   `vkllm_cache_delete_failures_total`.
+- The alert `VkllmCacheDeleteStuck` fires when a volume has been `deleting`
+  for over 30 minutes.
 - `vk-llm status` shows each volume: machine, state, expiry.
 
 ## Requirements
@@ -326,4 +349,9 @@ $35 is safe only when storage counts in it.
 
 ## Evidence
 
-None yet.
+2026-11-27, branch `core-180-volume-cache` at `11ec358`: AC1–AC6:
+`TestCacheMissSeedsThenReady`, `TestCacheHitLinksVolume`, `TestPickOffer*`,
+`TestCacheExpiryDeletes`, `TestCacheBudgetReleasesWithNoGPU`,
+`TestCacheOrphanDeletedOnSecondObservation`,
+`TestCacheFailedListDeletesNothing`; AC7 pending a lab run (operator
+go-ahead).

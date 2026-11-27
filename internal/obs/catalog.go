@@ -55,6 +55,11 @@ func Catalog() []Spec {
 		{"vkllm_cost_estimated_usd_total", "counter"},
 		{"vkllm_cost_instance_usd", "gauge"},
 		{"vkllm_provider_balance_usd", "gauge"},
+		{"vkllm_cache_lookups_total", "counter"},
+		{"vkllm_cache_volumes", "gauge"},
+		{"vkllm_cache_volumes_deleted_total", "counter"},
+		{"vkllm_cache_checksum_mismatch_total", "counter"},
+		{"vkllm_cache_delete_failures_total", "counter"},
 	}
 	sort.Slice(c, func(i, j int) bool { return c[i].Name < c[j].Name })
 	return c

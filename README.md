@@ -150,6 +150,14 @@ it. If `config.budget.monthlyUSD` is above `config.budget.maxMonthlyUSD`
 (default $100), the controller refuses to start. Raise `maxMonthlyUSD` in
 the same `helm upgrade`.
 
+The controller keeps the model on one Vast.ai volume for 72 h after the
+last use (chart `config.cache.*`), so the next start can skip the
+download; the storage counts in the monthly budget above. Set
+`config.cache.maxCaches: 0` and deploy it to turn the cache off and delete
+the volumes. Before rolling back to a controller older than the cache
+(it never deletes volumes it does not know), set `maxCaches: 0`, wait for
+`vk-llm status` to drop its `Cache:` row, then roll back.
+
 ## Call the API directly
 
 Every route below is served on one host, `https://llm.<your-domain>`. The

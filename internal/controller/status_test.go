@@ -115,6 +115,24 @@ func TestStatusModelBytesZeroWithNoEstimate(t *testing.T) {
 	}
 }
 
+// TestStatusStorageMTDAddsClosedTotalAndOpenEstimate exercises the fold-safe
+// path: the closed storage cost lives in Ledger.StorageTotalUSD, not in
+// Entries, so Status must add it to the one still-open entry's estimate.
+func TestStatusStorageMTDAddsClosedTotalAndOpenEstimate(t *testing.T) {
+	c, _, _, _, _ := newTestController(t)
+	putDoc(t, c, func(d *store.Document) {
+		d.Ledger.StorageTotalUSD = 5.0
+		end := time.Now()
+		d.Ledger.Entries = []store.LedgerEntry{
+			{Volume: "vkllm_x_v1", EstUSD: 1.5}, // open: End == nil
+			{Volume: "vkllm_x_v2", EstUSD: 9.0, End: &end},
+		}
+	})
+	if s := c.Status(); s.StorageMTDUSD != 6.5 {
+		t.Fatalf("StorageMTDUSD = %v, want 6.5 (5.0 closed total + 1.5 open estimate)", s.StorageMTDUSD)
+	}
+}
+
 func TestLoadingPollReadsDownloadProgress(t *testing.T) {
 	c, _, _, _, w := newTestController(t)
 	w.progress = DownloadProgress{Bytes: 500, Stages: []string{"download_begin"}}
@@ -187,5 +205,14 @@ func TestOfferChosenStoresGeolocation(t *testing.T) {
 	doc, _, _ := c.deps.Store.Load(context.Background())
 	if doc.Instance == nil || doc.Instance.Offer.Geo != "Sweden" {
 		t.Fatalf("stored offer = %+v", doc.Instance)
+	}
+}
+
+func TestOpenEntrySkipsStorage(t *testing.T) {
+	d, _ := store.NewDocument("iid")
+	d.Generation = 6
+	d.Ledger.Entries = []store.LedgerEntry{{Gen: 6, Volume: "vkllm_iid_v6", EstUSD: 9.99}, {Gen: 6, EstUSD: 0.18}}
+	if e, ok := openEntry(d); !ok || e.EstUSD != 0.18 {
+		t.Fatalf("openEntry = %+v, %v; want the GPU entry", e, ok)
 	}
 }

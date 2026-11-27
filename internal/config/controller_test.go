@@ -21,6 +21,7 @@ func clearControllerEnv(t *testing.T) {
 		"VKLLM_LIFECYCLE_SAFETY_MAX_DOWNLOAD_PRICE_USD_PER_GB", "VKLLM_LIFECYCLE_SAFETY_MAX_STORAGE_PRICE_USD_PER_GB_MONTH", "VKLLM_LIFECYCLE_SAFETY_MAX_DISK_GB",
 		"VKLLM_CONTROLLER_RECONCILE_INTERVAL",
 		"VKLLM_TUNNEL_DIALER", "VKLLM_TUNNEL_DIRECT_ADDR",
+		"VKLLM_CACHE_MAX_CACHES", "VKLLM_CACHE_RETENTION", "VKLLM_CACHE_PREFER_THRESHOLD", "VKLLM_CACHE_MAX_STORAGE_PRICE_USD_PER_GB_MONTH",
 	} {
 		t.Setenv(k, "")
 	}
@@ -159,6 +160,32 @@ func TestLoadControllerRejectsBadCostCaps(t *testing.T) {
 				t.Fatalf("LoadController accepted %s=%s", c.key, c.val)
 			}
 		})
+	}
+}
+
+func TestLoadControllerCacheDefaults(t *testing.T) {
+	clearControllerEnv(t)
+	c, err := LoadController()
+	if err != nil {
+		t.Fatalf("LoadController: %v", err)
+	}
+	want := CacheConfig{MaxCaches: 1, Retention: 72 * time.Hour, PreferThreshold: 0.15, MaxStoragePriceUSDPerGBMonth: 0.40}
+	if c.Cache != want {
+		t.Fatalf("Cache = %+v, want %+v", c.Cache, want)
+	}
+}
+
+func TestLoadControllerCacheValidation(t *testing.T) {
+	for _, bad := range []struct{ key, val string }{
+		{"VKLLM_CACHE_MAX_CACHES", "-1"}, {"VKLLM_CACHE_MAX_CACHES", "4"},
+		{"VKLLM_CACHE_RETENTION", "0s"}, {"VKLLM_CACHE_PREFER_THRESHOLD", "1"},
+		{"VKLLM_CACHE_PREFER_THRESHOLD", "-0.1"}, {"VKLLM_CACHE_MAX_STORAGE_PRICE_USD_PER_GB_MONTH", "0"},
+	} {
+		clearControllerEnv(t)
+		t.Setenv(bad.key, bad.val)
+		if _, err := LoadController(); err == nil {
+			t.Fatalf("%s=%s: want an error", bad.key, bad.val)
+		}
 	}
 }
 

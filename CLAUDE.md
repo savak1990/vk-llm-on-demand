@@ -45,7 +45,7 @@ Short version, for orientation only:
 
 The GPU is the only expensive thing. Every provider mutation is idempotent, every create is bounded by a deadline and an attempt budget, every destroy is retried until the provider confirms absence, and anything carrying our label that the state store does not know is destroyed. Never weaken one of these to make a test or a feature easier.
 
-Defaults the user set: monthly budget $30, maximum hourly price $0.80, one instance, 30-minute rolling inactivity timeout, 60-second drain on manual stop.
+Defaults the user set: monthly budget $35, maximum hourly price $0.80, one instance, 30-minute rolling inactivity timeout, 60-second drain on manual stop.
 
 ---
 

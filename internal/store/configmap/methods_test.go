@@ -71,7 +71,7 @@ func TestLoadKeylessShellIsFresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !doc.IsFresh() || doc.Desired != store.DesiredStopped || doc.InstallationID != "4f2c1a9b0e77" || doc.Instance != nil || string(doc.Cache) != "null" {
+	if !doc.IsFresh() || doc.Desired != store.DesiredStopped || doc.InstallationID != "4f2c1a9b0e77" || doc.Instance != nil || doc.Cache != nil {
 		t.Fatalf("got %+v", doc)
 	}
 	if v != "7" {

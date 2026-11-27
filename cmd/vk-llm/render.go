@@ -60,6 +60,14 @@ func renderStatus(w io.Writer, doc statusDoc) {
 		doc.Cost.EstimatedInstanceUSD, doc.Cost.EstimatedMonthUSD, doc.Cost.BudgetMonthUSD)
 	_, _ = fmt.Fprintf(tw, "Est. cost\t%s\n", costStr)
 
+	for _, v := range doc.CacheVolumes {
+		line := fmt.Sprintf("machine %d %s", v.MachineID, v.State)
+		if v.ExpiresAt != nil {
+			line += ", expires " + v.ExpiresAt.UTC().Format("01-02 15:04") + " UTC"
+		}
+		_, _ = fmt.Fprintf(tw, "Cache:\t%s\n", line)
+	}
+
 	if doc.LastInferenceFinishedAt == nil {
 		_, _ = fmt.Fprintf(tw, "Last inference\tnever\n")
 	} else {

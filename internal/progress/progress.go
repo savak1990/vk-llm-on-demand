@@ -19,6 +19,7 @@ type State struct {
 	ModelBytes      int64
 	WorkerStages    []string
 	Ready           bool
+	CacheHit        bool
 }
 
 // Tracker emits each milestone once, in order, from successive states.
@@ -56,9 +57,13 @@ func (t *Tracker) Lines(s State) []string {
 	if s.ModelBytes > 0 {
 		size = fmt.Sprintf(" (%.1f GB)", gbOf(s.ModelBytes))
 	}
-	out = t.once("loading", s.Public == "LOADING_MODEL", "Worker up; downloading the model"+size+"…", out)
+	loading := "Worker up; downloading the model" + size + "…"
+	if s.CacheHit {
+		loading = "Worker up. The model is cached on this host; checking it (sha256)…"
+	}
+	out = t.once("loading", s.Public == "LOADING_MODEL", loading, out)
 	downloaded := slices.Contains(s.WorkerStages, "download_end")
-	if s.Public == "LOADING_MODEL" && !downloaded && s.DownloadedBytes > 0 {
+	if !s.CacheHit && s.Public == "LOADING_MODEL" && !downloaded && s.DownloadedBytes > 0 {
 		if s.ModelBytes > 0 {
 			pct := int(min(s.DownloadedBytes*100/s.ModelBytes, 99)) / 10 * 10
 			if pct > t.lastPct {

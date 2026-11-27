@@ -53,7 +53,8 @@ func dispatchSearch(ctx context.Context, c *Controller, e effSearch) {
 		c.postEvent(Event{Kind: EvNoOffer, Reason: "no_offer"})
 		return
 	}
-	c.postEvent(Event{Kind: EvOfferChosen, Offer: ranked[0].Offer, Breakdown: ranked[0].Breakdown, Filter: f, SearchStarted: started})
+	choice, plan := c.cacheChoice(ctx, ranked, bytes, disk)
+	c.postEvent(Event{Kind: EvOfferChosen, Offer: choice.Offer, Breakdown: choice.Breakdown, Filter: f, SearchStarted: started, CachePlan: plan})
 }
 
 func horizon(cfg config.Controller) time.Duration {
@@ -90,17 +91,28 @@ func dispatchCreate(ctx context.Context, c *Controller, e effCreate) {
 	}
 	key := c.deps.Worker.WorkerKey(seed, c.deps.InstallationID, e.gen)
 	req := c.deps.Worker.BuildCreate(e.offer, e.breakdown.DiskGB, e.label, key)
+	req.Volume = c.volumeAttachFor(ctx, e.gen)
 	id, err := c.deps.Provider.CreateInstance(ctx, req)
+	dropped := false
+	if err != nil && req.Volume != nil && refusedRequest(err) && !errors.Is(err, provider.ErrDuplicateLabel) {
+		// A refused volume must not fail the start, and a retry with it
+		// would pick the same volume again.
+		req.Volume, dropped = nil, true
+		id, err = c.deps.Provider.CreateInstance(ctx, req)
+	}
 	if err != nil {
-		class := provider.Retryable
-		var perr *provider.Error
-		if errors.As(err, &perr) {
-			class = perr.Class
-		}
-		c.postEvent(Event{Kind: EvCreateFailed, Gen: e.gen, Err: err, Class: class, Duplicate: errors.Is(err, provider.ErrDuplicateLabel)})
+		c.postEvent(Event{Kind: EvCreateFailed, Gen: e.gen, Err: err, Class: createClass(err), Duplicate: errors.Is(err, provider.ErrDuplicateLabel)})
 		return
 	}
-	c.postEvent(Event{Kind: EvCreated, Gen: e.gen, ProviderID: id})
+	c.postEvent(Event{Kind: EvCreated, Gen: e.gen, ProviderID: id, VolumeDropped: dropped})
+}
+
+func createClass(err error) provider.Class {
+	var perr *provider.Error
+	if errors.As(err, &perr) {
+		return perr.Class
+	}
+	return provider.Retryable
 }
 
 // A failed read posts nothing, so the next poll tick retries instead of this goroutine retrying blindly.
@@ -220,4 +232,11 @@ func nextCreateAllowedAt(ops []store.Op) time.Time {
 		backoff = 30 * time.Minute
 	}
 	return lastFinish.Add(backoff)
+}
+
+// refusedRequest is a definitive 4xx: the provider created nothing, so a
+// second create without the volume cannot make a second instance.
+func refusedRequest(err error) bool {
+	var perr *provider.Error
+	return errors.As(err, &perr) && perr.Status >= 400 && perr.Status < 500 && perr.Status != 429
 }

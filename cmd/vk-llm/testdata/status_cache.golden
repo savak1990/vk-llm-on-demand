@@ -1,0 +1,11 @@
+Provider          vast.ai
+State             STOPPED
+GPU               —
+Model             qwen-35b (32768 tokens per session)
+Ready             no
+Price             —
+Uptime            0s
+Est. cost         $0.00 this instance, $0.00 / $30.00 this month (estimate)
+Cache:            machine 40508 ready, expires 11-29 10:00 UTC
+Last inference    never
+Idle shutdown in  —
