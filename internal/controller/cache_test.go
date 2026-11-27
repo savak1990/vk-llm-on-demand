@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/savak1990/vk-llm-on-demand/internal/budget"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
 )
 
@@ -51,5 +52,29 @@ func TestWithCacheSeedFailed(t *testing.T) {
 	v := d.Cache.Volumes[0]
 	if v.State != store.CacheDeleting || v.DeleteReason != "seed_failed" || v.InUseGen != 0 || v.DeleteRequestedAt == nil {
 		t.Fatalf("seed failed = %+v", v)
+	}
+}
+
+func TestApplyCachePlanSeedReplacesUnexpiringVolume(t *testing.T) {
+	d, _ := store.NewDocument("abc")
+	d.Generation = 5
+	d.Instance = &store.Instance{Offer: store.Offer{MachineID: 42}}
+	d.Cache = &store.CacheState{Volumes: []store.CacheVolume{{Label: "vkllm_abc_v3", VolumeID: 7, MachineID: 41, State: store.CacheReady}}}
+	b := budget.New(budget.Config{MonthlyUSD: 30, MaxHourlyPriceUSD: 0.80})
+	applyCachePlan(&d, cachePlan{mode: "seed", volumeOfferID: 900, storageUSD: 0.30, sizeGB: 34}, cacheT0, 1, b)
+	if old := d.Cache.Volumes[0]; old.State != store.CacheDeleting || old.DeleteReason != "replaced" {
+		t.Fatalf("old volume = %+v", old)
+	}
+	if len(d.Cache.Volumes) != 2 || d.Cache.Volumes[1].State != store.CacheSeeding || d.Cache.Volumes[1].InUseGen != 5 || d.Instance.Cache != "seeded" {
+		t.Fatalf("volumes = %+v instance cache %q", d.Cache.Volumes, d.Instance.Cache)
+	}
+	open := 0
+	for _, e := range d.Ledger.Entries {
+		if e.Volume == volumeLabel("abc", 5) && e.End == nil {
+			open++
+		}
+	}
+	if open != 1 {
+		t.Fatalf("open storage entries = %d, want 1", open)
 	}
 }
