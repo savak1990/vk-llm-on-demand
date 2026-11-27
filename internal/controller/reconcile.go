@@ -44,6 +44,7 @@ func (c *Controller) reconcileOnce(ctx context.Context) {
 	c.balanceMu.Unlock()
 
 	c.reconcilePruneAndBudget(ctx, balance, known)
+	c.reconcileVolumes(ctx)
 	if listErr == nil {
 		c.reconcileCompareInstances(ctx, doc, instances)
 	}
@@ -57,6 +58,7 @@ func (c *Controller) reconcilePruneAndBudget(ctx context.Context, balance provid
 		d.MachineDenylist = slices.DeleteFunc(d.MachineDenylist, func(e store.DenyEntry) bool { return !e.Until.After(now) })
 		c.deps.Budget.Rollover(d, now)
 		c.deps.Budget.RefreshOpenEntry(d, now)
+		markForRelease(d, now, c.deps.Config.Cache.MaxCaches, c.deps.ModelURL, c.deps.ModelSHA256, c.deps.Budget.Exhausted(*d, 0))
 		return nil
 	}))
 	if err != nil && c.deps.Log != nil {

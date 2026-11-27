@@ -184,12 +184,14 @@ type Controller struct {
 	workerStagesMu sync.Mutex
 	workerStages   *workerStages
 
-	reconciling    atomic.Bool
-	reconcileMu    sync.Mutex
-	orphanObserved map[provider.InstanceID]int // keyed by id, not label: a duplicate shares the active instance's label
-	activeLabel    string
-	activeObserved int // consecutive lists missing activeLabel
-	terminalSeen   int // consecutive lists showing activeLabel in a terminal status
+	reconciling          atomic.Bool
+	reconcileMu          sync.Mutex
+	orphanObserved       map[provider.InstanceID]int // keyed by id, not label: a duplicate shares the active instance's label
+	volumeOrphanObserved map[provider.VolumeID]int
+	volumeAbsentObserved map[string]int
+	activeLabel          string
+	activeObserved       int // consecutive lists missing activeLabel
+	terminalSeen         int // consecutive lists showing activeLabel in a terminal status
 
 	pollTerminalMu   sync.Mutex
 	pollTerminalGen  int64
@@ -212,14 +214,16 @@ func New(d Deps) (*Controller, error) {
 		since = d.Clock.Now()
 	}
 	return &Controller{
-		deps:           d,
-		state:          Idle,
-		since:          since,
-		timers:         make(map[timerKind]time.Time),
-		events:         make(chan Event, 64),
-		wake:           make(chan struct{}, 1),
-		stages:         make(map[string]time.Duration),
-		orphanObserved: make(map[provider.InstanceID]int),
+		deps:                 d,
+		state:                Idle,
+		since:                since,
+		timers:               make(map[timerKind]time.Time),
+		events:               make(chan Event, 64),
+		wake:                 make(chan struct{}, 1),
+		stages:               make(map[string]time.Duration),
+		orphanObserved:       make(map[provider.InstanceID]int),
+		volumeOrphanObserved: make(map[provider.VolumeID]int),
+		volumeAbsentObserved: make(map[string]int),
 	}, nil
 }
 

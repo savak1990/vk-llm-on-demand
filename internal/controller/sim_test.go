@@ -2251,3 +2251,256 @@ func TestCacheHitLinksVolume(t *testing.T) {
 		t.Fatalf("after hit volume = %+v instance cache %q", v, doc.Instance.Cache)
 	}
 }
+
+// reconcileTicks runs exactly n reconcile passes; recovery armed the first
+// one at the harness's start time.
+func (h *harness) reconcileTicks(n int) {
+	h.t.Helper()
+	for range n {
+		at, _ := timerAt(h.ctl, timerReconcile)
+		h.Settle(at)
+	}
+}
+
+// putVolumes records vols in the document, each with an open storage entry.
+func (h *harness) putVolumes(gen int64, vols ...store.CacheVolume) {
+	h.t.Helper()
+	now := h.clk.Now()
+	h.putDoc(func(d *store.Document) {
+		d.Generation = max(d.Generation, gen)
+		d.Ledger.Month = now.UTC().Format("2006-01")
+		d.Cache = &store.CacheState{Volumes: vols}
+		for _, v := range vols {
+			h.budget.OpenStorageEntry(d, now, v.CreatedGen, v.Label, 0.01)
+		}
+	})
+}
+
+func (h *harness) readyVol(label string, id provider.VolumeID, exp time.Time) store.CacheVolume {
+	return store.CacheVolume{Label: label, VolumeID: int64(id), MachineID: 42, ModelURL: h.modelURL, SHA256: "sha",
+		SizeGB: 34, StorageUSDPerGBMonth: 0.30, State: store.CacheReady, CreatedGen: 1, ExpiresAt: &exp}
+}
+
+func (h *harness) cacheVolumes() []store.CacheVolume {
+	h.t.Helper()
+	doc, _, err := h.store.Load(context.Background())
+	if err != nil {
+		h.t.Fatalf("Load: %v", err)
+	}
+	if doc.Cache == nil {
+		return nil
+	}
+	return doc.Cache.Volumes
+}
+
+func (h *harness) storageClosed(label string) bool {
+	h.t.Helper()
+	doc, _, _ := h.store.Load(context.Background())
+	for _, e := range doc.Ledger.Entries {
+		if e.Volume == label {
+			return e.End != nil
+		}
+	}
+	h.t.Fatalf("no storage entry for %s", label)
+	return false
+}
+
+func TestCacheExpiryDeletes(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 1)
+	vid := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 42})
+	t0 := h.clk.Now()
+	h.putVolumes(1, h.readyVol(label, vid, t0.Add(72*time.Hour)))
+	before := testutil.ToFloat64(cacheDeletedTotal.WithLabelValues("expired"))
+
+	h.Settle(t0.Add(71 * time.Hour))
+	if len(h.prov.Volumes()) != 1 || len(h.cacheVolumes()) != 1 {
+		t.Fatalf("at 71h fake %v doc %v, want the volume kept", h.prov.Volumes(), h.cacheVolumes())
+	}
+	h.Settle(t0.Add(72*time.Hour + time.Minute))
+	if len(h.prov.Volumes()) != 0 || len(h.cacheVolumes()) != 0 {
+		t.Fatalf("after 72h fake %v doc %v, want both empty", h.prov.Volumes(), h.cacheVolumes())
+	}
+	if !h.storageClosed(label) {
+		t.Fatal("storage entry still open")
+	}
+	if got := counterDelta(cacheDeletedTotal.WithLabelValues("expired"), before); got != 1 {
+		t.Fatalf("deleted_total{expired} delta = %v, want 1", got)
+	}
+}
+
+func TestCacheBudgetReleasesWithNoGPU(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 1)
+	vid := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 42})
+	h.putVolumes(1, h.readyVol(label, vid, h.clk.Now().Add(48*time.Hour)))
+	h.putDoc(func(d *store.Document) { d.Ledger.TotalUSD = 30 })
+	before := testutil.ToFloat64(cacheDeletedTotal.WithLabelValues("budget"))
+
+	h.reconcileTicks(1)
+	if len(h.prov.Volumes()) != 0 {
+		t.Fatalf("fake volumes %v, want none", h.prov.Volumes())
+	}
+	if got := counterDelta(cacheDeletedTotal.WithLabelValues("budget"), before); got != 1 {
+		t.Fatalf("deleted_total{budget} delta = %v, want 1", got)
+	}
+}
+
+func TestCacheOrphanDeletedOnSecondObservation(t *testing.T) {
+	h := newCacheHarness(t)
+	h.prov.AddVolume(provider.Volume{Label: volumeLabel(h.iid, 7), MachineID: 42})
+	before := testutil.ToFloat64(cacheDeletedTotal.WithLabelValues("orphan"))
+
+	h.reconcileTicks(1)
+	if h.prov.Calls("list_volumes") != 1 || len(h.prov.Volumes()) != 1 {
+		t.Fatalf("tick 1: lists %d volumes %v, want 1 list and the orphan kept", h.prov.Calls("list_volumes"), h.prov.Volumes())
+	}
+	h.reconcileTicks(1)
+	if h.prov.Calls("list_volumes") != 2 || len(h.prov.Volumes()) != 0 {
+		t.Fatalf("tick 2: lists %d volumes %v, want 2 lists and the orphan deleted", h.prov.Calls("list_volumes"), h.prov.Volumes())
+	}
+	if got := counterDelta(cacheDeletedTotal.WithLabelValues("orphan"), before); got != 1 {
+		t.Fatalf("deleted_total{orphan} delta = %v, want 1", got)
+	}
+}
+
+func TestCacheOrphanRuleSparesOtherInstallationsAndDuplicates(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 1)
+	foreign := h.prov.AddVolume(provider.Volume{Label: volumeLabel("iid-v2", 5)})
+	twin := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 43})
+	kept := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 42})
+	h.putVolumes(1, h.readyVol(label, kept, h.clk.Now().Add(48*time.Hour)))
+
+	h.reconcileTicks(3)
+	var ids []provider.VolumeID
+	for _, v := range h.prov.Volumes() {
+		ids = append(ids, v.ID)
+	}
+	if len(ids) != 2 || ids[0] != foreign || ids[1] != kept || h.cacheVolumes()[0].VolumeID != int64(kept) {
+		t.Fatalf("fake volumes %v, want foreign %d and recorded %d kept, twin %d deleted", ids, foreign, kept, twin)
+	}
+}
+
+func TestCacheFailedListDeletesNothing(t *testing.T) {
+	h := newCacheHarness(t)
+	h.prov.AddVolume(provider.Volume{Label: volumeLabel(h.iid, 7)})
+	label := volumeLabel(h.iid, 1)
+	vid := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 42})
+	h.putVolumes(1, h.readyVol(label, vid, h.clk.Now().Add(-time.Minute)))
+	h.prov.FailNext("list_volumes", 3, errors.New("fake list failure"))
+
+	h.reconcileTicks(3)
+	if len(h.prov.Volumes()) != 2 || h.prov.Calls("delete_volume") != 0 {
+		t.Fatalf("fake volumes %v deletes %d, want both kept and no delete", h.prov.Volumes(), h.prov.Calls("delete_volume"))
+	}
+}
+
+func TestCacheFailedDeleteRetries(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 1)
+	vid := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 42})
+	h.putVolumes(1, h.readyVol(label, vid, h.clk.Now().Add(-time.Minute)))
+	h.prov.FailNext("delete_volume", 1, errors.New("fake delete failure"))
+	before := testutil.ToFloat64(cacheDeleteFailuresTotal)
+
+	h.reconcileTicks(1)
+	if len(h.prov.Volumes()) != 1 {
+		t.Fatalf("tick 1: fake volumes %v, want the volume kept", h.prov.Volumes())
+	}
+	if got := counterDelta(cacheDeleteFailuresTotal, before); got != 1 {
+		t.Fatalf("delete_failures_total delta = %v, want 1", got)
+	}
+	if v := h.cacheVolumes(); len(v) != 1 || v[0].State != store.CacheDeleting {
+		t.Fatalf("tick 1: doc volumes %+v, want one deleting", v)
+	}
+	h.reconcileTicks(1)
+	if len(h.prov.Volumes()) != 0 || len(h.cacheVolumes()) != 0 {
+		t.Fatalf("tick 2: fake %v doc %v, want both empty", h.prov.Volumes(), h.cacheVolumes())
+	}
+}
+
+func TestCacheSeedingNotRemovedWhileCreateInFlight(t *testing.T) {
+	h := newCacheHarness(t)
+	h.putVolumes(3, store.CacheVolume{Label: volumeLabel(h.iid, 3), VolumeOfferID: 900, MachineID: 42, ModelURL: h.modelURL, SHA256: "sha",
+		SizeGB: 34, State: store.CacheSeeding, CreatedGen: 3, InUseGen: 3})
+
+	h.reconcileTicks(3)
+	if v := h.cacheVolumes(); len(v) != 1 || v[0].State != store.CacheSeeding {
+		t.Fatalf("doc volumes %+v, want the seeding entry kept", v)
+	}
+}
+
+func TestCacheUnusedSeedRecordRemovedAfterTwoAbsences(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 3)
+	h.putVolumes(3, store.CacheVolume{Label: label, VolumeOfferID: 900, MachineID: 42, ModelURL: h.modelURL, SHA256: "sha",
+		SizeGB: 34, State: store.CacheDeleting, DeleteReason: "seed_failed", CreatedGen: 3})
+
+	h.reconcileTicks(1)
+	if len(h.cacheVolumes()) != 1 {
+		t.Fatal("tick 1: entry removed after one absence")
+	}
+	h.reconcileTicks(1)
+	if len(h.cacheVolumes()) != 0 || !h.storageClosed(label) {
+		t.Fatalf("tick 2: doc volumes %+v, want removed with its storage entry closed", h.cacheVolumes())
+	}
+}
+
+func TestCacheReadyRecordWithNoVolumeRemoved(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 1)
+	h.putVolumes(1, h.readyVol(label, 0, h.clk.Now().Add(48*time.Hour)))
+
+	h.reconcileTicks(1)
+	if len(h.cacheVolumes()) != 1 {
+		t.Fatal("tick 1: entry removed after one absence")
+	}
+	h.reconcileTicks(1)
+	if len(h.cacheVolumes()) != 0 || !h.storageClosed(label) {
+		t.Fatalf("tick 2: doc volumes %+v, want removed with its storage entry closed", h.cacheVolumes())
+	}
+}
+
+func TestCacheResolvesVolumeIDByLabel(t *testing.T) {
+	h := newCacheHarness(t)
+	label := volumeLabel(h.iid, 1)
+	h.prov.AddVolume(provider.Volume{Label: label, MachineID: 43})
+	vid := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 42, Instances: []provider.InstanceID{99}})
+	h.putVolumes(1, h.readyVol(label, 0, h.clk.Now().Add(48*time.Hour)))
+
+	h.reconcileTicks(1)
+	if v := h.cacheVolumes(); len(v) != 1 || v[0].VolumeID != int64(vid) || v[0].MachineID != 42 {
+		t.Fatalf("doc volumes %+v, want volume id %d", v, vid)
+	}
+}
+
+func TestCacheVolumeInUseNotDeleted(t *testing.T) {
+	deleting := func(h *harness, inUse int64) {
+		label := volumeLabel(h.iid, 3)
+		vid := h.prov.AddVolume(provider.Volume{Label: label, MachineID: 42, Instances: []provider.InstanceID{99}})
+		v := h.readyVol(label, vid, h.clk.Now().Add(48*time.Hour))
+		v.State, v.DeleteReason, v.InUseGen = store.CacheDeleting, "replaced", inUse
+		h.putVolumes(3, v)
+	}
+	t.Run("in use in the document: no delete call", func(t *testing.T) {
+		h := newCacheHarness(t)
+		deleting(h, 3)
+		h.reconcileTicks(1)
+		if len(h.prov.Volumes()) != 1 || h.prov.Calls("delete_volume") != 0 {
+			t.Fatalf("fake volumes %v deletes %d, want kept and no delete", h.prov.Volumes(), h.prov.Calls("delete_volume"))
+		}
+	})
+	t.Run("still attached at the provider: 409 counts a failure", func(t *testing.T) {
+		h := newCacheHarness(t)
+		deleting(h, 0)
+		before := testutil.ToFloat64(cacheDeleteFailuresTotal)
+		h.reconcileTicks(1)
+		if len(h.prov.Volumes()) != 1 {
+			t.Fatalf("fake volumes %v, want kept", h.prov.Volumes())
+		}
+		if got := counterDelta(cacheDeleteFailuresTotal, before); got != 1 {
+			t.Fatalf("delete_failures_total delta = %v, want 1", got)
+		}
+	})
+}
