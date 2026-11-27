@@ -121,23 +121,29 @@ func TestRefusedOpsDoNotBackOff(t *testing.T) {
 func TestCreateFailureOnlyRefusalMovesOn(t *testing.T) {
 	now := time.Date(2026, 11, 1, 0, 0, 30, 0, time.UTC)
 	for _, c := range []struct {
-		name  string
-		class provider.Class
-		err   error
-		next  State
+		name    string
+		class   provider.Class
+		err     error
+		next    State
+		refused bool
+		stopped bool
 	}{
-		{"400 refused", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 400}, Searching},
-		{"404 refused", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 404}, Searching},
-		{"401", provider.Fatal, &provider.Error{Class: provider.Fatal, Status: 401}, Idle},
-		{"403", provider.Fatal, &provider.Error{Class: provider.Fatal, Status: 403}, Idle},
-		{"2xx without an id", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 200}, Idle},
-		{"503", provider.Retryable, &provider.Error{Class: provider.Retryable, Status: 503}, Creating},
-		{"429", provider.Retryable, &provider.Error{Class: provider.Retryable, Status: 429}, Creating},
+		{"400 refused", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 400}, Searching, true, false},
+		{"404 refused", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 404}, Searching, true, false},
+		{"400 refused after a stop", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 400}, Idle, true, true},
+		{"401", provider.Fatal, &provider.Error{Class: provider.Fatal, Status: 401}, Idle, false, false},
+		{"403", provider.Fatal, &provider.Error{Class: provider.Fatal, Status: 403}, Idle, false, false},
+		{"2xx without an id", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 200}, Idle, false, false},
+		{"503", provider.Retryable, &provider.Error{Class: provider.Retryable, Status: 503}, Creating, false, false},
+		{"429", provider.Retryable, &provider.Error{Class: provider.Retryable, Status: 429}, Creating, false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			doc, _ := store.NewDocument("iid")
 			doc.Generation = 1
 			doc.Desired = store.DesiredRunning
+			if c.stopped {
+				doc.Desired = store.DesiredStopped
+			}
 			doc.Instance = &store.Instance{State: Creating.String(), Label: "vkllm:iid:1", Offer: store.Offer{MachineID: 7}}
 			doc.Ops = []store.Op{{Key: "create-1", StartedAt: now}}
 			doc.AttemptsThisHour = store.Attempts{Hour: "2026-11-01T00", Count: 1}
@@ -151,8 +157,8 @@ func TestCreateFailureOnlyRefusalMovesOn(t *testing.T) {
 					t.Fatalf("mutate: %v", err)
 				}
 			}
-			refused := c.next == Searching
-			if refused {
+			refused := c.refused
+			if c.next == Searching {
 				s, ok := effects[0].(effSearch)
 				if len(effects) != 1 || !ok || len(s.filter.ExcludeMachineIDs) != 1 || s.filter.ExcludeMachineIDs[0] != 7 {
 					t.Fatalf("effects %+v, want one search excluding machine 7", effects)

@@ -186,13 +186,16 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 
 	// The provider refused the create outright, so nothing exists and nothing
 	// is charged to the hourly budget: denylist the machine for an hour and
-	// search again at once, until the gate ends the run of refusals.
-	case state == Creating && ev.Kind == EvCreateFailed && refusedOffer(ev) && f.Doc.Desired == store.DesiredRunning:
+	// search again at once while still wanted, until the gate ends the run.
+	case state == Creating && refusedOffer(ev):
+		running := f.Doc.Desired == store.DesiredRunning
 		last := ev.Reason == "offers_refused"
 		next, outcome := Searching, "refused"
 		var effects []Effect
 		if last {
 			next, outcome = Idle, "create_error"
+		} else if !running {
+			next = Idle
 		} else {
 			filter := searchFilter(f)
 			if f.Doc.Instance != nil {
@@ -201,7 +204,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			effects = []Effect{effSearch{filter: filter}}
 		}
 		return next, func(d *store.Document) error {
-			if d.Instance == nil || d.Generation != ev.Gen || d.Desired != store.DesiredRunning || d.RefusedInRow != f.Doc.RefusedInRow {
+			if d.Instance == nil || d.Generation != ev.Gen || (d.Desired == store.DesiredRunning) != running || d.RefusedInRow != f.Doc.RefusedInRow {
 				return errStale
 			}
 			finishOp(d, createOpKey(d.Generation), outcome, f.Now)
@@ -210,7 +213,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				d.AttemptsThisHour.Count--
 			}
 			d.RefusedInRow++
-			if last {
+			if next == Idle {
 				d.RefusedInRow = 0
 				d.Desired = store.DesiredStopped
 			}

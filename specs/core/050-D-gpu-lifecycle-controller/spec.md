@@ -93,7 +93,7 @@ Events: `Start`, `Stop`, `OfferChosen`, `NoOffer`, `Created`, `CreateFailed`, `L
 | T31 | Idle, Draining, Destroying | Stop | — | same | CAS `desired=STOPPED` if not already; nothing else |
 | T32 | Loading | HealthOK | `Probe` = `Ready` | Ready | CAS state, `readyAt=now`, `idleDeadline=readyAt+timeout`, op `ready` + `finishedAt`; arm the idle timer; outcome `ok` |
 
-`ProviderObserved(StatusOther(raw))` is never a transition: only the startup timeout (T15) or vanish (T23/T27) ends it (wave-1 ruling, CORE-020). Only `Start` writes `desired=RUNNING`; every drain, every loss after Ready, `no_offer`, a budget denial and an exhausted attempt count write `STOPPED`, so no shutdown re-provisions by itself. Failures before Ready keep `RUNNING` and retry under the backoff and the hourly cap. A guard that no longer holds inside the CAS `fn` returns `errStale`; the event is dropped and the loop re-reads. Any (state, event) pair not in the table leaves the state unchanged. Reason mapping for `Unavailable`: `Allow` `monthly_budget_exceeded` → `budget_exhausted`, `balance_floor` and `balance_unknown` → `balance_low` (CORE-100), both counted as outcome `budget_exhausted`; attempts cap → `attempts_exhausted`; a `Start` inside the 60 s search backoff after a `no_offer` → `no_offer`.
+`ProviderObserved(StatusOther(raw))` is never a transition: only the startup timeout (T15) or vanish (T23/T27) ends it (wave-1 ruling, CORE-020). Only `Start` writes `desired=RUNNING`; every drain, every loss after Ready, `no_offer`, a budget denial and an exhausted attempt count write `STOPPED`, so no shutdown re-provisions by itself. Failures before Ready keep `RUNNING` and retry under the backoff and the hourly cap. A guard that no longer holds inside the CAS `fn` returns `errStale`; the event is dropped and the loop re-reads. Any (state, event) pair not in the table leaves the state unchanged. Reason mapping for `Unavailable`: `Allow` `monthly_budget_exceeded` → `budget_exhausted`, `balance_floor` and `balance_unknown` → `balance_low` (CORE-100), both counted as outcome `budget_exhausted`; attempts cap → `attempts_exhausted`; a `Start` inside the 60 s search backoff after a `no_offer` → `no_offer`; a 5th refused offer in a row → `offers_refused`.
 
 ### Admission mutex (ADR 0011 §4)
 
@@ -213,7 +213,7 @@ type Deps struct {
 type Snapshot struct {
     State State; Public string; Desired string; Generation int64; Since time.Time; InFlight int
     InstallationID, LabelPrefix, Provider string
-    Unavailable string // "", no_offer, budget_exhausted, balance_low, attempts_exhausted
+    Unavailable string // "", no_offer, budget_exhausted, balance_low, attempts_exhausted, offers_refused
     GPUName string; MachineID int64; Hourly provider.Money; ProviderID provider.InstanceID
     CreatedAt time.Time; ReadyAt, LastInferenceFinishedAt, IdleDeadline *time.Time
     Ready bool; Uptime, UntilIdleShutdown time.Duration // Ready: Public == READY; UntilIdle 0 when IdleDeadline nil

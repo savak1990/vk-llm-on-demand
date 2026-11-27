@@ -232,7 +232,7 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 func isDenial(reason string) bool { return reason != "" && reason != "backoff" }
 
 // isUnavailableReason is isDenial narrowed to Snapshot.Unavailable's own
-// 4-value enum; "provider_error" and "backoff" are denials but not that.
+// enum; "provider_error" and "backoff" are denials but not that.
 func isUnavailableReason(reason string) bool {
 	switch reason {
 	case "no_offer", "budget_exhausted", "balance_low", "attempts_exhausted", "offers_refused":
