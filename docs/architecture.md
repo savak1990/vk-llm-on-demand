@@ -363,6 +363,7 @@ renders it directly, with no GHCR package (ADR 0020).
 | [0018](adr/0018-offer-selection-by-session-cost.md) | Offers ranked by estimated session cost; caps on download, storage, disk | Accepted |
 | [0019](adr/0019-on-demand-mode-progress-stream.md) | On-demand mode: progress stream, non-streaming refusal, unattended-start cancel | Accepted |
 | [0020](adr/0020-chat-front-end-as-a-second-app.md) | Chat front end (Open WebUI, SearXNG) is a second, unpublished chart and a second Argo app | Accepted |
+| [0021](adr/0021-installations-are-argo-applications-from-one-chart.md) | Every installation is an Argo CD Application of one chart; dev tracks the newest build | Accepted |
 
 ## 13. Unresolved
 

@@ -104,15 +104,17 @@ every later build to a new base, where no old-format build exists.
   dashboard (default on) and `smokeTest` (default off).
 - `values-dev.yaml` holds only the dev overrides in the table above.
 - `make gitops-check` renders production and dev, asserts that dev differs
-  from production only in namespace, host, chart version, alias, alert
-  rules, dashboard and smoke test, and asserts the dev render's kinds.
+  from production only in namespace, host, chart version, image tag, alias,
+  alert rules, dashboard and smoke test, and asserts the dev render's
+  kinds.
 
 ### Open WebUI (`chat/`)
 
 `openaiBaseApiUrls` lists `http://gpu-on-demand.llm.svc/v1` then
 `http://gpu-on-demand.llm-dev.svc/v1`; the matching key list comes from the
-`open-webui-env` Secret (platform). The default and task model stay
-production's alias.
+`open-webui-env` Secret (platform). The default model stays production's
+alias; the task model is unset, so background tasks (titles, search
+queries) use the chat's own current model, dev or production.
 
 ### `gpu-control.yml`
 
@@ -122,7 +124,8 @@ concurrency group is per target.
 ### Platform (SHARED-220)
 
 `vkllm.instances` in the platform's `gitops/values.yaml`, for example
-`[{name: llm, valueFiles: [values.yaml]}, {name: llm-dev, valueFiles:
+`[{namespace: llm, project: vk-llm-on-demand, valueFiles: [values.yaml]},
+{namespace: llm-dev, project: vk-llm-on-demand-dev, valueFiles:
 [values.yaml, values-dev.yaml]}]`. One set of templates renders, per entry:
 the pointer Application (source this repository, path `gitops`, the value
 files, `fqdn`), an AppProject that allows only that namespace, the three
@@ -160,7 +163,9 @@ for two connections.
   it.
 - R11. After a cluster rebuild, dev MUST return with no manual step.
 - R12. A new installation MUST need only one platform list entry and one
-  value file here.
+  value file here. One that should appear in Open WebUI or `gpu-control`
+  also needs one chat URL (in the platform list's order) and, for
+  `gpu-control`, a `target` option.
 - R13. Every dev instance MUST carry dev's own `installationId` in its
   label.
 - R14. After each dev sync, the smoke hook MUST call the three read-only
@@ -185,10 +190,13 @@ for two connections.
 7. Platform: installation list (production objects unchanged), dev entry,
    Open WebUI key list, Argo namespace list.
 8. Rollout, in this order: merge the platform PR (it creates the Open
-   WebUI key list the chat change reads, and the dev pointer); run
-   `make argo-up` (Argo's namespace list); merge this PR; cut a patch
-   release; promote production to that release with only `chartVersion`
-   pinned; record the acceptance checks.
+   WebUI key list the chat change reads, and the dev pointer); merge this
+   PR right after; run `make argo-up` (Argo's namespace list); cut a patch
+   release; a promotion PR pinning only `chartVersion`; record the
+   acceptance checks. Expected symptom until the release: the dev pointer
+   resolves an old-format chart that still needs `image.tag`, so the dev
+   Application shows a `ComparisonError` and Open WebUI logs errors for the
+   dev connection; this ends at the release.
 
 ## Tests / acceptance criteria
 

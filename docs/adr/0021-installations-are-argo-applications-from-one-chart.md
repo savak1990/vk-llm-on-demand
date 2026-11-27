@@ -72,6 +72,9 @@ build order.
 - A new installation is one platform list entry plus one value file here.
   Only one installation may enable the alert rules, which do not filter by
   namespace.
+- Open WebUI's background tasks (titles, search queries) use the chat's own
+  model, not a fixed external task model, so a dev chat never starts
+  production's GPU and vice versa.
 
 ## Alternatives considered
 

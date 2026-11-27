@@ -104,12 +104,16 @@ env_of() {
   yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$1\") | .value" "$tmp/chat.yaml"
 }
 alias="$(yq '.model.alias' gitops/values.yaml)"
-for v in DEFAULT_MODELS TASK_MODEL_EXTERNAL; do
+for v in DEFAULT_MODELS; do
   [ "$(env_of "$v")" = "$alias" ] || {
     echo "gitops-check: chat must render $v=$alias (gitops/values.yaml model.alias)" >&2
     exit 1
   }
 done
+[ -z "$(env_of TASK_MODEL_EXTERNAL)" ] || {
+  echo "gitops-check: chat must not render TASK_MODEL_EXTERNAL (unset falls back to the chat's own model)" >&2
+  exit 1
+}
 [ "$(env_of OPENAI_API_BASE_URLS)" = "http://gpu-on-demand.llm.svc/v1;http://gpu-on-demand.llm-dev.svc/v1" ] || {
   echo "gitops-check: Open WebUI must list production then dev (the platform's key list has the same order)" >&2
   exit 1

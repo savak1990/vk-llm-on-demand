@@ -22,6 +22,9 @@ and the rewritten string is no longer valid semver.
 `X.Y.Z` is always the next patch above the last release tag, so a
 prerelease sorts below the release it precedes. A maintainer picks the
 real bump (`patch`, `minor`, `major`) only when dispatching `release.yml`.
+Main builds are ordered by `deploy.yml`'s run number, so renaming or
+recreating that workflow restarts the count; cut a release after such a
+change.
 
 ## 2. The pipeline per channel
 

@@ -14,7 +14,6 @@ set -euo pipefail
 channel="${1:-}"
 arg="${2:-}"
 sha="${3:-}"
-run="${3:-}"
 
 last="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 last="${last#v}"
@@ -55,6 +54,7 @@ case "$channel" in
     ;;
   main)
     [ -n "$arg" ] || { echo "VERSION: main needs a commit sha." >&2; exit 1; }
+    run="${3:-}"
     case "$run" in
       ''|*[!0-9]*) echo "VERSION: main needs a numeric run number." >&2; exit 1 ;;
     esac
@@ -74,7 +74,7 @@ case "$channel" in
     bump "${arg:-patch}"
     ;;
   *)
-    echo "VERSION: usage: version.sh {base|main <sha>|pr <n> <sha>|release <level>}" >&2
+    echo "VERSION: usage: version.sh {base|main <sha> <run>|pr <n> <sha>|release <level>}" >&2
     exit 1
     ;;
 esac
