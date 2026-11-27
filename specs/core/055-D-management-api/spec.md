@@ -1,7 +1,7 @@
 ---
 id: "CORE-055"
 status: "DONE"
-updated: "2026-11-04"
+updated: "2026-11-27"
 depends_on: ["CORE-040", "CORE-050"]
 adrs: ["0012", "0010", "0011", "0009"]
 ---
@@ -64,6 +64,7 @@ Port 9090 never serves it (ADR 0012 §6).
 
 CORE-190 adds `POST /api/v1/gpu/budget`; see that spec.
 CORE-310 adds `GET /api/v1/gpu/rentals`: the last 50 rental records, newest first.
+CORE-180 adds an optional `"releaseCache": true` to the stop body (`vk-llm stop-all`): the stop runs as above, then every cache volume goes to `deleting` (reason `manual`), outside the stop coalescer so a coalesced request never loses it; same responses, and the force gate still refuses before anything is released.
 
 The `result` field (in start/stop responses) and HTTP status are equivalent and redundant by design: both carry `already_running`/`already_stopped` (200) versus `accepted` (202); no 409 is ever returned (plan R-O). `503 gpu_unavailable` carries no `Retry-After`.
 

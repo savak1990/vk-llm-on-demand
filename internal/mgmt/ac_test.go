@@ -199,7 +199,7 @@ func TestAC12_RedactionAcrossAllRoutes(t *testing.T) {
 
 	for _, rt := range []struct{ method, path, body string }{
 		{"POST", "/api/v1/gpu/start", ""}, {"GET", "/api/v1/gpu/status", ""},
-		{"POST", "/api/v1/gpu/stop", `{"force":false}`}, {"GET", "/api/v1/gpu/cost", ""},
+		{"POST", "/api/v1/gpu/stop", `{"force":false}`}, {"POST", "/api/v1/gpu/stop", `{"releaseCache":true}`}, {"GET", "/api/v1/gpu/cost", ""},
 		{"POST", "/api/v1/gpu/budget", `{"monthlyUSD":40}`}, {"GET", "/api/v1/gpu/rentals", ""},
 	} {
 		run(rt.method, rt.path, rt.body, "sk-vkllm-mgmttoken1")

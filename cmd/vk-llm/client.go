@@ -122,10 +122,14 @@ func (c *client) rentals(ctx context.Context) (apiResult, int, error) {
 	return c.do(ctx, http.MethodGet, "/api/v1/gpu/rentals", nil)
 }
 
-func (c *client) stop(ctx context.Context, force bool) (apiResult, int, error) {
+func (c *client) stop(ctx context.Context, force, releaseCache bool) (apiResult, int, error) {
 	var body io.Reader
-	if force {
-		body = bytes.NewReader([]byte(`{"force":true}`))
+	if force || releaseCache {
+		b, _ := json.Marshal(struct {
+			Force        bool `json:"force,omitempty"`
+			ReleaseCache bool `json:"releaseCache,omitempty"`
+		}{force, releaseCache})
+		body = bytes.NewReader(b)
 	}
 	return c.do(ctx, http.MethodPost, "/api/v1/gpu/stop", body)
 }

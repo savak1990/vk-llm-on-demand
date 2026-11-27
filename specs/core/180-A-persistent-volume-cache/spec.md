@@ -1,7 +1,7 @@
 ---
 id: "CORE-180"
 status: "IN_PROGRESS"
-updated: "2026-11-26"
+updated: "2026-11-27"
 depends_on: ["CORE-020", "CORE-050", "CORE-100", "CORE-210", "CORE-220", "CORE-310", "CORE-320"]
 adrs: ["0014", "0003", "0004", "0005", "0015", "0018"]
 ---
@@ -54,12 +54,14 @@ counts in the monthly budget, which goes from $30 to $35 in the same PR.
 - Offer selection with the cached-host preference.
 - Seeding a volume during a normal rental; attach on a hit.
 - Release: expiry, replacement, budget, model change, orphan sweep.
+- Manual release: `vk-llm stop-all` (`POST /api/v1/gpu/stop` with
+  `releaseCache: true`, added 2026-11-27).
 - Storage in the ledger, the budget and `GET /api/v1/gpu/cost`.
 - Chart values under `config.cache`; the budget default change to $35.
 - Progress text, rental record field and metrics for the cache.
 
-Excludes: `vk-llm cache` commands and a manual release endpoint (set
-`maxCaches: 0` to release all); Postgres or another store (operator decision
+Excludes: a `vk-llm cache` command family (per-volume listing or release);
+Postgres or another store (operator decision
 2026-11-26); stopped instances (ADR 0003 §6, constitution C-5); a location
 preference (operator decision 2026-11-26, see CORE-310); the S3 mirror
 (ADR 0005).
@@ -198,6 +200,7 @@ The reconcile loop (every minute) does these steps, in this order:
 | a volume is not in use and `now ≥ expiresAt` | `deleting` (reason `expired`) |
 | month-to-date spend ≥ budget | every volume not in use goes to `deleting` (reason `budget`) |
 | `modelURL` or `sha256` in the config differs from the volume | `deleting` (reason `model_changed`) |
+| the operator runs `vk-llm stop-all` (`POST /api/v1/gpu/stop` with `releaseCache: true`) | the GPU stops as for `stop`, every volume goes to `deleting` (reason `manual`), the one in use too, and a reconcile runs at once; the volume in use is deleted after its GPU ends |
 | a volume is `deleting` | `DeleteVolume`; retry every tick until the provider confirms absence, then remove the entry |
 | a provider volume under our label prefix is not in the document | delete after two observations (reason `orphan`), the same rule as instances (constitution C-6) |
 | a document volume is absent at the provider for two observations | remove the entry |
@@ -355,3 +358,8 @@ entries, after which it mistakes them for GPU entries. Before a rollback:
 `TestCacheOrphanDeletedOnSecondObservation`,
 `TestCacheFailedListDeletesNothing`; AC7 pending a lab run (operator
 go-ahead).
+
+2026-11-27, branch `stop-all-command`: manual release
+`TestCacheReleaseDeletesIdleAtOnceAndInUseAfterStop`,
+`TestStopReleaseCache`, `TestStopReleaseCacheSurvivesCoalescing`,
+`TestStopAll*`, `TestHelp*`.

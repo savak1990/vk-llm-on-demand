@@ -28,6 +28,26 @@ func TestRegisterMetricsOneHotGPUState(t *testing.T) {
 	}
 }
 
+func TestRegisterMetricsPreinitializesManualCacheRelease(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	RegisterMetrics(reg)
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "vkllm_cache_volumes_deleted_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			if m.GetLabel()[0].GetValue() == "manual" {
+				return
+			}
+		}
+	}
+	t.Fatal(`vkllm_cache_volumes_deleted_total{reason="manual"} missing at registration`)
+}
+
 func TestShutdownsTotalIncrementsByReason(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	RegisterMetrics(reg)

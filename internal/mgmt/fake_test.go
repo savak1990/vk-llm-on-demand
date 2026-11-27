@@ -19,6 +19,8 @@ type fakeController struct {
 	budgetUSD                       float64
 	budgetSnap                      controller.Snapshot
 	budgetErr                       error
+	releaseCalls                    int
+	releaseErr                      error
 }
 
 func newFakeController() *fakeController { return &fakeController{} }
@@ -62,6 +64,13 @@ func (f *fakeController) SetBudgetMonthUSD(_ context.Context, usd float64) (cont
 	return f.budgetSnap, f.budgetErr
 }
 
+func (f *fakeController) ReleaseCache(_ context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releaseCalls++
+	return 1, f.releaseErr
+}
+
 func (f *fakeController) StopForce() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -76,6 +85,8 @@ func (f *fakeController) Calls(op string) int {
 		return f.startCalls
 	case "stop":
 		return f.stopCalls
+	case "release":
+		return f.releaseCalls
 	}
 	return 0
 }

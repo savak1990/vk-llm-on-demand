@@ -23,6 +23,7 @@ type Controller interface {
 	Stop(ctx context.Context, force bool) (controller.Snapshot, error)
 	Status() controller.Snapshot
 	SetBudgetMonthUSD(ctx context.Context, usd float64) (controller.Snapshot, error)
+	ReleaseCache(ctx context.Context) (int, error)
 }
 
 type Deps struct {

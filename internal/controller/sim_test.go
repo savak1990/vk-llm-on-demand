@@ -2609,3 +2609,72 @@ func TestCacheUseAt71hMovesExpiry(t *testing.T) {
 		t.Fatalf("after the new expiry fake %v doc %v, want both empty and storage closed", h.prov.Volumes(), h.cacheVolumes())
 	}
 }
+
+func TestCacheReleaseDeletesIdleAtOnceAndInUseAfterStop(t *testing.T) {
+	h := buildHarness(t)
+	h.ctl.deps.ModelSHA256 = "sha"
+	h.ctl.deps.Config.MaxDownloadPriceUSDPerGB = 0.10
+	h.ctl.deps.Config.Cache = config.CacheConfig{MaxCaches: 2, Retention: 72 * time.Hour, PreferThreshold: 0.15, MaxStoragePriceUSDPerGBMonth: 0.40}
+	h.run()
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S", InetDownMbps: 2400})
+	h.prov.SetVolumeOffers(provider.VolumeOffer{ID: 900, MachineID: 42, StoragePerGBMonth: provider.FromUSD(0.30), DiskSpaceGB: 500})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusOther, provider.StatusOther)
+	h.worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable, ProbeLoading, ProbeLoading, ProbeLoading, ProbeReady)
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	h.Settle(t0.Add(40 * time.Second))
+	if s := h.ctl.Status(); s.Public != "READY" {
+		t.Fatalf("state %s, want READY", s.Public)
+	}
+	inUse := volumeLabel(h.iid, 1)
+	idle := volumeLabel(h.iid, 9)
+	idleID := h.prov.AddVolume(provider.Volume{Label: idle, MachineID: 43})
+	h.putDoc(func(d *store.Document) {
+		v := h.readyVol(idle, idleID, h.clk.Now().Add(48*time.Hour))
+		v.MachineID = 43
+		d.Cache.Volumes = append(d.Cache.Volumes, v)
+		h.budget.OpenStorageEntry(d, h.clk.Now(), 1, idle, 0.01)
+	})
+	before := testutil.ToFloat64(cacheDeletedTotal.WithLabelValues("manual"))
+
+	n, err := h.ctl.ReleaseCache(context.Background())
+	if err != nil || n != 2 {
+		t.Fatalf("ReleaseCache = %d, %v; want 2, nil", n, err)
+	}
+	h.Settle(h.clk.Now())
+	if at, _ := timerAt(h.ctl, timerReconcile); !at.After(h.clk.Now()) {
+		t.Fatalf("reconcile timer at %v, want it still ahead of %v so the delete came from the release", at, h.clk.Now())
+	}
+	vols := h.prov.Volumes()
+	if len(vols) != 1 || vols[0].Label != inUse {
+		t.Fatalf("fake volumes %+v, want only the in-use %s", vols, inUse)
+	}
+	if v := h.cacheVolumes(); len(v) != 1 || v[0].State != store.CacheDeleting || v[0].DeleteReason != "manual" || v[0].InUseGen != 1 {
+		t.Fatalf("doc volumes %+v, want the in-use one deleting/manual", v)
+	}
+	if !h.storageClosed(idle) {
+		t.Fatal("idle storage entry still open")
+	}
+
+	h.reconcileTicks(2)
+	if len(h.prov.Volumes()) != 1 || h.prov.Calls("delete_volume") != 1 {
+		t.Fatalf("fake volumes %v deletes %d, want the attached volume never sent a delete", h.prov.Volumes(), h.prov.Calls("delete_volume"))
+	}
+
+	if _, err := h.ctl.Stop(context.Background(), false); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	h.Settle(h.clk.Now().Add(3 * time.Minute))
+	if s := h.ctl.Status(); s.Public != "STOPPED" {
+		t.Fatalf("state %s, want STOPPED", s.Public)
+	}
+	if len(h.prov.Volumes()) != 0 || len(h.cacheVolumes()) != 0 || !h.storageClosed(inUse) {
+		t.Fatalf("after stop fake %v doc %v, want both empty and storage closed", h.prov.Volumes(), h.cacheVolumes())
+	}
+	if got := counterDelta(cacheDeletedTotal.WithLabelValues("manual"), before); got != 2 {
+		t.Fatalf("deleted_total{manual} delta = %v, want 2", got)
+	}
+}

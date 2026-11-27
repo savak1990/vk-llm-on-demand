@@ -12,7 +12,11 @@ service in an existing cluster.
 vk-llm start      # rent one RTX 6000 Ada GPU on Vast.ai, load the model, wait for READY
 opencode          # or any client with base URL https://llm.<fqdn>/v1
 vk-llm stop       # release the GPU now (otherwise: 30 min after the last inference)
+vk-llm stop-all   # stop the GPU and delete every cache volume
 ```
+
+`vk-llm help` lists the commands; `vk-llm help stop-all` explains how to
+stay at zero spend afterwards.
 
 - Design intent: [`docs/architecture.md`](docs/architecture.md)
 - Decisions: [`docs/adr/`](docs/adr/)

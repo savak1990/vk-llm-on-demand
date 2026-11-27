@@ -1,7 +1,7 @@
 ---
 id: "CORE-150"
 status: "DONE"
-updated: "2026-11-15"
+updated: "2026-11-27"
 depends_on: ["CORE-055", "CORE-120"]
 adrs: ["0012", "0013", "0011"]
 ---
@@ -81,7 +81,9 @@ package constant, not a flag.
 |---|---|---|
 | `start` | `--detach`, `--timeout` (default `defaults.startupTimeout`, 15m), `--json` | POST start; unless detached, poll status until a terminal outcome (below) |
 | `status` | `--json` | GET status; table or raw body |
-| `stop` | `--detach`, `--timeout` (default 5m), `--json` | POST stop; unless detached, poll until `STOPPED` |
+| `stop` | `--force`, `--detach`, `--timeout` (default 5m), `--json` | POST stop; unless detached, poll until `STOPPED` |
+| `stop-all` | `--force`, `--detach`, `--timeout` (default 5m), `--json` | POST stop with `releaseCache: true` (CORE-180); unless detached, poll until `STOPPED` and no `cacheVolumes`, within `--timeout` for the GPU plus 2 min for the volumes; prints `Stopping the GPU...`, `GPU stopped.`, `Deleting <n> cache volume(s)...`, `All Vast.ai resources released.` on stderr |
+| `help` | `[<command>]`; `-h`/`--help` on any command | no config, no network; stdout, exit 0. No argument: usage line and one line per command. `stop-all`: the extended help (what it releases, how to stay at zero, flags, examples, exit codes). Other commands: their line and usage. An unknown command: exit 2 |
 | `budget` | `--json` | no args: GET status; `set <amount>`: POST /api/v1/gpu/budget; table (budget view) or raw body |
 | `rentals` | `--json` | GET /api/v1/gpu/rentals; table or raw body |
 | `version` | none | prints `vk-llm <version>`; no config, no network |
@@ -127,7 +129,9 @@ defaults:
   bearer token never follows a redirect; a 3xx is a failure (exit 1).
 - Headers: `Authorization: Bearer <token>`, `User-Agent: vk-llm/<version>`.
   `start` and non-forced `stop` POST with an empty body and no `Content-Type`;
-  a forced `stop` POSTs `{"force":true}` with `Content-Type: application/json`.
+  a forced `stop` POSTs `{"force":true}` with `Content-Type: application/json`;
+  `stop-all` POSTs `{"releaseCache":true}` (`{"force":true,"releaseCache":true}`
+  with `--force`), also with `Content-Type: application/json`.
 - Responses are decoded into a struct that ignores unknown fields, so both
   the ADR 0012 §1 document (with `result`, `nextCreateAt`) and the CORE-055
   document parse. Body read is capped at 1 MiB.
@@ -139,7 +143,7 @@ defaults:
 
 | Code | When |
 |---|---|
-| 0 | `start` reached `READY` (or `--detach` got 200/202); `stop` reached `STOPPED` (or `--detach` got 200/202); `status` got 200; `budget` got 200; `rentals` got 200; `version` |
+| 0 | `start` reached `READY` (or `--detach` got 200/202); `stop` reached `STOPPED` (or `--detach` got 200/202); `stop-all` reached `STOPPED` with no cache volume left (or `--detach` got 200/202); `status` got 200; `budget` got 200; `rentals` got 200; `version`; `help` and `-h` |
 | 1 | 503 `gpu_unavailable` (prints `reason` verbatim), 400/404/405/413/500, network or TLS error on the first call, timeout while polling, `start` sees `STOPPED` with non-empty `unavailable`, 3xx |
 | 2 | usage error, bad flag, bad duration, missing endpoint or token, bad config file, token key in the file, plain `http://` to a non-loopback host |
 | 3 | 401 `invalid_token` or 403 `permission_denied` on any call |
@@ -256,7 +260,7 @@ fake clock from `internal/clock/fake`; no sleeps. Token in tests is
 - AC7. Status (FR-7.4, FR-6.8). Five scripted documents (STOPPED with null `instance`, ALLOCATING, READY, DRAINING, STOPPED with `unavailable` `no_offer`). Expected: output equals the golden files byte for byte; the READY table has all 10 rows of the Status table and the word `estimate`. `status --json` stdout equals the fake body byte for byte.
 - AC8. Exit codes. 401 → 3, 403 → 3 (on start, status and stop, and on the 3rd poll of a start), 500 → 1, 302 → 1 with the fake's redirect target receiving 0 requests, unknown subcommand → 2, `--timeout abc` → 2, missing token variable → 2.
 - AC9. Config precedence (FR-7.6). Table test over the five Configuration rows: every combination of the sources each row has (flag, environment, file, default); expected value is from the highest source present in every case. A file with `api.token`, `token` at top level, or `Token` → exit 2 and 0 requests to the fake. `--endpoint http://llm.example.com` → exit 2; `http://127.0.0.1:<port>` accepted.
-- AC10. Headers and redaction (C-16). Every request the fake records has `Authorization: Bearer sk-vkllm-REPLACE_ME`, `User-Agent: vk-llm/dev`; no request carries a body except a forced `stop`'s `{"force":true}`. Across all tests' captured stdout and stderr, the token string occurs 0 times, including the 401 error path.
+- AC10. Headers and redaction (C-16). Every request the fake records has `Authorization: Bearer sk-vkllm-REPLACE_ME`, `User-Agent: vk-llm/dev`; no request carries a body except a forced `stop`'s `{"force":true}` and a `stop-all`'s `{"releaseCache":true}` (with `"force":true` when forced). Across all tests' captured stdout and stderr, the token string occurs 0 times, including the 401 error path.
 - AC11. 429 during polling. Status returns 429 with `Retry-After: 7` once, then `READY`. Expected: the next poll is registered for 7 s (fake `BlockUntil`), exit 0.
 - AC12. Tier 2 (docs/testing-strategy.md). The CORE-080 kind job runs `vk-llm status` built from the PR against the installed chart via `kubectl port-forward` to `127.0.0.1`. Expected: exit 0, table shows `State` `STOPPED`.
 - AC13. Distribution (FR-7.7). A CORE-120 release dry run lists 4 `vk-llm` archives and `checksums.txt`; `vk-llm version` from one archive prints the release `X.Y.Z`.
