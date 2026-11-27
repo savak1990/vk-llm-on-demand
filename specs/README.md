@@ -86,7 +86,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [250](core/250-P-code-execution/spec.md) | Requirements: sandboxed code execution in the chat front end (no design yet) | 060, 230 |
 | [260](core/260-P-image-generation/spec.md) | Requirements: image generation and image understanding (no design yet) | 050, 060, 230 |
 | [270](core/270-P-google-sign-in/spec.md) | Requirements: "Sign in with Google" for the chat front end, household accounts only (no design yet) | 230 |
-| [280](core/280-P-dev-environment-auto-deploy/spec.md) | Every build of main is installed in `llm-dev` by Argo CD from the same `gitops/` chart as production (newest-build version range), with a smoke hook and a `dev-` model in Open WebUI | 120, 130, 160, 220, 230 |
+| [280](core/280-D-dev-environment-auto-deploy/spec.md) | Every build of main is installed in `llm-dev` by Argo CD from the same `gitops/` chart as production (newest-build version range), with a smoke hook and a `dev-` model in Open WebUI | 120, 130, 160, 220, 230 |
 | [290](core/290-P-large-moe-cpu-offload/spec.md) | Spike: larger MoE models with experts in CPU RAM; offer filter sized to the model (no design yet) | 070, 210 |
 | [300](core/300-A-concurrent-sessions-kv-cache/spec.md) | Concurrent sessions: KV cache type (f16/q8_0/q4_0) and context per session | 070, 080, 130 |
 | [310](core/310-A-cold-start-recording/spec.md) | Cold-start recording: rental history in the state document, real stage durations, `vk-llm rentals` | 040, 050, 090, 210 |
