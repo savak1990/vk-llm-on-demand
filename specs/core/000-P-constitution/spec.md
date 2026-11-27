@@ -40,7 +40,7 @@ subsystem's spec and cite the constitution.
 |---|---|
 | C-1 | The GPU is the only expensive resource. Every design choice is judged first by whether it can leave a GPU running unobserved. |
 | C-2 | Every provider mutation (create, destroy) is idempotent under an operation key and bounded by a timeout. A retry can never create a second instance. |
-| C-3 | Every create has a deadline (`lifecycle.startupTimeout`) and an attempt budget (`lifecycle.safety.maxProvisionAttemptsPerHour`). Exhaustion means stop and alert, never try harder. Clarification (2026-11-27): a create that the provider refuses with a definitive 4xx creates nothing and is not counted against `maxProvisionAttemptsPerHour`; it has its own bound of 5 refused offers in a row per start, after which the controller stops and alerts. Ambiguous errors still count. |
+| C-3 | Every create has a deadline (`lifecycle.startupTimeout`) and an attempt budget (`lifecycle.safety.maxProvisionAttemptsPerHour`). Exhaustion means stop and alert, never try harder. Clarification (2026-11-27): a create that the provider refuses with a definitive 4xx creates nothing and is not counted against `maxProvisionAttemptsPerHour`; it has its own bound of 5 refused offers in a row per start or since the last confirmed create, after which the controller stops and alerts. Ambiguous errors still count. |
 | C-4 | Destroy is retried until the provider confirms absence. A destroy that keeps failing is an alert, not a log line. |
 | C-5 | Instances are destroyed, never stopped (ADR 0003 §6). |
 | C-6 | The provider's instance list is reconciled against the state store at least every 60 s; an instance carrying our label prefix and unknown to the store is destroyed (ADR 0003 §4). |

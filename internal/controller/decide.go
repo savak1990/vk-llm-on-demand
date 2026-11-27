@@ -571,7 +571,7 @@ func lifetimeExpired(f Facts) bool {
 	return !f.Now.Before(f.Doc.Instance.CreatedAt.Add(f.Cfg.MaxLifetime))
 }
 
-// refusedOffer is a definitive 4xx on the create itself; 401/403 are an
+// refusedOffer is a definitive 4xx on the create PUT itself; 401/403 are an
 // account problem (Fatal), not an offer problem, so they never count.
 func refusedOffer(ev Event) bool {
 	return ev.Kind == EvCreateFailed && !ev.Duplicate && ev.Class == provider.Terminal && refusedRequest(ev.Err)

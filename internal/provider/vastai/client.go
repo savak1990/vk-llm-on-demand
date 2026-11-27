@@ -502,14 +502,14 @@ func (c *Client) CreateInstance(ctx context.Context, r provider.CreateRequest) (
 		}
 		// 2xx but success:false, undecodable, or missing an id: terminal,
 		// not ambiguous — the provider told us definitively.
-		fe := withVastReason(&provider.Error{Op: "create", Class: provider.Terminal, Status: status, Err: fmt.Errorf("create rejected")}, respBody)
-		c.recordOutcome("create", "terminal", status, vastReasonAttrs(respBody, "label", r.Label)...)
+		fe := withVastReason(&provider.Error{Op: "create", Class: provider.Terminal, Status: status, Err: fmt.Errorf("create rejected")}, respBody, r.Env)
+		c.recordOutcome("create", "terminal", status, vastReasonAttrs(respBody, r.Env, "label", r.Label)...)
 		return 0, fe
 	}
 	if err == nil && status < 500 && status != 429 {
 		// 4xx other than 429: terminal or fatal, not ambiguous.
-		fe := withVastReason(fatalOrTerminal("create", status), respBody)
-		c.recordOutcome("create", outcomeLabel(fe), status, vastReasonAttrs(respBody, "label", r.Label)...)
+		fe := withVastReason(fatalOrTerminal("create", status), respBody, r.Env)
+		c.recordOutcome("create", outcomeLabel(fe), status, vastReasonAttrs(respBody, r.Env, "label", r.Label)...)
 		return 0, fe
 	}
 
@@ -536,14 +536,19 @@ func (c *Client) CreateInstance(ctx context.Context, r provider.CreateRequest) (
 	return 0, &provider.Error{Op: "create", Class: provider.Retryable, Err: provider.ErrOutcomeUnknown}
 }
 
-// vastReason reads only the error and msg fields of a refusal body, cut
-// to 300 characters, so nothing else the body carries reaches a log.
-func vastReason(body []byte) (code, msg string) {
+// vastReason reads only the error and msg fields of a refusal body, masks
+// any env value Vast echoes back, then cuts each to 300 characters.
+func vastReason(body []byte, env map[string]string) (code, msg string) {
 	var r struct {
 		Error string `json:"error"`
 		Msg   string `json:"msg"`
 	}
 	_ = json.Unmarshal(body, &r)
+	for _, v := range env {
+		if v != "" {
+			r.Error, r.Msg = strings.ReplaceAll(r.Error, v, "***"), strings.ReplaceAll(r.Msg, v, "***")
+		}
+	}
 	return truncate(r.Error, 300), truncate(r.Msg, 300)
 }
 
@@ -554,15 +559,15 @@ func truncate(s string, n int) string {
 	return s
 }
 
-func withVastReason(e *provider.Error, body []byte) *provider.Error {
-	if code, msg := vastReason(body); code != "" || msg != "" {
+func withVastReason(e *provider.Error, body []byte, env map[string]string) *provider.Error {
+	if code, msg := vastReason(body, env); code != "" || msg != "" {
 		e.Err = fmt.Errorf("%w: %s: %s", e.Err, code, msg)
 	}
 	return e
 }
 
-func vastReasonAttrs(body []byte, attrs ...any) []any {
-	if code, msg := vastReason(body); code != "" || msg != "" {
+func vastReasonAttrs(body []byte, env map[string]string, attrs ...any) []any {
+	if code, msg := vastReason(body, env); code != "" || msg != "" {
 		attrs = append(attrs, "vast_error", code, "vast_msg", msg)
 	}
 	return attrs

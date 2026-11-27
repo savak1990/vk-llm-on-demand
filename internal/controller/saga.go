@@ -241,5 +241,5 @@ func nextCreateAllowedAt(ops []store.Op) time.Time {
 // second create without the volume cannot make a second instance.
 func refusedRequest(err error) bool {
 	var perr *provider.Error
-	return errors.As(err, &perr) && perr.Status >= 400 && perr.Status < 500 && perr.Status != 429
+	return errors.As(err, &perr) && perr.Op == "create" && perr.Status >= 400 && perr.Status < 500 && perr.Status != 429
 }

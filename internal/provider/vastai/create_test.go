@@ -624,6 +624,33 @@ func TestCreateRefusalCarriesVastReason(t *testing.T) {
 	}
 }
 
+func TestCreateVastReasonRedactsEnv(t *testing.T) {
+	const workerKey = "sk-vkllm-testworkerkey123"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"success":false,"error":"bad_env ` + workerKey + `","msg":"env WORKER_API_KEY=` + workerKey + ` is invalid"}`))
+	}))
+	defer srv.Close()
+
+	buf := captureLogs(t)
+	cl, _ := newTestClient(t, srv, fakeclock.New(time.Unix(0, 0)))
+	cl.logger = buf.logger
+	_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+		OfferID: 1, Image: "img", Label: "vkllm:test:echo",
+		Env: map[string]string{"WORKER_API_KEY": workerKey, "EMPTY": ""},
+	})
+	if err == nil || contains(err.Error(), workerKey) || !contains(err.Error(), "WORKER_API_KEY=*** is invalid") {
+		t.Fatalf("err = %v, want the echoed key replaced with ***", err)
+	}
+	if out := buf.String(); contains(out, workerKey) || !contains(out, "***") {
+		t.Fatalf("log leaked or lacks the redaction: %s", out)
+	}
+}
+
 func TestCreateVastReasonTruncated(t *testing.T) {
 	long := strings.Repeat("é", 1000)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

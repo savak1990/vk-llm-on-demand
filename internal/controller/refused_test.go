@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -24,15 +25,15 @@ func TestRefusedOffersTryNextAtOnce(t *testing.T) {
 	h.prov.SetOffers(offersOnMachines(3)...)
 	h.prov.RefuseCreate(21, 22)
 	h.worker.SetProbeSequence(ProbeReady)
-	before := testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("provider_error"))
+	refused, perr := outcomeCounts()
 
 	t0 := h.clk.Now()
 	if _, err := h.ctl.Start(context.Background()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	h.Settle(t0.Add(time.Second))
-	if got := counterDelta(provisionAttemptsTotal.WithLabelValues("provider_error"), before); got != 2 {
-		t.Fatalf("provision_attempts_total{provider_error} delta = %v, want 2 so the failing alert sees refusals", got)
+	if r, p := outcomeCounts(); r-refused != 2 || p != perr {
+		t.Fatalf("outcome deltas refused=%v provider_error=%v, want 2 and 0 so refusals never page", r-refused, p-perr)
 	}
 	if n := h.prov.Calls("create"); n != 3 {
 		t.Fatalf("creates after 1s = %d, want 3 with no backoff between them", n)
@@ -50,9 +51,64 @@ func TestRefusedOffersTryNextAtOnce(t *testing.T) {
 			t.Fatalf("denylist[%d] = %+v, want machine %d until now+1h", i, e, 101+i)
 		}
 	}
-	if doc.AttemptsThisHour.Count != 1 {
-		t.Fatalf("AttemptsThisHour = %+v, want only the real create counted", doc.AttemptsThisHour)
+	if doc.AttemptsThisHour.Count != 1 || doc.RefusedInRow != 0 {
+		t.Fatalf("AttemptsThisHour = %+v run %d, want only the real create counted and the run reset", doc.AttemptsThisHour, doc.RefusedInRow)
 	}
+}
+
+func outcomeCounts() (refused, providerError float64) {
+	return testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("refused")),
+		testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("provider_error"))
+}
+
+// A run cut short by no_offer, or paused by an ambiguous failure's backoff,
+// gets a fresh budget of 5 refusals from the next Start.
+func TestRefusedRunResetsOnStart(t *testing.T) {
+	t.Run("after no_offer", func(t *testing.T) {
+		h := newHarness(t)
+		h.prov.SetOffers(offersOnMachines(3)...)
+		h.prov.RefuseCreate(21, 22, 23)
+		t0 := h.clk.Now()
+		if _, err := h.ctl.Start(context.Background()); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		h.Settle(t0.Add(time.Second))
+		if n, s := h.prov.Calls("create"), h.ctl.Status(); n != 3 || s.Unavailable != "no_offer" {
+			t.Fatalf("creates %d snapshot %+v, want 3 then no_offer", n, s)
+		}
+		h.prov.SetOffers(offersOnMachines(9)[3:]...)
+		h.prov.RefuseCreate(24, 25, 26, 27, 28)
+		h.Settle(t0.Add(90 * time.Second))
+		if _, err := h.ctl.Start(context.Background()); err != nil {
+			t.Fatalf("second Start: %v", err)
+		}
+		h.Settle(t0.Add(5 * time.Minute))
+		if n, s := h.prov.Calls("create"), h.ctl.Status(); n != 8 || s.Unavailable != "offers_refused" {
+			t.Fatalf("creates %d snapshot %+v, want 5 more refusals then offers_refused", n, s)
+		}
+	})
+	t.Run("during backoff", func(t *testing.T) {
+		h := newHarness(t)
+		h.prov.SetOffers(offersOnMachines(9)...)
+		h.prov.RefuseCreate(21, 22)
+		h.prov.FailNext("create", 1, &provider.Error{Op: "create", Class: provider.Terminal, Status: 200, Err: errors.New("create rejected")})
+		t0 := h.clk.Now()
+		if _, err := h.ctl.Start(context.Background()); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		h.Settle(t0.Add(time.Second))
+		if n, s := h.prov.Calls("create"), h.ctl.Status(); n != 3 || s.Desired != store.DesiredRunning {
+			t.Fatalf("creates %d snapshot %+v, want 2 refusals, an ambiguous failure, desired kept", n, s)
+		}
+		h.prov.RefuseCreate(23, 24, 25, 26, 27)
+		if _, err := h.ctl.Start(context.Background()); err != nil {
+			t.Fatalf("Start in backoff: %v", err)
+		}
+		h.Settle(t0.Add(5 * time.Minute))
+		if n, s := h.prov.Calls("create"), h.ctl.Status(); n != 8 || s.Unavailable != "offers_refused" {
+			t.Fatalf("creates %d snapshot %+v, want 5 more refusals then offers_refused", n, s)
+		}
+	})
 }
 
 func TestRefusedOffersStopAfterFive(t *testing.T) {
@@ -60,6 +116,8 @@ func TestRefusedOffersStopAfterFive(t *testing.T) {
 	h.prov.SetOffers(offersOnMachines(6)...)
 	h.prov.RefuseCreate(21, 22, 23, 24, 25)
 	h.worker.SetProbeSequence(ProbeReady)
+	refused, perr := outcomeCounts()
+	ended := testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("offers_refused"))
 
 	t0 := h.clk.Now()
 	if _, err := h.ctl.Start(context.Background()); err != nil {
@@ -68,6 +126,10 @@ func TestRefusedOffersStopAfterFive(t *testing.T) {
 	h.Settle(t0.Add(5 * time.Minute))
 	if n := h.prov.Calls("create"); n != 5 {
 		t.Fatalf("creates = %d, want 5 and the 6th offer untried", n)
+	}
+	r, p := outcomeCounts()
+	if e := testutil.ToFloat64(provisionAttemptsTotal.WithLabelValues("offers_refused")) - ended; r-refused != 4 || p != perr || e != 1 {
+		t.Fatalf("outcome deltas refused=%v provider_error=%v offers_refused=%v, want 4, 0, 1", r-refused, p-perr, e)
 	}
 	snap := h.ctl.Status()
 	if snap.State != Idle || snap.Desired != store.DesiredStopped || snap.Unavailable != "offers_refused" {
@@ -128,14 +190,15 @@ func TestCreateFailureOnlyRefusalMovesOn(t *testing.T) {
 		refused bool
 		stopped bool
 	}{
-		{"400 refused", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 400}, Searching, true, false},
-		{"404 refused", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 404}, Searching, true, false},
-		{"400 refused after a stop", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 400}, Idle, true, true},
-		{"401", provider.Fatal, &provider.Error{Class: provider.Fatal, Status: 401}, Idle, false, false},
-		{"403", provider.Fatal, &provider.Error{Class: provider.Fatal, Status: 403}, Idle, false, false},
-		{"2xx without an id", provider.Terminal, &provider.Error{Class: provider.Terminal, Status: 200}, Idle, false, false},
-		{"503", provider.Retryable, &provider.Error{Class: provider.Retryable, Status: 503}, Creating, false, false},
-		{"429", provider.Retryable, &provider.Error{Class: provider.Retryable, Status: 429}, Creating, false, false},
+		{"400 refused", provider.Terminal, &provider.Error{Op: "create", Class: provider.Terminal, Status: 400}, Searching, true, false},
+		{"404 refused", provider.Terminal, &provider.Error{Op: "create", Class: provider.Terminal, Status: 404}, Searching, true, false},
+		{"400 refused after a stop", provider.Terminal, &provider.Error{Op: "create", Class: provider.Terminal, Status: 400}, Idle, true, true},
+		{"401", provider.Fatal, &provider.Error{Op: "create", Class: provider.Fatal, Status: 401}, Idle, false, false},
+		{"403", provider.Fatal, &provider.Error{Op: "create", Class: provider.Fatal, Status: 403}, Idle, false, false},
+		{"2xx without an id", provider.Terminal, &provider.Error{Op: "create", Class: provider.Terminal, Status: 200}, Idle, false, false},
+		{"503", provider.Retryable, &provider.Error{Op: "create", Class: provider.Retryable, Status: 503}, Creating, false, false},
+		{"429", provider.Retryable, &provider.Error{Op: "create", Class: provider.Retryable, Status: 429}, Creating, false, false},
+		{"404 from the pre-create list", provider.Terminal, &provider.Error{Op: "list", Class: provider.Terminal, Status: 404}, Idle, false, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			doc, _ := store.NewDocument("iid")

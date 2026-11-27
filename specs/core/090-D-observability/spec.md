@@ -157,7 +157,7 @@ requires pre-initializing every declared combination at startup.
 | `vkllm_mgmt_requests_total` | counter | `op`∈{start,status,stop,cost,other}; `code`∈{200,202,400,401,403,404,405,413,429,500,503} | Management API requests by operation and status code (ADR 0012 §1) | 055 |
 | `vkllm_mgmt_request_seconds` | histogram | `op` (same set) | Management API handling time | 055 |
 | `vkllm_gpu_state` | gauge | `state`∈{STOPPED,ALLOCATING,STARTING,LOADING_MODEL,READY,DRAINING,DELETING,FAILED} | One-hot: 1 for the current public state (ADR 0011 §6), 0 for the other seven | 050 |
-| `vkllm_provision_attempts_total` | counter | `outcome`∈{ok,no_offer,provider_error,deadline_exceeded,attempts_exhausted,budget_exhausted,failed_status,lost,cancelled} | Provisioning attempts by how they ended (ADR 0003 §4–5) | 050 |
+| `vkllm_provision_attempts_total` | counter | `outcome`∈{ok,no_offer,provider_error,deadline_exceeded,attempts_exhausted,budget_exhausted,failed_status,lost,cancelled,refused,offers_refused} | Provisioning attempts by how they ended (ADR 0003 §4–5) | 050 |
 | `vkllm_coldstart_stage_seconds` | histogram | `stage`∈{search,create,boot,link,download,load,ready,first_token} | Duration of each cold-start stage (architecture §4) | 050 |
 | `vkllm_gpu_uptime_seconds_total` | counter | none | Cumulative seconds an instance has existed | 050 |
 | `vkllm_gpu_idle_seconds` | gauge | none | Seconds since `max(readyAt, lastInferenceFinishedAt)` while Ready with 0 in flight; 0 otherwise (ADR 0011 §1) | 050 |
@@ -325,7 +325,7 @@ spec:
           annotations: {summary: "An untracked GPU instance was destroyed"}
         - alert: VkllmProvisioningFailing
           expr: |
-            increase(vkllm_provision_attempts_total{outcome="attempts_exhausted"}[1h]) >= 1
+            increase(vkllm_provision_attempts_total{outcome=~"attempts_exhausted|offers_refused"}[1h]) >= 1
             or
             sum(increase(vkllm_provision_attempts_total{outcome=~"provider_error|deadline_exceeded|failed_status"}[1h])) >= 3
           labels: {severity: critical}

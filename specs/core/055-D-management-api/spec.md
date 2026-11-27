@@ -98,7 +98,7 @@ The `result` field (in start/stop responses) and HTTP status are equivalent and 
 | `secondsUntilIdleShutdown` | derived | `max(0, idleDeadline − now)` whole seconds; `null` when `idleDeadline` is `null` |
 | `nextCreateAt` | snapshot | RFC 3339 UTC timestamp, `null` unless a future next-allowed-create time exists (render `null` if the stored time is in the past) |
 | `cost` | snapshot cost block (CORE-100) | estimates |
-| `unavailable` | snapshot | `""` or a reason below |
+| `unavailable` | snapshot | `""`, a reason below, or `offers_refused` after 5 refused offers in a row (never a start denial) |
 | `installationId`, `labelPrefix` | snapshot | |
 
 Timestamps are RFC 3339 UTC. `now` comes from `Clock.Now`. The document

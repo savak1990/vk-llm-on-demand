@@ -20,6 +20,7 @@ func TestRefusedRequest(t *testing.T) {
 		{"400 refusal", &provider.Error{Op: "create", Class: provider.Terminal, Status: 400}, true},
 		{"404", &provider.Error{Op: "create", Class: provider.Terminal, Status: 404}, true},
 		{"2xx without an id", &provider.Error{Op: "create", Class: provider.Terminal, Status: 200}, false},
+		{"404 from the pre-create list", &provider.Error{Op: "list", Class: provider.Terminal, Status: 404}, false},
 		{"no status", &provider.Error{Op: "create", Class: provider.Terminal}, false},
 		{"429", &provider.Error{Op: "create", Class: provider.Retryable, Status: 429}, false},
 		{"5xx", &provider.Error{Op: "create", Class: provider.Retryable, Status: 503}, false},
