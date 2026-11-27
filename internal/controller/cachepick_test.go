@@ -1,11 +1,15 @@
 package controller
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/offercost"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
 	"github.com/savak1990/vk-llm-on-demand/internal/store"
+	fakestore "github.com/savak1990/vk-llm-on-demand/internal/store/fake"
 )
 
 func ranked(id, machine int64, sessionUSD float64) offercost.Ranked {
@@ -98,5 +102,102 @@ func TestPickOfferNeverReturnsAnOfferOutsideRanked(t *testing.T) {
 	got, _ := pickOffer(pickInput{ranked: []offercost.Ranked{inRanked}, hit: map[int64]offercost.Ranked{8: cachedButNotAdmitted}, ready: ready, threshold: 0.15})
 	if got.Offer.ID != 7 {
 		t.Fatalf("chose %d, want 7 (machine 800 was not admitted)", got.Offer.ID)
+	}
+}
+
+// With 1 GB of model the volume is 4 GB; at $0.30 over a 730 h retention
+// it costs $1.20, and the seed offer's download fee adds $1.00.
+func TestCacheChoice(t *testing.T) {
+	const modelURL, sha = "https://example.invalid/model.gguf", "s"
+	seedOffer := ranked(1, 10, 0.40)
+	seedOffer.Offer.InetDownMbps = 1000
+	seedOffer.Breakdown.DownloadUSD = provider.FromUSD(1.00)
+	plain := ranked(2, 20, 0.35)
+	ready := func(machine, volumeID, inUse int64) store.CacheVolume {
+		return store.CacheVolume{Label: "v", VolumeID: volumeID, MachineID: machine, State: store.CacheReady, ModelURL: modelURL, SHA256: sha, InUseGen: inUse}
+	}
+	for _, c := range []struct {
+		name         string
+		maxCaches    int
+		priceUSD     float64
+		budgetUSD    float64
+		volumes      []store.CacheVolume
+		failSearch   bool
+		failLoad     bool
+		wantID       int64
+		wantMode     string
+		wantSearches int
+	}{
+		{name: "seedable within cap", maxCaches: 1, priceUSD: 0.30, wantID: 1, wantMode: "seed", wantSearches: 1},
+		{name: "storage price above cap", maxCaches: 1, priceUSD: 0.50, wantID: 2, wantSearches: 1},
+		{name: "budget covers storage and download", maxCaches: 1, priceUSD: 0.30, budgetUSD: 2.5, wantID: 1, wantMode: "seed", wantSearches: 1},
+		{name: "budget covers storage but not download", maxCaches: 1, priceUSD: 0.30, budgetUSD: 2.0, wantID: 2, wantSearches: 1},
+		{name: "volume search fails", maxCaches: 1, priceUSD: 0.30, failSearch: true, wantID: 2, wantSearches: 1},
+		{name: "store load fails", maxCaches: 1, priceUSD: 0.30, failLoad: true, wantID: 2, wantSearches: 0},
+		{name: "slots full and all in use", maxCaches: 1, priceUSD: 0.30, volumes: []store.CacheVolume{ready(99, 3, 5)}, wantID: 2, wantSearches: 0},
+		{name: "cache disabled ignores a ready volume", maxCaches: 0, priceUSD: 0.30, volumes: []store.CacheVolume{ready(10, 7, 0)}, wantID: 2, wantSearches: 0},
+		{name: "ready volume is a hit", maxCaches: 1, priceUSD: 0.30, volumes: []store.CacheVolume{ready(10, 7, 0)}, wantID: 1, wantMode: "hit", wantSearches: 1},
+		{name: "machine already seeding is not seedable", maxCaches: 2, priceUSD: 0.30, volumes: []store.CacheVolume{{Label: "v", MachineID: 10, State: store.CacheSeeding}}, wantID: 2, wantSearches: 1},
+		{name: "machine with an in-use ready volume is not seedable", maxCaches: 2, priceUSD: 0.30, volumes: []store.CacheVolume{ready(10, 7, 5)}, wantID: 2, wantSearches: 1},
+		{name: "machine with an unresolved ready volume is not seedable", maxCaches: 2, priceUSD: 0.30, volumes: []store.CacheVolume{ready(10, 0, 0)}, wantID: 2, wantSearches: 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctl, prov, _, _, _ := newTestController(t)
+			ctl.deps.ModelSHA256 = sha
+			ctl.deps.Config.Cache.MaxCaches = c.maxCaches
+			ctl.deps.Config.Cache.Retention = 730 * time.Hour
+			ctl.deps.Config.Cache.PreferThreshold = 0.15
+			ctl.deps.Config.Cache.MaxStoragePriceUSDPerGBMonth = 0.40
+			prov.SetVolumeOffers(provider.VolumeOffer{ID: 500, MachineID: 10, StoragePerGBMonth: provider.FromUSD(c.priceUSD), DiskSpaceGB: 100})
+			st := ctl.deps.Store.(*fakestore.Fake)
+			doc, _ := store.NewDocument("iid")
+			doc.Cache = &store.CacheState{Volumes: c.volumes}
+			if c.budgetUSD > 0 {
+				doc.BudgetMonthUSD = &c.budgetUSD
+			}
+			st.Put(doc)
+			if c.failSearch {
+				prov.FailNext("search_volumes", 1, errors.New("boom"))
+			}
+			if c.failLoad {
+				st.FailNext(1, errors.New("boom"))
+			}
+			got, plan := ctl.cacheChoice(context.Background(), []offercost.Ranked{plain, seedOffer}, 1_000_000_000, 10)
+			if got.Offer.ID != c.wantID || plan.mode != c.wantMode {
+				t.Fatalf("chose %d %q, want %d %q", got.Offer.ID, plan.mode, c.wantID, c.wantMode)
+			}
+			if n := prov.Calls("search_volumes"); n != c.wantSearches {
+				t.Fatalf("search_volumes calls = %d, want %d", n, c.wantSearches)
+			}
+			if plan.mode == "seed" && (plan.volumeOfferID != 500 || plan.storageUSD != 0.30 || plan.sizeGB != 4) {
+				t.Fatalf("seed plan = %+v", plan)
+			}
+			if plan.mode == "hit" && plan.volumeID != 7 {
+				t.Fatalf("hit plan = %+v", plan)
+			}
+		})
+	}
+}
+
+func TestHasSeedRoom(t *testing.T) {
+	readyVol := func(inUse int64) store.CacheVolume {
+		return store.CacheVolume{State: store.CacheReady, InUseGen: inUse}
+	}
+	for _, c := range []struct {
+		name    string
+		volumes []store.CacheVolume
+		max     int
+		want    bool
+	}{
+		{"empty cache", nil, 1, true},
+		{"live below max", []store.CacheVolume{readyVol(3)}, 2, true},
+		{"full but one replaceable", []store.CacheVolume{readyVol(3), readyVol(0)}, 2, true},
+		{"full and none replaceable", []store.CacheVolume{readyVol(3), {State: store.CacheSeeding}}, 2, false},
+	} {
+		doc, _ := store.NewDocument("iid")
+		doc.Cache = &store.CacheState{Volumes: c.volumes}
+		if got := hasSeedRoom(doc, c.max); got != c.want {
+			t.Fatalf("%s: hasSeedRoom = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"math"
-	"slices"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/offercost"
 	"github.com/savak1990/vk-llm-on-demand/internal/provider"
@@ -106,6 +105,9 @@ func pickOffer(in pickInput) (offercost.Ranked, cachePlan) {
 // removes the cache from the choice.
 func (c *Controller) cacheChoice(ctx context.Context, ranked []offercost.Ranked, modelBytes int64, disk int) (offercost.Ranked, cachePlan) {
 	cfg := c.deps.Config.Cache
+	if cfg.MaxCaches == 0 {
+		return ranked[0], cachePlan{}
+	}
 	doc, _, err := c.deps.Store.Load(ctx)
 	if err != nil {
 		return ranked[0], cachePlan{}
@@ -122,11 +124,17 @@ func (c *Controller) cacheChoice(ctx context.Context, ranked []offercost.Ranked,
 		}
 	}
 	size := volumeSizeGB(modelBytes)
-	if cfg.MaxCaches > 0 && hasSeedRoom(doc, cfg.MaxCaches) {
+	if hasSeedRoom(doc, cfg.MaxCaches) {
+		occupied := occupiedMachines(doc)
+		// A seed rents the first ranked offer on its machine, so that offer's
+		// download fee is spent with the volume's storage.
+		downloadUSD := map[int64]float64{}
 		var machines []int64
 		for _, r := range ranked {
-			if _, ok := ready[r.Offer.MachineID]; !ok && !slices.Contains(machines, r.Offer.MachineID) {
-				machines = append(machines, r.Offer.MachineID)
+			m := r.Offer.MachineID
+			if _, seen := downloadUSD[m]; !seen && !occupied[m] {
+				downloadUSD[m] = r.Breakdown.DownloadUSD.USD()
+				machines = append(machines, m)
 			}
 		}
 		offers, err := c.deps.Provider.SearchVolumeOffers(ctx, machines, size)
@@ -134,11 +142,12 @@ func (c *Controller) cacheChoice(ctx context.Context, ranked []offercost.Ranked,
 			c.warn("controller: volume offer search failed", "err", err)
 		}
 		for _, o := range offers {
+			dl, asked := downloadUSD[o.MachineID]
 			price := o.StoragePerGBMonth.USD()
-			if price > cfg.MaxStoragePriceUSDPerGBMonth {
+			if !asked || price > cfg.MaxStoragePriceUSDPerGBMonth {
 				continue
 			}
-			pending := float64(size) * price * cfg.Retention.Hours() / 730
+			pending := float64(size)*price*cfg.Retention.Hours()/730 + dl
 			if c.deps.Budget.Exhausted(doc, pending) {
 				continue
 			}
@@ -150,6 +159,21 @@ func (c *Controller) cacheChoice(ctx context.Context, ranked []offercost.Ranked,
 	choice, plan := pickOffer(in)
 	plan.sizeGB, plan.modelURL, plan.sha256 = size, c.deps.ModelURL, c.deps.ModelSHA256
 	return choice, plan
+}
+
+// occupiedMachines holds every machine with a live volume of ours, so a
+// second volume is never created on one machine.
+func occupiedMachines(doc store.Document) map[int64]bool {
+	out := map[int64]bool{}
+	if doc.Cache == nil {
+		return out
+	}
+	for _, v := range doc.Cache.Volumes {
+		if v.State == store.CacheSeeding || v.State == store.CacheReady {
+			out[v.MachineID] = true
+		}
+	}
+	return out
 }
 
 // hasSeedRoom is true when a slot is free or a ready volume not in use
