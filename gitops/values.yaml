@@ -28,14 +28,13 @@ secrets:
   ssh: vk-llm-ssh-key
 
 # Pinned from the official ggml-org GGUF repository; the chart has no
-# default on purpose. Q8_0 is the largest quantization that fits a 48 GB GPU.
+# default on purpose. Text only: the vision projector is not downloaded.
 model:
-  alias: qwen3.8-27b
-  url: https://huggingface.co/ggml-org/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-Q8_0.gguf
-  sha256: 6bc9e7220d8400574fd62df25f04a961cb5cbb0d766cf0118c21c36c0059c35a
-  # Context per session. One f16 slot of 262144 tokens used 42.9 of 48 GB
-  # VRAM on 2026-11-24; 4 slots of 131072 at q8_0 need about the same KV
-  # memory (estimate, confirm in the Vast console after the first start).
+  alias: inkling-2-mini
+  url: https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF/resolve/main/Inkling-2-Mini-Q8_0.gguf
+  sha256: d57542f8aea5d7639beba5fc4ae7f584754916f63ac5d5a69328c27f652f45da
+  # Estimate: 27.8 GB weights + about 9 GB q8_0 KV for 4 x 131072 tokens.
+  # Confirm in the Vast console after the first start.
   contextSize: 131072
   parallel: 4
   kCacheType: q8_0
@@ -48,7 +47,7 @@ gpu: RTX 6000Ada
 provisioningMode: on-demand
 
 worker:
-  image: ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:0a9f6c7cfe5a6b90b6c048b7a86865bf55a88af34bada927482eab2ef5f25b4a
+  image: ghcr.io/ggml-org/llama.cpp:server-cuda-b12808@sha256:c94503b4e7839fcacebc7fd04b7cef66376dc15a38e50e221e73871241a12982
 
 # Open WebUI sends no max_tokens, so the cap is the real output limit, and
 # every household member shares its one key.

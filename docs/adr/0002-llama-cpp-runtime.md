@@ -2,9 +2,10 @@
 
 ## Status
 
-Accepted (2026-11-01). The model file's sha256 and the exact image digest are
-pinned by spec 070 when it is implemented; this ADR fixes the choice, not
-the digest.
+Accepted (2026-11-01). Decision 2 (model), the alias in decision 5, and
+decision 6 (reasoning control) are superseded by
+[ADR 0022](0022-inkling-2-mini-model.md), which also raises decision 1's
+build floor to a build that contains llama.cpp commit `2a335259c`.
 
 ## Context
 

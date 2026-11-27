@@ -307,7 +307,7 @@ and are set by the chart under `config.*`.
 | `model.contextSize` / `model.parallel` | 32768 / 1 | `contextSize` is per session; the worker reserves `contextSize * parallel` tokens |
 | `model.kCacheType` / `model.vCacheType` | `f16` / `f16` | schema enum `f16` \| `q8_0` \| `q4_0` |
 | `model.generationTimeout` | 10m | upstream deadline per request |
-| `worker.image` | `ghcr.io/ggml-org/llama.cpp:server-cuda@sha256:…` | pinned in `gitops/values.yaml` |
+| `worker.image` | `ghcr.io/ggml-org/llama.cpp:server-cuda-bNNNNN@sha256:…` | pinned in `gitops/values.yaml` |
 | `worker.deadManTimeout` | idleShutdown.timeout + 10m | |
 | `tunnel.dialer` | `ssh` | `direct` only for the kind job with the fake worker |
 | `tunnel.directAddr` | `""` | host:port of the fake worker when `direct` |
@@ -344,7 +344,7 @@ renders it directly, with no GHCR package (ADR 0020).
 | # | Decision | Status |
 |---|---|---|
 | [0001](adr/0001-external-gpu-workers.md) | External provider instances, six-method `Provider` | Accepted |
-| [0002](adr/0002-llama-cpp-runtime.md) | Official llama-server image, pinned Qwen3.6 Q5_K_M | Accepted |
+| [0002](adr/0002-llama-cpp-runtime.md) | Official llama-server image; model part superseded by 0022 | Accepted |
 | [0003](adr/0003-gpu-lifecycle-management.md) | One binary; destroy, never stop; label identity; reconcile | Accepted, §5 amended by 0011 |
 | [0004](adr/0004-state-persistence.md) | One ConfigMap with optimistic concurrency | Accepted, fields amended by 0011 |
 | [0005](adr/0005-model-storage.md) | Download from Hugging Face per provision | Accepted; P2 cache in 0014 |
@@ -364,6 +364,7 @@ renders it directly, with no GHCR package (ADR 0020).
 | [0019](adr/0019-on-demand-mode-progress-stream.md) | On-demand mode: progress stream, non-streaming refusal, unattended-start cancel | Accepted |
 | [0020](adr/0020-chat-front-end-as-a-second-app.md) | Chat front end (Open WebUI, SearXNG) is a second, unpublished chart and a second Argo app | Accepted |
 | [0021](adr/0021-installations-are-argo-applications-from-one-chart.md) | Every installation is an Argo CD Application of one chart; dev tracks the newest build | Accepted |
+| [0022](adr/0022-inkling-2-mini-model.md) | Inkling 2 Mini Q8_0 as `inkling-2-mini`; CUDA flash-attention build floor | Accepted |
 
 ## 13. Unresolved
 

@@ -534,3 +534,17 @@ real cluster, not vendor documentation) unless noted.
 No RBAC surprise and no unexpected 409 otherwise: everything on the real
 cluster behaved exactly as `specs/core/040-D-state-store/spec.md`'s Design
 and contracts section assumed.
+
+## 9. Inkling 2 Mini (read 2026-11-27)
+
+| Fact | Tag | Source |
+|---|---|---|
+| `thinkingmachines/Inkling-2-Mini`, Thinking Machines Lab, published 2026-11-20; multimodal MoE, 26.4B total, 3.4B active; 24 physical layers, layers 6–17 run 3 times; 128 experts, 8 active; hybrid local/global attention; 1M-token context | V | https://huggingface.co/thinkingmachines/Inkling-2-Mini |
+| Reasoning effort is a request field `reasoning_effort`: `none`, `minimal`, `low`, `medium`, `high` (default), `xhigh`, `max`, or 0.0–0.99; llama-server at b12808 honours string values only (`common/chat.cpp`, `is_string()`); minimum effort does not fully disable reasoning; the model can loop in reasoning, so cap output tokens | V | model card; https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF |
+| `ggml-org/Inkling-2-Mini-GGUF` → `Inkling-2-Mini-Q8_0.gguf`, 27,820,099,264 bytes, single file, sha256 `d57542f8aea5d7639beba5fc4ae7f584754916f63ac5d5a69328c27f652f45da`; mmproj separate (Q8_0 346 MB); IQ4_NL and NVFP4 are 17.6 GB each | V | HF file listing |
+| Mini is architecture `inkling2_loop`, added in llama.cpp #32694, first in b12600; base Inkling 2 (#32217, b12406) cannot load it | V | https://github.com/ggml-org/llama.cpp/pull/32694 |
+| CUDA flash attention for Inkling 2 is #33063 (commit `2a335259c`, 2026-11-26); without it attention runs a dense path that needs far more VRAM for context; v1.1.0 does not contain it | V | https://github.com/ggml-org/llama.cpp/pull/33063 |
+| KV cache per token: 8 global-attention evaluations × 2 × 8 KV heads × 128 ≈ 32 KiB f16, ≈ 17 KiB q8_0 → ≈ 8.5 GiB for 4 × 131072 at q8_0; excludes the sliding-window cache of the local-attention layers (about 160 MiB per session at f16, estimate) | U | our calculation from `config.json`; measured at the first prod start |
+| Open bugs #32778 (output turns to `?`) and #32710 (NaN on CUDA), reported mostly with CPU-offloaded experts | S | GitHub issues |
+| Leads Qwen3.8-27B and similar models on 32 of 48 benchmarks; ties on Terminal-Bench 4.0; trails on AutomationBench-AA | S | https://huggingface.co/blog/inkling2mini |
+| The CUDA dispatch for the indexed-bias attention (#33063) accepts head size 128 and uses the vec or tile kernel for any K/V type those kernels take, so q8_0 K/V is not excluded | S | our reading of the #33063 diff; measured at the first prod start |

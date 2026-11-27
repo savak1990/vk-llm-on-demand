@@ -70,7 +70,7 @@ open-webui:
     # Must equal gitops/values.yaml model.alias (make gitops-check). In the pod
     # spec, not a ConfigMap, so a model change rolls the pod.
     - name: DEFAULT_MODELS
-      value: qwen3.8-27b
+      value: inkling-2-mini
     - name: ENABLE_PERSISTENT_CONFIG
       value: "false"
     - name: ENABLE_SIGNUP
