@@ -100,13 +100,24 @@ if helm template vk-llm-chat chat --namespace chat >/dev/null 2>&1; then
   echo "gitops-check: a chat render without fqdn must fail" >&2
   exit 1
 fi
+env_of() {
+  yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$1\") | .value" "$tmp/chat.yaml"
+}
 alias="$(yq '.model.alias' gitops/values.yaml)"
 for v in DEFAULT_MODELS TASK_MODEL_EXTERNAL; do
-  [ "$(yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$v\") | .value" "$tmp/chat.yaml")" = "$alias" ] || {
+  [ "$(env_of "$v")" = "$alias" ] || {
     echo "gitops-check: chat must render $v=$alias (gitops/values.yaml model.alias)" >&2
     exit 1
   }
 done
+[ "$(env_of OPENAI_API_BASE_URLS)" = "http://gpu-on-demand.llm.svc/v1;http://gpu-on-demand.llm-dev.svc/v1" ] || {
+  echo "gitops-check: Open WebUI must list production then dev (the platform's key list has the same order)" >&2
+  exit 1
+}
+[ "$(yq 'select(.kind == "Deployment" and .metadata.name == "open-webui") | .spec.template.spec.containers[0].env[] | select(.name == "OPENAI_API_KEYS") | .valueFrom.secretKeyRef.key' "$tmp/chat.yaml")" = "OPENAI_API_KEYS" ] || {
+  echo "gitops-check: OPENAI_API_KEYS must come from open-webui-env key OPENAI_API_KEYS" >&2
+  exit 1
+}
 for r in open-webui open-webui-auth; do
   [ "$(yq "select(.kind == \"HTTPRoute\" and .metadata.name == \"$r\") | .spec.rules[0].backendRefs[0].name" "$tmp/chat.yaml")" = "open-webui" ] || {
     echo "gitops-check: HTTPRoute $r must target Service open-webui (the platform traffic policies name these routes)" >&2
@@ -126,9 +137,6 @@ if yq 'select(.kind == "Deployment" and .metadata.name == "open-webui") | .spec.
   exit 1
 fi
 
-env_of() {
-  yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$1\") | .value" "$tmp/chat.yaml"
-}
 for pair in ENABLE_OAUTH_SIGNUP=true DEFAULT_USER_ROLE=pending OAUTH_MERGE_ACCOUNTS_BY_EMAIL=true ENABLE_LOGIN_FORM=true ENABLE_SIGNUP=false BYPASS_MODEL_ACCESS_CONTROL=true; do
   [ "$(env_of "${pair%%=*}")" = "${pair#*=}" ] || {
     echo "gitops-check: chat must render ${pair} (pending sign-ups, a kept admin password login, every model visible to activated users)" >&2

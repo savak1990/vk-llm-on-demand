@@ -54,9 +54,13 @@ open-webui:
   logging:
     level: info
   enableOpenaiApi: true
-  openaiBaseApiUrl: http://gpu-on-demand.llm.svc/v1
-  openaiApiKeyExistingSecret: open-webui-env
-  openaiApiKeyExistingSecretKey: OPENAI_API_KEY
+  # Production first, then dev; the platform's OPENAI_API_KEYS lists one key per URL in this order.
+  openaiBaseApiUrl: ""
+  openaiBaseApiUrls:
+    - http://gpu-on-demand.llm.svc/v1
+    - http://gpu-on-demand.llm-dev.svc/v1
+  openaiApiKeysExistingSecret: open-webui-env
+  openaiApiKeysExistingSecretKey: OPENAI_API_KEYS
   extraEnvFrom:
     - secretRef:
         name: open-webui-env
@@ -95,6 +99,10 @@ open-webui:
       value: "true"
     - name: RAG_EMBEDDING_ENGINE
       value: openai
+    # Unset, Open WebUI's RAG call falls back to the public OpenAI API,
+    # not the base URL list; pin it to production explicitly.
+    - name: RAG_OPENAI_API_BASE_URL
+      value: http://gpu-on-demand.llm.svc/v1
     - name: USER_PERMISSIONS_CHAT_FILE_UPLOAD
       value: "false"
     - name: ENABLE_API_KEYS
