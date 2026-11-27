@@ -219,6 +219,9 @@ func nextCreateAllowedAt(ops []store.Op) time.Time {
 		if op.Outcome == "ready" {
 			break
 		}
+		if op.Outcome == "refused" {
+			continue
+		}
 		n++
 		if op.FinishedAt != nil && op.FinishedAt.After(lastFinish) {
 			lastFinish = *op.FinishedAt

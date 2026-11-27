@@ -37,6 +37,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			}
 			setStartOrigin(d, ev)
 			d.Desired = store.DesiredRunning
+			d.RefusedInRow = 0
 			return nil
 		}, nil
 
@@ -67,6 +68,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			}
 			if ev.Kind == EvStart {
 				setStartOrigin(d, ev)
+				d.RefusedInRow = 0
 			}
 			d.Desired = store.DesiredRunning
 			return nil
@@ -161,6 +163,7 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 				return errStale
 			}
 			d.Instance.ProviderID = providerIDString(ev.ProviderID)
+			d.RefusedInRow = 0
 			if f.Budget != nil {
 				f.Budget.OpenEntry(d, f.Now, d.Generation, d.Instance.Offer.DPH, downloadUSD(d.Instance.Offer))
 			}
@@ -180,6 +183,40 @@ func decide(state State, ev Event, f Facts) (next State, mutate func(*store.Docu
 			}
 			return nil
 		}, nil
+
+	// The provider refused the create outright, so nothing exists and nothing
+	// is charged to the hourly budget: denylist the machine for an hour and
+	// search again at once, until the gate ends the run of refusals.
+	case state == Creating && ev.Kind == EvCreateFailed && refusedOffer(ev) && f.Doc.Desired == store.DesiredRunning:
+		last := ev.Reason == "offers_refused"
+		next, outcome := Searching, "refused"
+		var effects []Effect
+		if last {
+			next, outcome = Idle, "create_error"
+		} else {
+			filter := searchFilter(f)
+			if f.Doc.Instance != nil {
+				filter.ExcludeMachineIDs = append(filter.ExcludeMachineIDs, f.Doc.Instance.Offer.MachineID)
+			}
+			effects = []Effect{effSearch{filter: filter}}
+		}
+		return next, func(d *store.Document) error {
+			if d.Instance == nil || d.Generation != ev.Gen || d.Desired != store.DesiredRunning || d.RefusedInRow != f.Doc.RefusedInRow {
+				return errStale
+			}
+			finishOp(d, createOpKey(d.Generation), outcome, f.Now)
+			d.MachineDenylist = append(d.MachineDenylist, store.DenyEntry{MachineID: d.Instance.Offer.MachineID, Until: f.Now.Add(time.Hour)})
+			if d.AttemptsThisHour.Count > 0 {
+				d.AttemptsThisHour.Count--
+			}
+			d.RefusedInRow++
+			if last {
+				d.RefusedInRow = 0
+				d.Desired = store.DesiredStopped
+			}
+			d.Instance = nil
+			return nil
+		}, effects
 
 	// T9: the create itself failed in a non-retryable way — drop the
 	// instance and keep desired as-is so the backoff retries.
@@ -529,6 +566,12 @@ func lifetimeExpired(f Facts) bool {
 		return false
 	}
 	return !f.Now.Before(f.Doc.Instance.CreatedAt.Add(f.Cfg.MaxLifetime))
+}
+
+// refusedOffer is a definitive 4xx on the create itself; 401/403 are an
+// account problem (Fatal), not an offer problem, so they never count.
+func refusedOffer(ev Event) bool {
+	return ev.Kind == EvCreateFailed && !ev.Duplicate && ev.Class == provider.Terminal && refusedRequest(ev.Err)
 }
 
 func createOpKey(gen int64) string { return fmt.Sprintf("create-%d", gen) }

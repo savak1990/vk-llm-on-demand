@@ -41,6 +41,8 @@ func unavailableMessage(reason string) string {
 		return "The GPU provider account balance is too low."
 	case "attempts_exhausted":
 		return "Too many GPU start attempts this hour; try again later."
+	case "offers_refused":
+		return "The GPU provider refused the cheapest offers; try again in a few minutes."
 	case "no_offer":
 		return "No GPU offer matches the price and hardware limits right now; try again in a few minutes."
 	default:

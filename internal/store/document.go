@@ -27,6 +27,7 @@ type Document struct {
 	BudgetMonthUSD   *float64    `json:"budgetMonthUsd,omitempty"`
 	StartOrigin      string      `json:"startOrigin,omitempty"`
 	Rentals          []Rental    `json:"rentals,omitempty"`
+	RefusedInRow     int         `json:"refusedInRow,omitempty"`
 }
 
 type Instance struct {

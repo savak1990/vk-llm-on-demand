@@ -190,7 +190,7 @@ func provisionOutcome(state, next State, ev Event) (string, bool) {
 		return "provider_error", true
 	case state == Searching && next == Idle && ev.Kind == EvStop:
 		return "cancelled", true
-	case state == Creating && next == Idle && ev.Kind == EvCreateFailed:
+	case state == Creating && (next == Idle || next == Searching) && ev.Kind == EvCreateFailed:
 		return "provider_error", true
 	case isCreatingBootingOrLoading(state) && next == Destroying && ev.Kind == EvProviderObserved && ev.Status.Terminal():
 		return "failed_status", true
