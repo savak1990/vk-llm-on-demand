@@ -3,6 +3,7 @@ package mgmt
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 )
@@ -19,6 +20,10 @@ type fakeController struct {
 	budgetUSD                       float64
 	budgetSnap                      controller.Snapshot
 	budgetErr                       error
+	releaseCalls                    int
+	releaseErr, releaseCtxErr       error
+	releaseDL                       time.Time
+	releaseHasDL                    bool
 }
 
 func newFakeController() *fakeController { return &fakeController{} }
@@ -62,6 +67,21 @@ func (f *fakeController) SetBudgetMonthUSD(_ context.Context, usd float64) (cont
 	return f.budgetSnap, f.budgetErr
 }
 
+func (f *fakeController) ReleaseCache(ctx context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releaseCalls++
+	f.releaseCtxErr = ctx.Err()
+	f.releaseDL, f.releaseHasDL = ctx.Deadline()
+	return 1, f.releaseErr
+}
+
+func (f *fakeController) releaseDeadline() (time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.releaseDL, f.releaseHasDL
+}
+
 func (f *fakeController) StopForce() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -76,6 +96,8 @@ func (f *fakeController) Calls(op string) int {
 		return f.startCalls
 	case "stop":
 		return f.stopCalls
+	case "release":
+		return f.releaseCalls
 	}
 	return 0
 }

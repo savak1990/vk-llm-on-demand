@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/clock"
@@ -17,6 +18,7 @@ import (
 const (
 	pollInterval       = 5 * time.Second
 	defaultStopTimeout = 5 * time.Minute
+	volumeGrace        = 3 * time.Minute
 )
 
 // run is the only seam between main and the rest of the CLI: tests pass a
@@ -30,7 +32,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 	timeoutFlag := fs.String("timeout", "", "")
 	detachFlag := fs.Bool("detach", false, "")
 	jsonFlag := fs.Bool("json", false, "")
-	fs.String("force", "", "")
+	forceFlag := fs.Bool("force", false, "")
 
 	// Global flags are accepted before or after the subcommand name, so
 	// keep re-parsing the same flag set until nothing but the subcommand
@@ -39,6 +41,9 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 	sub, rest := "", args
 	for {
 		if err := fs.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return printHelp(stdout, stderr, sub)
+			}
 			_, _ = fmt.Fprintln(stderr, err)
 			return 2
 		}
@@ -53,19 +58,26 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 		}
 		rest = positional[1:]
 	}
+	if sub == "help" && len(subArgs) <= 1 {
+		return printHelp(stdout, stderr, strings.Join(subArgs, ""))
+	}
 	if sub != "budget" && len(subArgs) > 0 {
 		_, _ = fmt.Fprintf(stderr, "unexpected argument: %s\n", subArgs[0])
 		return 2
 	}
 	if sub == "" {
-		_, _ = fmt.Fprintln(stderr, "usage: vk-llm <start|status|stop|budget|rentals|version> [flags]")
+		_, _ = fmt.Fprintln(stderr, usageLine)
 		return 2
 	}
 	if sub == "version" {
 		return cmdVersion(stdout)
 	}
+	if sub == "stop-all" && *forceFlag {
+		_, _ = fmt.Fprintln(stderr, "stop-all does not take --force")
+		return 2
+	}
 	switch sub {
-	case "start", "status", "stop", "budget", "rentals":
+	case "start", "status", "stop", "stop-all", "budget", "rentals":
 	default:
 		_, _ = fmt.Fprintf(stderr, "unknown subcommand: %s\n", sub)
 		return 2
@@ -95,7 +107,9 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 	case "status":
 		return cmdStatus(cl, stdout, stderr, *jsonFlag)
 	case "stop":
-		return cmdStop(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag)
+		return cmdStop(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag, *forceFlag)
+	case "stop-all":
+		return cmdStopAll(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag)
 	case "budget":
 		return cmdBudget(cl, stdout, stderr, subArgs, *jsonFlag)
 	case "rentals":
@@ -155,14 +169,9 @@ func cmdStatus(c *client, stdout, stderr io.Writer, jsonOut bool) int {
 }
 
 func cmdStart(cfg Config, c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr string, detach, jsonOut bool) int {
-	timeout := cfg.StartupTimeout
-	if timeoutStr != "" {
-		d, err := time.ParseDuration(timeoutStr)
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "bad --timeout: %v\n", err)
-			return 2
-		}
-		timeout = d
+	timeout, ok := parseTimeout(stderr, timeoutStr, cfg.StartupTimeout)
+	if !ok {
+		return 2
 	}
 	deadline := clk.Now().Add(timeout)
 
@@ -195,7 +204,7 @@ func cmdStart(cfg Config, c *client, clk clock.Clock, stdout, stderr io.Writer, 
 			wait = pollInterval
 		}
 		if !clk.Now().Before(deadline) {
-			printTimeout(stderr, timeout, last)
+			printTimeout(stderr, timeout, last, "stop")
 			return 1
 		}
 
@@ -230,20 +239,15 @@ func cmdStart(cfg Config, c *client, clk clock.Clock, stdout, stderr io.Writer, 
 	}
 }
 
-func cmdStop(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr string, detach, jsonOut bool) int {
-	timeout := defaultStopTimeout
-	if timeoutStr != "" {
-		d, err := time.ParseDuration(timeoutStr)
-		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "bad --timeout: %v\n", err)
-			return 2
-		}
-		timeout = d
+func cmdStop(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr string, detach, jsonOut, force bool) int {
+	timeout, ok := parseTimeout(stderr, timeoutStr, defaultStopTimeout)
+	if !ok {
+		return 2
 	}
 	deadline := clk.Now().Add(timeout)
 
 	ctx := context.Background()
-	res, code, err := c.stop(ctx, false)
+	res, code, err := c.stop(ctx, force, false)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return code
@@ -267,7 +271,7 @@ func cmdStop(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr st
 			wait = pollInterval
 		}
 		if !clk.Now().Before(deadline) {
-			printTimeout(stderr, timeout, last)
+			printTimeout(stderr, timeout, last, "stop")
 			return 1
 		}
 
@@ -289,6 +293,99 @@ func cmdStop(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr st
 			return 0
 		}
 	}
+}
+
+// cmdStopAll waits for the GPU within timeout, then up to volumeGrace more
+// until the status document lists no cache volume.
+func cmdStopAll(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr string, detach, jsonOut bool) int {
+	timeout, ok := parseTimeout(stderr, timeoutStr, defaultStopTimeout)
+	if !ok {
+		return 2
+	}
+	start := clk.Now()
+
+	ctx := context.Background()
+	res, code, err := c.stop(ctx, false, true)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, err)
+		return code
+	}
+	if detach {
+		if jsonOut {
+			renderJSON(stdout, res.raw)
+		} else {
+			_, _ = fmt.Fprintf(stdout, "requested: stop the GPU (now %s) and delete %s\n", res.doc.State, cacheVolumes(len(res.doc.CacheVolumes)))
+		}
+		return 0
+	}
+
+	gpuStopped, lastVols := res.doc.State == "STOPPED", -1
+	if !gpuStopped {
+		_, _ = fmt.Fprintln(stderr, "Stopping the GPU...")
+	}
+	wait := pollInterval
+	for {
+		if res.doc.State == "STOPPED" {
+			if !gpuStopped {
+				_, _ = fmt.Fprintln(stderr, "GPU stopped.")
+				gpuStopped = true
+			}
+			n := len(res.doc.CacheVolumes)
+			if n == 0 {
+				_, _ = fmt.Fprintln(stderr, "All Vast.ai resources released.")
+				if jsonOut {
+					renderJSON(stdout, res.raw)
+				}
+				return 0
+			}
+			if n != lastVols {
+				_, _ = fmt.Fprintf(stderr, "Deleting %s...\n", cacheVolumes(n))
+				lastVols = n
+			}
+		}
+		now := clk.Now()
+		switch {
+		case res.doc.State != "STOPPED" && !now.Before(start.Add(timeout)):
+			printTimeout(stderr, timeout, res.doc.State, "stop-all")
+			return 1
+		case !now.Before(start.Add(timeout + volumeGrace)):
+			_, _ = fmt.Fprintf(stderr, "timed out after %s with %s left\n", timeout+volumeGrace, cacheVolumes(len(res.doc.CacheVolumes)))
+			_, _ = fmt.Fprintln(stderr, "the controller keeps deleting them; check with vk-llm status")
+			return 1
+		}
+
+		<-clk.After(wait)
+		wait = pollInterval
+		next, code, err := c.status(ctx)
+		if err != nil {
+			if code == 3 {
+				_, _ = fmt.Fprintln(stderr, err)
+				return code
+			}
+			wait = retryWait(err)
+			continue
+		}
+		res = next
+	}
+}
+
+func cacheVolumes(n int) string {
+	if n == 1 {
+		return "1 cache volume"
+	}
+	return fmt.Sprintf("%d cache volumes", n)
+}
+
+func parseTimeout(stderr io.Writer, s string, def time.Duration) (time.Duration, bool) {
+	if s == "" {
+		return def, true
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "bad --timeout: %v\n", err)
+		return 0, false
+	}
+	return d, true
 }
 
 // printStateChange prints "<HH:MM:SS> <STATE>" on stderr only when state
@@ -339,9 +436,9 @@ func printProgress(stderr io.Writer, clk clock.Clock, tr *progress.Tracker, doc 
 	}
 }
 
-func printTimeout(stderr io.Writer, timeout time.Duration, state string) {
+func printTimeout(stderr io.Writer, timeout time.Duration, state, stopCmd string) {
 	_, _ = fmt.Fprintf(stderr, "timed out after %s in state %s\n", timeout, state)
-	_, _ = fmt.Fprintln(stderr, "the GPU is not stopped; run vk-llm stop, or it stops after its idle timeout")
+	_, _ = fmt.Fprintf(stderr, "the GPU is not stopped; run vk-llm %s, or it stops after its idle timeout\n", stopCmd)
 }
 
 // retryWait decides how long to wait before the next poll after a non-fatal

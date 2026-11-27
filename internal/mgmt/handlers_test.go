@@ -1,7 +1,9 @@
 package mgmt
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -238,6 +240,87 @@ func TestStopCoalescesConcurrentCalls(t *testing.T) {
 		if code != 202 {
 			t.Fatalf("codes[%d] = %d, want 202", i, code)
 		}
+	}
+}
+
+func TestStopReleaseCache(t *testing.T) {
+	fc := newFakeController()
+	fc.stopSnap = controller.Snapshot{Public: "DRAINING"}
+	s := newTestServer(t, fc)
+	for _, body := range []string{"", `{"force":false}`, `{"releaseCache":false}`} {
+		if rec := doReq(s, "POST", "/api/v1/gpu/stop", body); rec.Code != 202 {
+			t.Fatalf("body %q: code = %d, want 202", body, rec.Code)
+		}
+	}
+	if fc.Calls("release") != 0 {
+		t.Fatalf("release calls = %d after plain stops, want 0", fc.Calls("release"))
+	}
+	if rec := doReq(s, "POST", "/api/v1/gpu/stop", `{"releaseCache":true}`); rec.Code != 202 || fc.Calls("release") != 1 || fc.Calls("stop") != 4 {
+		t.Fatalf("code = %d, release %d, stop %d; want 202/1/4", rec.Code, fc.Calls("release"), fc.Calls("stop"))
+	}
+
+	fc.stopSnap = controller.Snapshot{Public: "STOPPED"}
+	rec := doReq(s, "POST", "/api/v1/gpu/stop", `{"releaseCache":true}`)
+	if rec.Code != 200 || fc.Calls("release") != 2 || !strings.Contains(rec.Body.String(), `"result":"already_stopped"`) {
+		t.Fatalf("already stopped: code = %d, release %d, body %s; want 200, 2, already_stopped", rec.Code, fc.Calls("release"), rec.Body)
+	}
+
+	if rec := doReq(s, "POST", "/api/v1/gpu/stop", `{"force":true,"releaseCache":true}`); rec.Code != 400 || fc.Calls("release") != 2 {
+		t.Fatalf("refused force: code = %d, release %d; want 400 and no release", rec.Code, fc.Calls("release"))
+	}
+
+	if rec := doReq(s, "POST", "/api/v1/gpu/stop", `{"releaseCache":"yes"}`); rec.Code != 400 || fc.Calls("release") != 2 ||
+		!strings.Contains(rec.Body.String(), "invalid_json") {
+		t.Fatalf(`{"releaseCache":"yes"}: code = %d, release %d, body %s; want 400 invalid_json`, rec.Code, fc.Calls("release"), rec.Body)
+	}
+
+	fc.releaseErr = errors.New("store down")
+	rec = doReq(s, "POST", "/api/v1/gpu/stop", `{"releaseCache":true}`)
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), "stop accepted; cache release failed") {
+		t.Fatalf("release error: code = %d, body %s; want 500 naming the accepted stop", rec.Code, rec.Body)
+	}
+}
+
+func TestStopReleaseCacheOutlivesClientDisconnect(t *testing.T) {
+	fc := newFakeController()
+	fc.stopSnap = controller.Snapshot{Public: "DRAINING"}
+	s := newTestServer(t, fc)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest("POST", "/api/v1/gpu/stop", strings.NewReader(`{"releaseCache":true}`)).WithContext(ctx)
+	s.mux.ServeHTTP(httptest.NewRecorder(), req)
+	if fc.Calls("release") != 1 || fc.releaseCtxErr != nil {
+		t.Fatalf("release calls %d ctx err %v; want 1 call on a live context", fc.Calls("release"), fc.releaseCtxErr)
+	}
+	if _, ok := fc.releaseDeadline(); !ok {
+		t.Fatal("release context has no deadline; want a bounded write")
+	}
+}
+
+func TestStopReleaseCacheSurvivesCoalescing(t *testing.T) {
+	fc := newFakeController()
+	fc.stopBlock = make(chan struct{})
+	fc.stopSnap = controller.Snapshot{Public: "DRAINING"}
+	s := newTestServer(t, fc)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); doReq(s, "POST", "/api/v1/gpu/stop", "") }()
+	deadline := time.Now().Add(5 * time.Second)
+	for fc.Calls("stop") < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("plain stop never reached the controller")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	code := 0
+	go func() { defer wg.Done(); code = doReq(s, "POST", "/api/v1/gpu/stop", `{"releaseCache":true}`).Code }()
+	waitForWaiters(t, s.stop, 1)
+	close(fc.stopBlock)
+	wg.Wait()
+
+	if fc.Calls("stop") != 1 || fc.Calls("release") != 1 || code != 202 {
+		t.Fatalf("stop %d, release %d, code %d; want 1/1/202", fc.Calls("stop"), fc.Calls("release"), code)
 	}
 }
 

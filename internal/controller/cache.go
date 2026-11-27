@@ -32,6 +32,29 @@ func markDeleting(v *store.CacheVolume, now time.Time, reason string) {
 	v.State, v.DeleteRequestedAt, v.DeleteReason = store.CacheDeleting, &t, reason
 }
 
+// ReleaseCache marks every volume for deletion, the one in use too: the
+// sweep skips it until its GPU ends, then deletes it like any other.
+func (c *Controller) ReleaseCache(ctx context.Context) (int, error) {
+	now, n := c.deps.Clock.Now(), 0
+	if _, err := store.Transition(ctx, c.deps.Store, func(d *store.Document) error {
+		n = 0
+		if d.Cache == nil {
+			return nil
+		}
+		for i := range d.Cache.Volumes {
+			if v := &d.Cache.Volumes[i]; v.State != store.CacheDeleting {
+				markDeleting(v, now, "manual")
+				n++
+			}
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	c.dispatchReconcile(c.effCtx())
+	return n, nil
+}
+
 // withCache derives volume changes from the instance before and after the
 // transition: READY verifies a seeding volume, the end of the GPU frees it.
 func withCache(mutate func(*store.Document) error, now time.Time, retention time.Duration) func(*store.Document) error {

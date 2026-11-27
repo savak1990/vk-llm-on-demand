@@ -189,7 +189,7 @@ requires pre-initializing every declared combination at startup.
 | `vkllm_provider_balance_usd` | gauge | none | Last observed Vast.ai account balance (research §1.5) | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 | `vkllm_cache_lookups_total` | counter | `result`∈{hit,miss} | Offer choices with the model cache on: `hit` links a ready volume, `miss` does not | 180 |
 | `vkllm_cache_volumes` | gauge | `state`∈{seeding,ready,deleting} | Model cache volumes on record, by state | 180 |
-| `vkllm_cache_volumes_deleted_total` | counter | `reason`∈{replaced,over_limit,seed_failed,attach_failed,hit_failed,expired,budget,model_changed,orphan} | Model cache volumes deleted, by the reason they were released | 180 |
+| `vkllm_cache_volumes_deleted_total` | counter | `reason`∈{replaced,over_limit,seed_failed,attach_failed,hit_failed,expired,budget,model_changed,orphan,manual} | Model cache volumes deleted, by the reason they were released | 180 |
 | `vkllm_cache_checksum_mismatch_total` | counter | none | Attached cache volumes whose model file failed the sha256 check and was downloaded again | 180 |
 | `vkllm_cache_delete_failures_total` | counter | none | Failed provider calls to delete a model cache volume | 180 |
 

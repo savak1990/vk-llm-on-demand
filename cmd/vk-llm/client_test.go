@@ -87,7 +87,7 @@ func TestStartAndStop(t *testing.T) {
 		t.Errorf("start calls = %d, want 1", got)
 	}
 
-	if _, _, err := cl.stop(context.Background(), true); err != nil {
+	if _, _, err := cl.stop(context.Background(), true, false); err != nil {
 		t.Fatal(err)
 	}
 	calls := f.callsFor("POST /api/v1/gpu/stop")
@@ -98,7 +98,7 @@ func TestStartAndStop(t *testing.T) {
 		t.Errorf("stop body = %q, want force:true", calls[0].body)
 	}
 
-	if _, _, err := cl.stop(context.Background(), false); err != nil {
+	if _, _, err := cl.stop(context.Background(), false, false); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.callsFor("POST /api/v1/gpu/stop")[1].body; got != "" {

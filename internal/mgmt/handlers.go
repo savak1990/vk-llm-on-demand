@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 )
@@ -41,7 +42,8 @@ func (s *server) handleStart(w http.ResponseWriter, r *http.Request) {
 }
 
 type stopRequest struct {
-	Force bool `json:"force"`
+	Force        bool `json:"force"`
+	ReleaseCache bool `json:"releaseCache"`
 }
 
 func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
@@ -56,6 +58,21 @@ func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.stop.do(r.Context(), func(ctx context.Context) (controller.Snapshot, error) {
 		return s.d.Controller.Stop(ctx, req.Force)
 	})
+	// Outside the coalescer, so a release joined to a plain stop still runs;
+	// detached from the request so a client hanging up cannot cancel the write.
+	if err == nil && req.ReleaseCache {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		n, relErr := s.d.Controller.ReleaseCache(ctx)
+		cancel()
+		if relErr != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", "stop accepted; cache release failed", "")
+			return
+		}
+		snap.CacheVolumes = s.d.Controller.Status().CacheVolumes
+		if s.d.Log != nil {
+			s.d.Log.Info("mgmt: cache release requested", "key_id", keyIDFrom(r), "volumes", n)
+		}
+	}
 	s.respondOp(w, "stop", snap, err)
 }
 
@@ -110,12 +127,8 @@ func (s *server) handleBudget(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.d.Controller.SetBudgetMonthUSD(r.Context(), req.MonthlyUSD)
 	switch {
 	case err == nil:
-		keyID := ""
-		if sink := keyIDSink(r.Context()); sink != nil {
-			keyID = *sink
-		}
 		if s.d.Log != nil {
-			s.d.Log.Info("mgmt: budget changed", "key_id", keyID, "oldUSD", before.BudgetMonthUSD, "newUSD", snap.BudgetMonthUSD)
+			s.d.Log.Info("mgmt: budget changed", "key_id", keyIDFrom(r), "oldUSD", before.BudgetMonthUSD, "newUSD", snap.BudgetMonthUSD)
 		}
 		writeJSON(w, http.StatusOK, buildStatusDocument(snap, s.d.Config, s.d.Clock.Now()))
 	case errors.Is(err, controller.ErrBudgetInvalid):
@@ -126,6 +139,13 @@ func (s *server) handleBudget(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusInternalServerError, "internal_error", "", "")
 	}
+}
+
+func keyIDFrom(r *http.Request) string {
+	if sink := keyIDSink(r.Context()); sink != nil {
+		return *sink
+	}
+	return ""
 }
 
 // decodeStrict rejects unknown fields and the wrong JSON type for

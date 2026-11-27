@@ -53,7 +53,7 @@ func loadConfig(args []string, getenv func(string) string) (cfg Config, exitCode
 	fs.String("timeout", "", "") // these exist in this flag set only so parsing doesn't fail; the values are read in commands.go
 	fs.Bool("detach", false, "")
 	fs.Bool("json", false, "")
-	fs.String("force", "", "")
+	fs.Bool("force", false, "")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, 2, err.Error()
 	}
