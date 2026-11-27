@@ -75,7 +75,8 @@ jobs:
           git push origin "v$VERSION"
           {
             echo "### Released \`v$VERSION\`"
-            echo "Pin it in \`gitops/values.yaml\` (chartVersion + tag) in this repository;"
+            echo "Pin it in \`gitops/values.yaml\` (chartVersion; drop \`tag\` once the"
+            echo "pinned chart falls back to its own version) in this repository;"
             echo "the platform pointer tracks main, so a merge there is the deploy."
           } >> "$GITHUB_STEP_SUMMARY"
 

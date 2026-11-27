@@ -307,6 +307,11 @@ Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
 3. Go to the Actions tab, select `gpu-control`, and run it with the
    `action` input set to `start`, `status`, `stop`, or `budget`.
 
+A second installation, dev, lives at `llm-dev.<domain>`, follows the
+newest build of `main`, and appears in Open WebUI as `dev-<model>`,
+starting its own GPU on the first message sent to it. Set `gpu-control`'s
+`target` input to `dev` to control it instead of production.
+
 To change the budget from the Actions tab, set `action` to `budget` and
 type the new amount in `monthly_usd`. Leave `monthly_usd` blank to show
 the current budget.

@@ -30,6 +30,11 @@ type workflowDoc struct {
 					Type     string `yaml:"type"`
 					Required bool   `yaml:"required"`
 				} `yaml:"monthly_usd"`
+				Target struct {
+					Type    string   `yaml:"type"`
+					Options []string `yaml:"options"`
+					Default string   `yaml:"default"`
+				} `yaml:"target"`
 			} `yaml:"inputs"`
 		} `yaml:"workflow_dispatch"`
 	} `yaml:"on"`
@@ -63,8 +68,15 @@ func TestWorkflowShape(t *testing.T) {
 	if len(doc.Permissions) != 0 {
 		t.Errorf("top-level permissions = %v, want {}", doc.Permissions)
 	}
-	if doc.Concurrency.Group != "gpu-control" || doc.Concurrency.CancelInProgress {
-		t.Errorf("concurrency = %+v, want group=gpu-control cancel-in-progress=false", doc.Concurrency)
+	if doc.Concurrency.Group != "gpu-control-${{ inputs.target }}" || doc.Concurrency.CancelInProgress {
+		t.Errorf("concurrency = %+v, want group=gpu-control-${{ inputs.target }} cancel-in-progress=false", doc.Concurrency)
+	}
+	target := doc.On.WorkflowDispatch.Inputs.Target
+	if target.Type != "choice" || target.Default != "prod" || !slices.Equal(target.Options, []string{"prod", "dev"}) {
+		t.Errorf("target input = %+v, want choice [prod dev] default prod", target)
+	}
+	if !strings.Contains(doc.RunName, "inputs.target") {
+		t.Errorf("run-name = %q, want it to show inputs.target", doc.RunName)
 	}
 
 	action := doc.On.WorkflowDispatch.Inputs.Action
@@ -160,9 +172,12 @@ func TestWorkflowShape(t *testing.T) {
 			t.Errorf("SSM step must read the endpoint host from /vk-hetzner-lab/bootstrap/route53/fqdn")
 		}
 		fqdnMaskIdx := strings.Index(run, `::add-mask::$fqdn`)
-		endpointIdx := strings.Index(run, "ENDPOINT=https://llm.")
+		endpointIdx := strings.Index(run, "ENDPOINT=https://$HOST_PREFIX.")
 		if fqdnMaskIdx < 0 || endpointIdx < 0 || fqdnMaskIdx >= endpointIdx {
-			t.Errorf("SSM step must mask $fqdn (index %d) before exporting ENDPOINT=https://llm.<fqdn> (index %d)", fqdnMaskIdx, endpointIdx)
+			t.Errorf("SSM step must mask $fqdn (index %d) before exporting ENDPOINT=https://$HOST_PREFIX.<fqdn> (index %d)", fqdnMaskIdx, endpointIdx)
+		}
+		if !strings.Contains(run, "https://$HOST_PREFIX.$fqdn") {
+			t.Errorf("SSM step must build ENDPOINT from HOST_PREFIX")
 		}
 	}
 }

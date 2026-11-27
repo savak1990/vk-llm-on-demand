@@ -1,5 +1,5 @@
 name: gpu-control
-run-name: "gpu-control: ${{ inputs.action }} ${{ inputs.monthly_usd }}"
+run-name: "gpu-control: ${{ inputs.target }} ${{ inputs.action }} ${{ inputs.monthly_usd }}"
 on:
   workflow_dispatch:
     inputs:
@@ -8,13 +8,18 @@ on:
         type: choice
         options: [start, status, stop, budget]
         default: status
+      target:
+        description: Which installation to act on
+        type: choice
+        options: [prod, dev]
+        default: prod
       monthly_usd:
         description: New monthly budget in USD (budget action only; blank shows the current value)
         required: false
         type: string
 permissions: {}
 concurrency:
-  group: gpu-control
+  group: gpu-control-${{ inputs.target }}
   cancel-in-progress: false
 jobs:
   control:
@@ -27,6 +32,7 @@ jobs:
     env:
       ACTION: ${{ inputs.action }}
       MONTHLY_USD: ${{ inputs.monthly_usd }}
+      HOST_PREFIX: ${{ inputs.target == 'dev' && 'llm-dev' || 'llm' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,6 +61,6 @@ jobs:
           echo "::add-mask::$fqdn"
           echo "::add-mask::$value"
           echo "VK_LLM_TOKEN=$value" >> "$GITHUB_ENV"
-          echo "ENDPOINT=https://llm.$fqdn" >> "$GITHUB_ENV"
+          echo "ENDPOINT=https://$HOST_PREFIX.$fqdn" >> "$GITHUB_ENV"
 
       - run: scripts/gpu-control.sh

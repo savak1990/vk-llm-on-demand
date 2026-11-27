@@ -16,7 +16,7 @@ and the rewritten string is no longer valid semver.
 | Event | Version | Published |
 |---|---|---|
 | pull request | — | nothing (CI only) |
-| merge to `main` | `X.Y.Z-main.<sha7>` | image and chart |
+| merge to `main` | `X.Y.Z-main.<run>.g<sha7>` | image and chart |
 | `release` dispatch, bump `<level>` | `X.Y.Z` | image, chart, CLI binaries |
 
 `X.Y.Z` is always the next patch above the last release tag, so a
@@ -30,7 +30,7 @@ real bump (`patch`, `minor`, `major`) only when dispatching `release.yml`.
 never pushed anywhere. Nothing reaches GHCR. `ci.yml` holds no
 `packages: write`, so it cannot publish even by mistake.
 
-**A merge to `main`** runs `deploy.yml`. It computes `X.Y.Z-main.<sha7>`,
+**A merge to `main`** runs `deploy.yml`. It computes `X.Y.Z-main.<run>.g<sha7>`,
 decides whether the Go sources changed, and calls `publish.yml`, which
 pushes the image (rebuilt if Go changed, otherwise copied from the image
 published by the last commit that touched the Go paths — or rebuilt if
@@ -75,7 +75,7 @@ manual, one-time steps follow the first successful `publish.yml` run:
    workflow file exists — a multi-arch push always leaves untagged
    manifests behind, and this setting is what removes them.
 
-A `-main.<sha7>` tag is never deleted automatically; it is a useful record
+A `-main.<run>.g<sha7>` tag is never deleted automatically; it is a useful record
 of what each merge published. The full-SHA tag `publish.yml` also pushes
 on every rebuild names the same manifest and is kept alongside it, not as
 a separate cost. A pull request publishes no artifact to retain.
