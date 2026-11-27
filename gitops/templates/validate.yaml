@@ -4,6 +4,6 @@
 {{- if not .Values.chartVersion }}
 {{ fail "chartVersion is required (the gpu-on-demand chart version to install)" }}
 {{- end }}
-{{- if not .Values.tag }}
-{{ fail "tag is required (the gpu-on-demand image tag to install)" }}
+{{- if not .Values.project }}
+{{ fail "project is required" }}
 {{- end }}

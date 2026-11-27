@@ -11,15 +11,17 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: vk-llm-on-demand
+  project: {{ .Values.project | quote }}
   source:
     repoURL: {{ .Values.charts.registry | quote }}
     chart: gpu-on-demand
     targetRevision: {{ .Values.chartVersion | quote }}
     helm:
       valuesObject:
+        {{- with .Values.tag }}
         image:
-          tag: {{ .Values.tag | quote }}
+          tag: {{ . | quote }}
+        {{- end }}
         host: {{ printf "%s.%s" .Values.hostPrefix .Values.fqdn | quote }}
         existingSecrets:
           provider: {{ .Values.secrets.provider | quote }}
@@ -30,7 +32,7 @@ spec:
             filter:
               gpuName: {{ .Values.gpu | quote }}
           model:
-            alias: {{ .Values.model.alias | quote }}
+            alias: {{ printf "%s%s" .Values.modelAliasPrefix .Values.model.alias | quote }}
             url: {{ .Values.model.url | quote }}
             sha256: {{ .Values.model.sha256 | quote }}
             contextSize: {{ .Values.model.contextSize | int }}
@@ -49,9 +51,13 @@ spec:
         serviceMonitor:
           enabled: true
         prometheusRule:
-          enabled: true
+          enabled: {{ .Values.monitoring.alertRules }}
         dashboard:
+          enabled: {{ .Values.monitoring.dashboard }}
+        {{- if .Values.smokeTest.enabled }}
+        smokeTest:
           enabled: true
+        {{- end }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ .Values.namespace }}

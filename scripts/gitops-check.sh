@@ -55,6 +55,44 @@ appns="$(yq 'select(.kind == "Application") | .metadata.namespace' "$tmp/outer.y
   exit 1
 }
 
+helm template gpu-on-demand gitops "${SET[@]}" -f gitops/values.yaml -f gitops/values-dev.yaml > "$tmp/outer-dev.yaml"
+"${KC[@]}" "$tmp/outer-dev.yaml"
+app='select(.kind == "Application")'
+[ "$(yq "$app | .metadata.namespace" "$tmp/outer-dev.yaml")" = "llm-dev" ] &&
+  [ "$(yq "$app | .spec.destination.namespace" "$tmp/outer-dev.yaml")" = "llm-dev" ] &&
+  [ "$(yq "$app | .spec.project" "$tmp/outer-dev.yaml")" = "vk-llm-on-demand-dev" ] &&
+  [ "$(yq "$app | .spec.source.targetRevision" "$tmp/outer-dev.yaml")" = ">=0.0.0-0" ] || {
+  echo "gitops-check: dev Application must live in llm-dev, project vk-llm-on-demand-dev, targetRevision >=0.0.0-0" >&2
+  exit 1
+}
+[ "$(yq "$app | .spec.project" "$tmp/outer.yaml")" = "vk-llm-on-demand" ] || {
+  echo "gitops-check: production Application must stay in project vk-llm-on-demand" >&2
+  exit 1
+}
+yq "$app | .spec.source.helm.valuesObject" "$tmp/outer-dev.yaml" > "$tmp/values-dev.yaml"
+alias="$(yq '.model.alias' gitops/values.yaml)"
+[ "$(yq '.config.model.alias' "$tmp/values-dev.yaml")" = "dev-$alias" ] &&
+  [ "$(yq '.host' "$tmp/values-dev.yaml")" = "llm-dev.lab.example.com" ] &&
+  [ "$(yq '.smokeTest.enabled' "$tmp/values-dev.yaml")" = "true" ] &&
+  [ "$(yq '.prometheusRule.enabled' "$tmp/values-dev.yaml")" = "false" ] &&
+  [ "$(yq '.dashboard.enabled' "$tmp/values-dev.yaml")" = "false" ] &&
+  [ "$(yq '.image.tag // ""' "$tmp/values-dev.yaml")" = "" ] || {
+  echo "gitops-check: dev values must set alias dev-$alias, host llm-dev.<fqdn>, smoke test on, alerts and dashboard off, no image tag" >&2
+  exit 1
+}
+strip='del(.host, .image, .smokeTest, .prometheusRule, .dashboard, .config.model.alias)'
+diff <(yq -P "$strip" "$tmp/values.yaml") <(yq -P "$strip" "$tmp/values-dev.yaml") || {
+  echo "gitops-check: dev may differ from production only in host, image, alias, smoke test, alerts and dashboard" >&2
+  exit 1
+}
+helm template gpu-on-demand deploy/helm/gpu-on-demand --namespace llm-dev -f "$tmp/values-dev.yaml" > "$tmp/inner-dev.yaml"
+"${KC[@]}" "$tmp/inner-dev.yaml"
+kinds="$(yq -N '.kind' "$tmp/inner-dev.yaml" | sort -u | tr '\n' ' ')"
+[ "$kinds" = "ConfigMap Deployment HTTPRoute Job Role RoleBinding Service ServiceAccount ServiceMonitor " ] || {
+  echo "gitops-check: dev renders kinds '$kinds'" >&2
+  exit 1
+}
+
 helm lint chat "${SET[@]}"
 helm template vk-llm-chat chat --namespace chat "${SET[@]}" > "$tmp/chat.yaml"
 "${KC[@]}" "$tmp/chat.yaml"
