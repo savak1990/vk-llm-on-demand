@@ -96,6 +96,7 @@ func openRental(d *store.Document, in rentalInput) rentalChange {
 	r := store.Rental{
 		Gen: d.Generation, Origin: origin, StartedAt: start,
 		MachineID: o.MachineID, Geo: o.Geo, GPU: o.GPU, DPH: o.DPH, InetDownMbps: o.InetDown,
+		Cache: d.Instance.Cache,
 	}
 	if o.Estimate != nil {
 		r.EstDownloadSeconds, r.ModelBytes = o.Estimate.DownloadSeconds, o.Estimate.ModelBytes

@@ -91,6 +91,7 @@ func dispatchCreate(ctx context.Context, c *Controller, e effCreate) {
 	}
 	key := c.deps.Worker.WorkerKey(seed, c.deps.InstallationID, e.gen)
 	req := c.deps.Worker.BuildCreate(e.offer, e.breakdown.DiskGB, e.label, key)
+	req.Volume = c.volumeAttachFor(ctx, e.gen)
 	id, err := c.deps.Provider.CreateInstance(ctx, req)
 	if err != nil {
 		class := provider.Retryable

@@ -187,8 +187,13 @@ requires pre-initializing every declared combination at startup.
 | `vkllm_cost_estimated_usd_total` | counter | none | Monotonic estimated spend; CORE-100 rolls it forward, never resets it within this process's lifetime (CORE-100 R6) | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 | `vkllm_cost_instance_usd` | gauge | none | Estimated cost of the current instance so far; 0 when no instance exists | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
 | `vkllm_provider_balance_usd` | gauge | none | Last observed Vast.ai account balance (research §1.5) | obs (CORE-050 sets it after the store commit, from CORE-100 values) |
+| `vkllm_cache_lookups_total` | counter | `result`∈{hit,miss} | Offer choices with the model cache on: `hit` links a ready volume, `miss` does not | 180 |
+| `vkllm_cache_volumes` | gauge | `state`∈{seeding,ready,deleting} | Model cache volumes on record, by state | 180 |
+| `vkllm_cache_volumes_deleted_total` | counter | `reason`∈{replaced,over_limit,seed_failed,expired,budget,model_changed,orphan} | Model cache volumes deleted, by the reason they were released | 180 |
+| `vkllm_cache_checksum_mismatch_total` | counter | none | Attached cache volumes whose model file failed the sha256 check and was downloaded again | 180 |
+| `vkllm_cache_delete_failures_total` | counter | none | Failed provider calls to delete a model cache volume | 180 |
 
-43 metric families total; 40 of them register unconditionally, the 3 `vkllm_provider_*` series only when the real Vast.ai provider is wired (see AC6). `vkllm_coldstart_stage_seconds` is pre-initialized to zero for all 8 stages at registration time (R9); only `first_token` is observed with a real duration today, the other 7 stages' instrumentation is out of this spec's scope (see Open questions). The pull interval for the inference metrics is 15 s over
+48 metric families total; 45 of them register unconditionally, the 3 `vkllm_provider_*` series only when the real Vast.ai provider is wired (see AC6). `vkllm_coldstart_stage_seconds` is pre-initialized to zero for all 8 stages at registration time (R9); only `first_token` is observed with a real duration today, the other 7 stages' instrumentation is out of this spec's scope (see Open questions). The pull interval for the inference metrics is 15 s over
 the tunnel while the instance is `Ready` or `Serving` (ADR 0006
 §Consequences: llama-server metrics are pulled and re-exported, never
 scraped directly); the loop itself is CORE-050's.

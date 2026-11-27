@@ -73,6 +73,8 @@ type harness struct {
 	worker *fakeWorker
 	budget Budget
 	reg    *prometheus.Registry
+
+	iid, modelURL string
 }
 
 // buildHarness assembles every dependency without starting the
@@ -90,14 +92,15 @@ func buildHarness(t *testing.T) *harness {
 	RegisterMetrics(reg)
 	store.RegisterMetrics(reg)
 
-	h := &harness{t: t, clk: clk, prov: prov, store: st, dial: newFakeDialerForHarness(), worker: worker, budget: bgt, reg: reg}
+	h := &harness{t: t, clk: clk, prov: prov, store: st, dial: newFakeDialerForHarness(), worker: worker, budget: bgt, reg: reg,
+		iid: "iid", modelURL: "https://example.invalid/model.gguf"}
 
 	ctl, err := New(Deps{
 		Provider: prov, Store: st, Dialer: h.dial, Clock: clk,
 		Budget: bgt, Worker: worker,
 		WorkerSeed:     func() ([]byte, error) { return []byte("seed"), nil },
-		InstallationID: "iid", ModelAlias: "qwen3.6-35b-a3b",
-		ModelSize: modelsize.Fixed(1_000_000_000), ModelURL: "https://example.invalid/model.gguf",
+		InstallationID: h.iid, ModelAlias: "qwen3.6-35b-a3b",
+		ModelSize: modelsize.Fixed(1_000_000_000), ModelURL: h.modelURL,
 		Config: config.Controller{
 			ProvisioningMode: "explicit", MaxHourlyPriceUSD: 0.80,
 			IdleShutdownEnabled: true,
@@ -141,6 +144,27 @@ func newHarness(t *testing.T) *harness {
 	h := buildHarness(t)
 	h.run()
 	return h
+}
+
+// newCacheHarness is newHarness with the model cache on.
+func newCacheHarness(t *testing.T) *harness {
+	h := buildHarness(t)
+	h.ctl.deps.ModelSHA256 = "sha"
+	h.ctl.deps.Config.MaxDownloadPriceUSDPerGB = 0.10
+	h.ctl.deps.Config.Cache = config.CacheConfig{MaxCaches: 1, Retention: 72 * time.Hour, PreferThreshold: 0.15, MaxStoragePriceUSDPerGBMonth: 0.40}
+	h.run()
+	return h
+}
+
+// putDoc edits the stored document in place, keeping what recover wrote.
+func (h *harness) putDoc(edit func(*store.Document)) {
+	h.t.Helper()
+	doc, _, err := h.store.Load(context.Background())
+	if err != nil {
+		h.t.Fatalf("putDoc: Load: %v", err)
+	}
+	edit(&doc)
+	h.store.Put(doc)
 }
 
 // Settle advances the fake clock to upTo, running every due timer and
@@ -2154,5 +2178,76 @@ func TestRentalRecordFailedStatus(t *testing.T) {
 	r := doc.Rentals[0]
 	if r.Gen != 1 || r.Outcome != "failed_status" || r.ReadyAt != nil || r.EndedAt == nil {
 		t.Fatalf("record = %+v, want gen 1, failed_status, no readyAt, endedAt set", r)
+	}
+}
+
+func TestCacheMissSeedsThenReady(t *testing.T) {
+	h := newCacheHarness(t)
+	h.prov.SetOffers(provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S", InetDownMbps: 2400})
+	h.prov.SetVolumeOffers(provider.VolumeOffer{ID: 900, MachineID: 42, StoragePerGBMonth: provider.FromUSD(0.30), DiskSpaceGB: 500})
+	h.prov.SetStatusSequence(provider.InstanceID(1), provider.StatusOther, provider.StatusOther)
+	h.worker.SetProbeSequence(ProbeUnreachable, ProbeUnreachable, ProbeLoading, ProbeLoading, ProbeLoading, ProbeReady)
+	beforeMiss := testutil.ToFloat64(cacheLookupsTotal.WithLabelValues("miss"))
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	h.Settle(t0)
+	req := h.prov.LastCreate()
+	if req.Volume == nil || !req.Volume.CreateNew || req.Volume.ID != 900 || req.Volume.MountPath != "/models" || req.Volume.Name != volumeLabel(h.iid, 1) {
+		t.Fatalf("create volume = %+v", req.Volume)
+	}
+	if got := counterDelta(cacheLookupsTotal.WithLabelValues("miss"), beforeMiss); got != 1 {
+		t.Fatalf("cache_lookups_total{miss} delta = %v, want 1", got)
+	}
+	h.Settle(t0.Add(40 * time.Second))
+	doc, _, _ := h.store.Load(context.Background())
+	if doc.Cache == nil || len(doc.Cache.Volumes) != 1 || doc.Cache.Volumes[0].State != store.CacheReady || doc.Instance.Cache != "seeded" {
+		t.Fatalf("after READY cache = %+v instance cache %q", doc.Cache, doc.Instance.Cache)
+	}
+	if got := testutil.ToFloat64(cacheVolumesGauge.WithLabelValues(store.CacheReady)); got != 1 {
+		t.Fatalf("cache_volumes{ready} = %v, want 1", got)
+	}
+	storage := 0
+	for _, e := range doc.Ledger.Entries {
+		if e.Volume == volumeLabel(h.iid, 1) && e.End == nil {
+			storage++
+		}
+	}
+	if storage != 1 {
+		t.Fatalf("open storage entries = %d, want 1", storage)
+	}
+}
+
+func TestCacheHitLinksVolume(t *testing.T) {
+	h := newCacheHarness(t)
+	vid := h.prov.AddVolume(provider.Volume{Label: volumeLabel(h.iid, 0) + "9", MachineID: 42, SizeGB: 34})
+	exp := h.clk.Now().Add(48 * time.Hour)
+	h.putDoc(func(d *store.Document) {
+		d.Cache = &store.CacheState{Volumes: []store.CacheVolume{{Label: volumeLabel(h.iid, 0) + "9", VolumeID: int64(vid), MachineID: 42,
+			ModelURL: h.modelURL, SHA256: "sha", SizeGB: 34, StorageUSDPerGBMonth: 0.30, State: store.CacheReady, ExpiresAt: &exp}}}
+	})
+	h.prov.SetOffers(
+		provider.Offer{ID: 11, MachineID: 42, Hourly: 600000, GPUName: "L40S", InetDownMbps: 2400, DownloadPerGB: provider.FromUSD(0.04)},
+		provider.Offer{ID: 12, MachineID: 43, Hourly: 580000, GPUName: "L40S", InetDownMbps: 2400, DownloadPerGB: provider.FromUSD(0.04)},
+	)
+	beforeHit := testutil.ToFloat64(cacheLookupsTotal.WithLabelValues("hit"))
+	t0 := h.clk.Now().Add(time.Second)
+	h.Settle(t0)
+	if _, err := h.ctl.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	h.Settle(t0)
+	req := h.prov.LastCreate()
+	if req.OfferID != 11 || req.Volume == nil || req.Volume.CreateNew || req.Volume.ID != int64(vid) {
+		t.Fatalf("create = offer %d volume %+v; want offer 11 linking %d", req.OfferID, req.Volume, vid)
+	}
+	if got := counterDelta(cacheLookupsTotal.WithLabelValues("hit"), beforeHit); got != 1 {
+		t.Fatalf("cache_lookups_total{hit} delta = %v, want 1", got)
+	}
+	doc, _, _ := h.store.Load(context.Background())
+	if v := doc.Cache.Volumes[0]; v.InUseGen != 1 || v.ExpiresAt != nil || doc.Instance.Cache != "hit" {
+		t.Fatalf("after hit volume = %+v instance cache %q", v, doc.Instance.Cache)
 	}
 }
