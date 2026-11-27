@@ -1,6 +1,6 @@
 ---
 id: "CORE-280"
-status: "READY"
+status: "DONE"
 updated: "2026-11-27"
 depends_on: ["CORE-120", "CORE-130", "CORE-160", "CORE-220", "CORE-230"]
 adrs: ["0021", "0008", "0009", "0012", "0020"]
@@ -8,9 +8,11 @@ adrs: ["0021", "0008", "0009", "0012", "0020"]
 
 # 280 — A dev environment that follows `main`
 
-**Status note:** READY (2026-11-27). A CI `helm upgrade` design (2026-11-23)
-was implemented, reviewed and withdrawn before merge; this Argo CD design
-replaced it after a spike (Evidence). Decisions are in
+**Status note:** DONE (2026-11-27). Merged as PR #71 with the platform half
+in vk-lab-platform#125 (SHARED-220); released as v0.4.2 and promoted in
+PR #73; live checks recorded under Evidence. A CI `helm upgrade` design
+(2026-11-23) was implemented, reviewed and withdrawn before merge (#57,
+vk-lab-platform#122); this Argo CD design replaced it after a spike. Decisions are in
 [ADR 0021](../../../docs/adr/0021-installations-are-argo-applications-from-one-chart.md).
 The platform half lands in `vk-lab-platform` as SHARED-220.
 
@@ -238,3 +240,35 @@ a `dev-` alias; a platform installation list.
   without a refresh and under 5 s with one. An all-digit sha with a leading
   zero made `helm package` fail ("version segment starts with 0"). Today's
   GHCR tags resolve to the highest sha text, not the newest build.
+- Rollout 2026-11-27, in order: vk-lab-platform#125 merged, then #71;
+  `make argo-up` (the first run used a platform checkout from before #125
+  and changed nothing; the re-run moved the Argo release to revision 2 with
+  `application.namespaces` `ahorro,llm,llm-dev`, chart 10.4.0); v0.4.2 cut
+  (release run 45977659466); #73 pinned only `chartVersion: "0.4.2"`.
+- AC1: `make gitops-check` → `ok (chart 0.4.2)`; the dev render's
+  differences and kind list are asserted there (CI on #71 and #73).
+- AC2: `test/version` `TestMainVersionHasRunAndPrefixedSha` and
+  `TestHelmAcceptsAllDigitSha` (`0.4.2-main.57.g0123456` packages).
+- AC3: before the release the dev Application showed the expected
+  ComparisonError (`/image/tag minLength`) on an old-format build; after it,
+  `llm-dev/gpu-on-demand` was Synced/Healthy at `0.4.2`, operation
+  Succeeded, image `gpu-on-demand:0.4.2` (`Always`), and the PostSync Job
+  `gpu-on-demand-smoke` completed: `GET /v1/models 200`,
+  `GET /api/v1/gpu/status 200`, `GET /api/v1/gpu/cost 200`.
+- AC4: platform golden diff for production's objects was comment-only plus
+  the explicit `valueFiles: [values.yaml]` (reviewed in #125); after the
+  merge production `llm/gpu-on-demand` stayed Synced/Healthy.
+- AC5: `gpu-control` `action=status target=dev` (run 45978829613):
+  `state=STOPPED gpu=n/a model=dev-inkling-2-mini budgetMonthUSD=30
+  estimatedMonthUSD=0` — the deploy rented nothing.
+- AC6: from inside the Open WebUI pod, with its own `OPENAI_API_BASE_URLS`
+  and `OPENAI_API_KEYS` (2 URLs, 2 keys): production `200
+  ['inkling-2-mini']`, dev `200 ['dev-inkling-2-mini']`;
+  `DEFAULT_MODELS=inkling-2-mini`, `TASK_MODEL_EXTERNAL` unset. The model
+  dropdown itself was not inspected in a browser.
+- AC7: `gpu-control` `action=status target=prod` (run 45978959306):
+  `state=READY gpu=RTX 6000Ada model=inkling-2-mini`; that GPU had started
+  before the promotion and kept running through the controller restart.
+- Production after #73: `llm/gpu-on-demand` 0.4.2 Synced/Healthy, image
+  `gpu-on-demand:0.4.2`, pod 1/1. Seen, not caused by this work: the
+  controller logs `worker: /metrics returned status 401` while a GPU runs.
