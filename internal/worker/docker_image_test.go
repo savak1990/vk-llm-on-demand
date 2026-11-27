@@ -16,9 +16,9 @@ import (
 	"time"
 )
 
-// Pinned 2026-11-03; recorded in the spec's Evidence section.
+// Pinned 2026-11-27; the CPU twin of the worker's server-cuda build.
 const (
-	realImage      = "ghcr.io/ggml-org/llama.cpp@sha256:d5ffba7d096ab0236c65dc147d797b4b7658a7e5425634593373635d661bccda"
+	realImage      = "ghcr.io/ggml-org/llama.cpp@sha256:535b0b2eb8e184668698ebe8204f86ed5e57825965fc5b81b9992c556822e6b9"
 	tinyModelURL   = "https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K.gguf"
 	tinyModelSHA   = "270cba1bd5109f42d03350f60406024560464db173c0e387d91f0426d3bd256d"
 	realTestAlias  = "test-alias"
