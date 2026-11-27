@@ -18,7 +18,7 @@ import (
 const (
 	pollInterval       = 5 * time.Second
 	defaultStopTimeout = 5 * time.Minute
-	volumeGrace        = 2 * time.Minute
+	volumeGrace        = 3 * time.Minute
 )
 
 // run is the only seam between main and the rest of the CLI: tests pass a
@@ -72,6 +72,10 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 	if sub == "version" {
 		return cmdVersion(stdout)
 	}
+	if sub == "stop-all" && *forceFlag {
+		_, _ = fmt.Fprintln(stderr, "stop-all does not take --force")
+		return 2
+	}
 	switch sub {
 	case "start", "status", "stop", "stop-all", "budget", "rentals":
 	default:
@@ -105,7 +109,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, c 
 	case "stop":
 		return cmdStop(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag, *forceFlag)
 	case "stop-all":
-		return cmdStopAll(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag, *forceFlag)
+		return cmdStopAll(cl, c, stdout, stderr, *timeoutFlag, detach, *jsonFlag)
 	case "budget":
 		return cmdBudget(cl, stdout, stderr, subArgs, *jsonFlag)
 	case "rentals":
@@ -200,7 +204,7 @@ func cmdStart(cfg Config, c *client, clk clock.Clock, stdout, stderr io.Writer, 
 			wait = pollInterval
 		}
 		if !clk.Now().Before(deadline) {
-			printTimeout(stderr, timeout, last)
+			printTimeout(stderr, timeout, last, "stop")
 			return 1
 		}
 
@@ -267,7 +271,7 @@ func cmdStop(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr st
 			wait = pollInterval
 		}
 		if !clk.Now().Before(deadline) {
-			printTimeout(stderr, timeout, last)
+			printTimeout(stderr, timeout, last, "stop")
 			return 1
 		}
 
@@ -293,7 +297,7 @@ func cmdStop(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr st
 
 // cmdStopAll waits for the GPU within timeout, then up to volumeGrace more
 // until the status document lists no cache volume.
-func cmdStopAll(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr string, detach, jsonOut, force bool) int {
+func cmdStopAll(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr string, detach, jsonOut bool) int {
 	timeout, ok := parseTimeout(stderr, timeoutStr, defaultStopTimeout)
 	if !ok {
 		return 2
@@ -301,7 +305,7 @@ func cmdStopAll(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr
 	start := clk.Now()
 
 	ctx := context.Background()
-	res, code, err := c.stop(ctx, force, true)
+	res, code, err := c.stop(ctx, false, true)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return code
@@ -342,7 +346,7 @@ func cmdStopAll(c *client, clk clock.Clock, stdout, stderr io.Writer, timeoutStr
 		now := clk.Now()
 		switch {
 		case res.doc.State != "STOPPED" && !now.Before(start.Add(timeout)):
-			printTimeout(stderr, timeout, res.doc.State)
+			printTimeout(stderr, timeout, res.doc.State, "stop-all")
 			return 1
 		case !now.Before(start.Add(timeout + volumeGrace)):
 			_, _ = fmt.Fprintf(stderr, "timed out after %s with %s left\n", timeout+volumeGrace, cacheVolumes(len(res.doc.CacheVolumes)))
@@ -432,9 +436,9 @@ func printProgress(stderr io.Writer, clk clock.Clock, tr *progress.Tracker, doc 
 	}
 }
 
-func printTimeout(stderr io.Writer, timeout time.Duration, state string) {
+func printTimeout(stderr io.Writer, timeout time.Duration, state, stopCmd string) {
 	_, _ = fmt.Fprintf(stderr, "timed out after %s in state %s\n", timeout, state)
-	_, _ = fmt.Fprintln(stderr, "the GPU is not stopped; run vk-llm stop, or it stops after its idle timeout")
+	_, _ = fmt.Fprintf(stderr, "the GPU is not stopped; run vk-llm %s, or it stops after its idle timeout\n", stopCmd)
 }
 
 // retryWait decides how long to wait before the next poll after a non-fatal

@@ -1,6 +1,7 @@
 package mgmt
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -268,9 +269,31 @@ func TestStopReleaseCache(t *testing.T) {
 		t.Fatalf("refused force: code = %d, release %d; want 400 and no release", rec.Code, fc.Calls("release"))
 	}
 
+	if rec := doReq(s, "POST", "/api/v1/gpu/stop", `{"releaseCache":"yes"}`); rec.Code != 400 || fc.Calls("release") != 2 ||
+		!strings.Contains(rec.Body.String(), "invalid_json") {
+		t.Fatalf(`{"releaseCache":"yes"}: code = %d, release %d, body %s; want 400 invalid_json`, rec.Code, fc.Calls("release"), rec.Body)
+	}
+
 	fc.releaseErr = errors.New("store down")
-	if rec := doReq(s, "POST", "/api/v1/gpu/stop", `{"releaseCache":true}`); rec.Code != 500 {
-		t.Fatalf("release error: code = %d, want 500", rec.Code)
+	rec = doReq(s, "POST", "/api/v1/gpu/stop", `{"releaseCache":true}`)
+	if rec.Code != 500 || !strings.Contains(rec.Body.String(), "stop accepted; cache release failed") {
+		t.Fatalf("release error: code = %d, body %s; want 500 naming the accepted stop", rec.Code, rec.Body)
+	}
+}
+
+func TestStopReleaseCacheOutlivesClientDisconnect(t *testing.T) {
+	fc := newFakeController()
+	fc.stopSnap = controller.Snapshot{Public: "DRAINING"}
+	s := newTestServer(t, fc)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest("POST", "/api/v1/gpu/stop", strings.NewReader(`{"releaseCache":true}`)).WithContext(ctx)
+	s.mux.ServeHTTP(httptest.NewRecorder(), req)
+	if fc.Calls("release") != 1 || fc.releaseCtxErr != nil {
+		t.Fatalf("release calls %d ctx err %v; want 1 call on a live context", fc.Calls("release"), fc.releaseCtxErr)
+	}
+	if _, ok := fc.releaseDeadline(); !ok {
+		t.Fatal("release context has no deadline; want a bounded write")
 	}
 }
 

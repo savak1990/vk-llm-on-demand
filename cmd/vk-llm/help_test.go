@@ -27,6 +27,10 @@ func TestHelpStopAll(t *testing.T) {
 		!strings.Contains(stopAllHelp, "vk-llm budget set 0.01") || !strings.Contains(stopAllHelp, "config.cache.maxCaches: 0") {
 		t.Fatalf("stop-all help lost its content:\n%s", stopAllHelp)
 	}
+	if strings.Contains(stopAllHelp, "--force") || !strings.Contains(stopAllHelp, "  # Release everything, do not wait:\n  vk-llm stop-all --detach\n") ||
+		!strings.Contains(stopAllHelp, "the volumes get 3 more minutes.") {
+		t.Fatalf("stop-all help must drop --force, show the detach example and the 3-minute window:\n%s", stopAllHelp)
+	}
 	for i, line := range strings.Split(stopAllHelp, "\n") {
 		if len(line) > 80 {
 			t.Errorf("line %d is %d columns: %q", i+1, len(line), line)
@@ -57,6 +61,9 @@ func TestHelpOtherCommand(t *testing.T) {
 		if code != 0 || out != want {
 			t.Fatalf("%v: exit %d stdout %q, want %q", args, code, out, want)
 		}
+	}
+	if _, out, _ := runHelp(t, "help", "stop"); !strings.Contains(out, "  vk-llm stop [--force] [--detach]") {
+		t.Fatalf("help stop = %q, want --force in its usage", out)
 	}
 	if code, _, errOut := runHelp(t, "help", "frobnicate"); code != 2 || !strings.Contains(errOut, "unknown subcommand: frobnicate") {
 		t.Fatalf("help frobnicate: exit %d stderr %q, want 2", code, errOut)

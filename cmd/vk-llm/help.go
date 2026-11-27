@@ -10,8 +10,8 @@ const usageLine = "usage: vk-llm <start|status|stop|stop-all|budget|rentals|vers
 var commands = []struct{ name, usage, summary string }{
 	{"start", "vk-llm start [--detach] [--timeout <duration>] [--json]", "rent a GPU and wait until the model is ready"},
 	{"status", "vk-llm status [--json]", "show the GPU state, cost and idle shutdown"},
-	{"stop", "vk-llm stop [--detach] [--timeout <duration>] [--json]", "finish the requests in flight and release the GPU"},
-	{"stop-all", "vk-llm stop-all [--force] [--detach] [--timeout <duration>] [--json]", "stop the GPU and delete every cache volume"},
+	{"stop", "vk-llm stop [--force] [--detach] [--timeout <duration>] [--json]", "finish the requests in flight and release the GPU"},
+	{"stop-all", "vk-llm stop-all [--detach] [--timeout <duration>] [--json]", "stop the GPU and delete every cache volume"},
 	{"budget", "vk-llm budget [set <amount>] [--json]", "show the monthly budget and spend, or set the budget"},
 	{"rentals", "vk-llm rentals [--json]", "list the GPU rentals with their stage times"},
 	{"version", "vk-llm version", "print the CLI version"},
@@ -21,7 +21,7 @@ var commands = []struct{ name, usage, summary string }{
 const stopAllHelp = `vk-llm stop-all - stop the GPU and release every cache volume
 
 Usage:
-  vk-llm stop-all [--force] [--detach] [--timeout <duration>] [--json]
+  vk-llm stop-all [--detach] [--timeout <duration>] [--json]
 
 Stops a running GPU the same way as ` + "`vk-llm stop`" + ` (it finishes the requests in
 flight first), then deletes every model cache volume on Vast.ai, including the
@@ -33,11 +33,9 @@ create a new cache volume. To stay at zero spend:
   - run ` + "`vk-llm budget set 0.01`" + ` (no new starts until you raise it again).
 
 Flags:
-  --force            Skip the drain and cut requests in flight
-                     (only if the installation allows a forced stop).
   --detach           Return after the request; do not wait.
   --timeout <dur>    How long to wait for the GPU to stop (default as for stop);
-                     the volumes get 2 more minutes.
+                     the volumes get 3 more minutes.
   --json             Print the final status document as JSON.
 
 Examples:
@@ -47,8 +45,8 @@ Examples:
   # The same against the dev installation:
   vk-llm --config ~/.config/vk-llm/dev.yaml stop-all
 
-  # Cut requests in flight, do not wait:
-  vk-llm stop-all --force --detach
+  # Release everything, do not wait:
+  vk-llm stop-all --detach
 
   # Release everything, then block new starts until you raise the budget:
   vk-llm stop-all && vk-llm budget set 0.01

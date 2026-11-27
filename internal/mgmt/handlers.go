@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/savak1990/vk-llm-on-demand/internal/controller"
 )
@@ -57,16 +58,19 @@ func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.stop.do(r.Context(), func(ctx context.Context) (controller.Snapshot, error) {
 		return s.d.Controller.Stop(ctx, req.Force)
 	})
-	// Outside the coalescer, so a release joined to a plain stop still runs.
+	// Outside the coalescer, so a release joined to a plain stop still runs;
+	// detached from the request so a client hanging up cannot cancel the write.
 	if err == nil && req.ReleaseCache {
-		n, relErr := s.d.Controller.ReleaseCache(r.Context())
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
+		n, relErr := s.d.Controller.ReleaseCache(ctx)
+		cancel()
 		if relErr != nil {
-			err = relErr
-		} else {
-			snap.CacheVolumes = s.d.Controller.Status().CacheVolumes
-			if s.d.Log != nil {
-				s.d.Log.Info("mgmt: cache release requested", "key_id", keyIDFrom(r), "volumes", n)
-			}
+			writeError(w, http.StatusInternalServerError, "internal_error", "stop accepted; cache release failed", "")
+			return
+		}
+		snap.CacheVolumes = s.d.Controller.Status().CacheVolumes
+		if s.d.Log != nil {
+			s.d.Log.Info("mgmt: cache release requested", "key_id", keyIDFrom(r), "volumes", n)
 		}
 	}
 	s.respondOp(w, "stop", snap, err)
