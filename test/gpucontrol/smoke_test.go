@@ -11,7 +11,10 @@ import (
 const smokeClientKey = "client-key-xyz789"
 
 func smokePath(t *testing.T) string {
-	wd, _ := os.Getwd()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
 	return filepath.Join(wd, "..", "..", "deploy", "helm", "gpu-on-demand", "files", "smoke.sh")
 }
 
@@ -113,6 +116,25 @@ func TestSmokeTokensNeverInArgv(t *testing.T) {
 		if strings.Contains(string(argv), s) {
 			t.Error("curl argv contains a token")
 		}
+	}
+}
+
+func TestSmokeSkipsBlankLinesAndCRLF(t *testing.T) {
+	f := newFake(t)
+	scriptAllOK(f)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "client-keys"), []byte("\r\n"+smokeClientKey+"\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "management-tokens"), []byte("test-token-abc123\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := runPath(t, smokePath(t), smokeEnv(t, f, map[string]string{"KEYS_DIR": dir}))
+	if r.exitCode != 0 {
+		t.Fatalf("exit = %d, stderr = %s", r.exitCode, r.stderr)
+	}
+	if c := f.callLog("GET /v1/models"); len(c) != 1 || c[0].authHeader != "Bearer "+smokeClientKey {
+		t.Errorf("models calls = %+v, want one with %q", c, "Bearer "+smokeClientKey)
 	}
 }
 

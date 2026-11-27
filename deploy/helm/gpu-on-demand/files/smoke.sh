@@ -8,8 +8,8 @@ interval="${SMOKE_INTERVAL:-10}"
 max_wait="${SMOKE_MAX_WAIT:-300}"
 BASE="${BASE%/}"
 
-client="$(head -n 1 "$KEYS_DIR/client-keys" 2>/dev/null || true)"
-mgmt="$(head -n 1 "$KEYS_DIR/management-tokens" 2>/dev/null || true)"
+client="$(cat "$KEYS_DIR/client-keys" 2>/dev/null | sed 's/\r$//' | awk 'NF{print $1; exit}' || true)"
+mgmt="$(cat "$KEYS_DIR/management-tokens" 2>/dev/null | sed 's/\r$//' | awk 'NF{print $1; exit}' || true)"
 if [ -z "$client" ] || [ -z "$mgmt" ]; then
   echo "smoke: no client key or management token under $KEYS_DIR" >&2
   exit 1
