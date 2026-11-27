@@ -63,6 +63,73 @@ func TestDispatchSearchFindsOffer(t *testing.T) {
 	}
 }
 
+func TestDispatchSearchLogsOfferChoice(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	logs := captureLog(c)
+	// Cache.MaxCaches stays 0 (newTestController's default), so the rule
+	// is deterministically "cheapest" and every offer is cache_disabled.
+	offers := make([]provider.Offer, 0, 7)
+	for i := int64(1); i <= 7; i++ {
+		offers = append(offers, provider.Offer{ID: i, MachineID: i * 10, Hourly: provider.FromUSD(0.30 + float64(i)*0.01), InetDownMbps: 1000})
+	}
+	prov.SetOffers(offers...)
+
+	dispatchSearch(context.Background(), c, effSearch{filter: provider.OfferFilter{MaxHourly: provider.FromUSD(10)}})
+	if ev, ok := recvEvent(t, c); !ok || ev.Kind != EvOfferChosen {
+		t.Fatalf("event = %+v, ok=%v, want EvOfferChosen", ev, ok)
+	}
+
+	lines := logs.lines("offer_choice")
+	if len(lines) != 1 {
+		t.Fatalf("offer_choice lines = %q, want exactly 1", lines)
+	}
+	line := lines[0]
+	for _, want := range []string{"rule=cheapest ", "chosen.id=1 ", "chosen.plan=none", "gen_next=1 "} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("offer_choice line missing %q: %s", want, line)
+		}
+	}
+	if strings.Contains(line, "top.5.") {
+		t.Fatalf("offer_choice line lists more than 5 others: %s", line)
+	}
+	for _, want := range []string{"top.0.id=2 ", "top.4.id=6 "} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("offer_choice line missing %q: %s", want, line)
+		}
+	}
+}
+
+func TestDispatchSearchLogsOfferChoiceCompareAndSeedableCache(t *testing.T) {
+	c, prov, _, _, _ := newTestController(t)
+	logs := captureLog(c)
+	c.deps.Config.Cache.MaxCaches = 1
+	c.deps.Config.Cache.PreferThreshold = 0.15
+	c.deps.Config.Cache.Retention = 730 * time.Hour
+	c.deps.Config.Cache.MaxStoragePriceUSDPerGBMonth = 0.40
+	prov.SetOffers(
+		provider.Offer{ID: 1, MachineID: 10, Hourly: provider.FromUSD(0.30), InetDownMbps: 1000},
+		provider.Offer{ID: 2, MachineID: 20, Hourly: provider.FromUSD(0.40), InetDownMbps: 1000},
+	)
+	prov.SetVolumeOffers(provider.VolumeOffer{ID: 500, MachineID: 20, StoragePerGBMonth: provider.FromUSD(0.20), DiskSpaceGB: 100})
+
+	dispatchSearch(context.Background(), c, effSearch{filter: provider.OfferFilter{MaxHourly: provider.FromUSD(10)}})
+	if ev, ok := recvEvent(t, c); !ok || ev.Kind != EvOfferChosen || ev.Offer.ID != 1 {
+		t.Fatalf("event = %+v, ok=%v, want EvOfferChosen for offer 1", ev, ok)
+	}
+
+	lines := logs.lines("offer_choice")
+	if len(lines) != 1 {
+		t.Fatalf("offer_choice lines = %q, want exactly 1", lines)
+	}
+	line := lines[0]
+	t.Logf("offer_choice line: %s", line)
+	for _, want := range []string{"rule=unseedable_cheaper ", "compare.pref_usd=", "compare.other_usd=", "compare.threshold=0.15", "top.0.cache=seedable", "top.0.cache_volume_offer_id=500"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("offer_choice line missing %q: %s", want, line)
+		}
+	}
+}
+
 func TestDispatchSearchNoOffer(t *testing.T) {
 	c, _, _, _, _ := newTestController(t)
 	dispatchSearch(context.Background(), c, effSearch{})
