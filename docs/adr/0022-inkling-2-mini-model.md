@@ -3,8 +3,9 @@
 ## Status
 
 Accepted (2026-11-27). Supersedes decision 2 (the model), the alias in
-decision 5, and decision 6 (reasoning control) of ADR 0002. ADR 0002's
-runtime, arguments, readiness contract and the gateway's 404 for any other
+decision 5, and decision 6 (reasoning control) of ADR 0002, and raises
+decision 1's build floor (Decision 3 below). ADR 0002's image choice,
+arguments, readiness contract and the gateway's 404 for any other
 `model` stay.
 
 ## Context

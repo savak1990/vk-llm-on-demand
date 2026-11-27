@@ -49,7 +49,7 @@ updated.
 | Q39 | Does OpenCode retry on a 503 without `Retry-After`, and how does it surface the `backend_unavailable` message to the user? | explicit-mode UX | 140 | documented in the OpenCode section of the README after one manual run |
 | Q40 | Vast `volume_info` attach semantics and whether a volume can be attached to an instance created from a different offer on the same machine | P2 cache (ADR 0014) | 180 | not needed for the initial release |
 | Q17 | Is an ARM build of the control-plane image needed at all? | pipeline cost | settled by 120: multi-arch kept | — |
-| Q41 | Real VRAM use of Inkling 2 Mini Q8_0 with 4 × 131072 tokens of q8_0 KV on an RTX 6000 Ada | `contextSize` and `parallel` in `gitops/values.yaml` | first prod start after ADR 0022 | estimate ≈ 38 GB (research §9); lower `parallel` to 2 if a start runs out of memory |
+| Q41 | Real VRAM use of Inkling 2 Mini Q8_0 with 4 × 131072 tokens of q8_0 KV on an RTX 6000 Ada | `contextSize` and `parallel` in `gitops/values.yaml` | first prod start after ADR 0022 | estimate ≈ 38 GB incl. ≈ 1.5 GB buffers (research §9); lower `parallel` to 2 if a start runs out of memory |
 
 ## 2. Risk register
 

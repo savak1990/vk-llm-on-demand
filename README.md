@@ -345,7 +345,7 @@ GPU before relying on them. For the lab's `Inkling 2 Mini` Q8_0 model
 reserved context; `config.model.kCacheType` and `config.model.vCacheType`
 shrink that: `q8_0` is about 53% of the `f16` size, `q4_0` about 28%. Four
 sessions of 131072 tokens each (`contextSize: 131072`, `parallel: 4`) with
-`q8_0` comes to roughly 27.8 + 8.5 + 1.5 ≈ 38 GB on a 48 GB GPU. The K cache
+`q8_0` comes to roughly 27.8 + 9 + 1.5 ≈ 38 GB on a 48 GB GPU. The K cache
 is more sensitive to quantization than the V
 cache: `kCacheType: q4_0` hurts quality the most of the three settings; if
 you need to go below `q8_0`, quantize `vCacheType` first.
