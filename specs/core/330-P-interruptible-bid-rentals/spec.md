@@ -102,10 +102,22 @@ turning bids on in prod (an operator values change after the dev review).
 
 ### Interruption after Ready
 
-- Reconcile and the Booting/Loading poll see `StatusInterrupted`. One
-  observation is enough for this status (the two-observation rule guards
-  against flaky absences, and `stopped` with `intended_status=running` is
-  explicit).
+- The first event is usually a dropped tunnel, not a status: Vast stops
+  the container, the stream read fails (`upstream_error`, then
+  `ReportUpstreamFailure`), and suspect probes lead to `EvWorkerFailed`
+  within seconds, long before the 60 s reconcile sees `stopped`.
+- So for a bid instance, an upstream read error, a link loss or
+  `EvWorkerFailed` makes the controller call `GetInstance` once. If it
+  returns `StatusInterrupted`, the loss is handled as an interruption
+  (below); otherwise today's path runs unchanged.
+- Loading has the same rule: `effGet` polls only in Creating and Booting,
+  so an interruption during the download is found through the link loss
+  and this check, not by waiting for the 15 min startup timeout (which
+  would also denylist the machine).
+- Reconcile and the Creating/Booting poll also map `StatusInterrupted`.
+  One observation is enough for this status (the two-observation rule
+  guards against flaky absences, and `stopped` with
+  `intended_status=running` is explicit).
 - Transition: Ready/Serving → Destroying, desired `STOPPED`, op
   `interrupted`. The ledger entry and rental record close with outcome
   `interrupted`.
@@ -180,9 +192,12 @@ turning bids on in prod (an operator values change after the dev review).
   within 10 s, then (attempts 1, fallback true) an on-demand create.
 - AC4. With fallback false, the same case ends the start with
   `bid_unavailable` after one create.
-- AC5. The same status after Ready ends a held stream with
-  `gpu_interrupted`, destroys the instance, writes `STOPPED`, and creates
-  nothing until a new request arrives.
+- AC5. After Ready, the fake tunnel drops during a held stream and the
+  next `GetInstance` reports the interrupted status: the stream ends with
+  `gpu_interrupted`, the instance is destroyed, `STOPPED` is written, and
+  nothing is created until a new request arrives. The same drop in
+  Loading reaches Destroying with op `interrupted` within 15 s, not at the
+  startup timeout.
 - AC6. Four creates in one hour return `attempts_exhausted` in bid mode
   too.
 - AC7. On `llm-dev`, one real bid start reaches Ready; the Vast.ai billing
@@ -204,7 +219,18 @@ status DONE and folder renamed to `330-D-`.
 - Q3. How often does an interruption happen on RTX 6000 Ada? Answered by
   `vkllm_interruptions_total` after two weeks on dev; the operator decides
   on prod from it.
-- Q4. Bid floors for RTX PRO 6000 and H100 were $0.63 to $0.81/h on
+- Q4. Can the gateway wait about 1 s for the `GetInstance` check before
+  it writes the error tail? If not, the tail stays `upstream_error` and
+  only the op, record and metric say `interrupted`. Answered in the
+  implementation plan.
+- Q5. No client retries by itself after a streamed answer fails
+  mid-stream (Open WebUI and OpenCode show the error); the user sends the
+  message again, and that request starts the new GPU. Is that enough, or
+  does a client need an automatic resend?
+- Q6. Not yet agreed with the operator: `Retry-After: 10`, the
+  one-observation rule for `stopped`, the codes `gpu_interrupted` and
+  `bid_unavailable`, the two metrics, and leaving out bid-only offers.
+- Q7. Bid floors for RTX PRO 6000 and H100 were $0.63 to $0.81/h on
   2026-11-27, inside the $0.80 cap. Allowing other GPUs in bid mode is a
   separate decision.
 

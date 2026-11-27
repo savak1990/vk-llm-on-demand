@@ -56,7 +56,8 @@ Measured on the lab, 2026-11-27, gateway and Open WebUI logs:
   WebUI's one key.
 - Open WebUI has two connections, prod and `llm-dev`, and called **both**
   gateways at the same moments. A naive trigger starts two GPUs.
-- One call (10:05:03) had no browser request behind it: a background call.
+- One call (10:05:03) had no browser request behind it: probably a
+  background call (not verified; the gateway does not log headers).
 
 From the v0.13.4 source:
 
