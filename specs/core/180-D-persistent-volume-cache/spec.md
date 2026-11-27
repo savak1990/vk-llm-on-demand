@@ -17,14 +17,14 @@ $1.12 download fee. The answers V2 to V9 are written into the sections below.
 The operator decided the two questions from the spike on 2026-11-26: offers
 that can start a cache are preferred within the same 15 % threshold, and
 the storage price cap is $0.40/GB-month.
-[CORE-310](../310-A-cold-start-recording/spec.md) comes first, because it
+[CORE-310](../310-D-cold-start-recording/spec.md) comes first, because it
 gives the rental records that this spec extends.
 
 **Complexity:** M
 **Risk:** medium — a forgotten volume bills with nothing using it; a wrong attach serves stale weights
 **Estimated effort:** 1 to 2 days after CORE-320
 **Recommended model:** standard
-**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-A-cold-start-recording/spec.md), [CORE-320](../320-D-vast-volume-spike/spec.md)
+**Depends on:** [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-D-cold-start-recording/spec.md), [CORE-320](../320-D-vast-volume-spike/spec.md)
 
 ## Problem
 

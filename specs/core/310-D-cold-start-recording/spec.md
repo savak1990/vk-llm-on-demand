@@ -1,6 +1,6 @@
 ---
 id: "CORE-310"
-status: "IN_PROGRESS"
+status: "DONE"
 updated: "2026-11-26"
 depends_on: ["CORE-040", "CORE-050", "CORE-055", "CORE-090", "CORE-150", "CORE-210"]
 adrs: ["0004", "0005", "0018"]
@@ -221,9 +221,9 @@ GEN  STARTED           WHERE       $/H    BOOT  DOWNLOAD      LOAD  TOTAL  OUTCO
 
 ## Definition of done
 
-- [ ] AC1 to AC4 pass in CI; AC5 is recorded under Evidence.
-- [ ] `make go-build go-test go-lint helm-lint helm-template specs-check` passes.
-- [ ] Status `DONE`, folder renamed `310-D-…`, in the same PR as the code.
+- [x] AC1 to AC4 pass in CI; AC5 is recorded under Evidence.
+- [x] `make go-build go-test go-lint helm-lint helm-template specs-check` passes.
+- [x] Status `DONE`, folder renamed `310-D-…`.
 
 ## Open questions
 
@@ -235,4 +235,15 @@ None.
 
 AC1–AC4: `TestRentalRecordGoodStartAndStop`, `TestRentalRecordFailedStatus`, `TestRentalsCapped`, `TestFullDocumentWithRentalsSize`; pass in `make go-test`.
 
-AC5: pending a lab start (operator go-ahead).
+AC5, 2026-11-27, from real prod rentals (v0.4.1), compared with the
+`vkllm_gpu_state` timeline in Prometheus (15 s steps):
+
+| Gen | Record | Prometheus | Within 15 s |
+|---|---|---|---|
+| 14 | create + boot 36 s; ready 164 s (download 151 s, 222.5 MB/s, load 9 s) | STARTING about 30-45 s; LOADING_MODEL about 150-165 s | yes |
+| 15 | boot 130 s; ready 169 s (download 158 s, 190.8 MB/s, load 13 s) | STARTING about 120-135 s; LOADING_MODEL about 150-165 s | yes |
+
+Generation 16 logged `rental_ready` with `download_mbps` 185.6, but its
+record has no worker stages: the v0.4.2 rollout restarted the controller
+between READY and destroy, the limit this spec names under "Stage
+durations".

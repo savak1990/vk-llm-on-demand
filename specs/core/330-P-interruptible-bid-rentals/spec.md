@@ -19,7 +19,7 @@ first; this spec builds on its offer choice.
 **Risk:** medium — a wrong price field over-bids; a missed interruption leaves a stopped instance billing storage
 **Estimated effort:** 1 to 2 days
 **Recommended model:** standard
-**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md), [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-180](../180-D-persistent-volume-cache/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-A-cold-start-recording/spec.md)
+**Depends on:** [CORE-020](../020-D-vastai-provider-client/spec.md), [CORE-050](../050-D-gpu-lifecycle-controller/spec.md), [CORE-100](../100-D-cost-controls/spec.md), [CORE-180](../180-D-persistent-volume-cache/spec.md), [CORE-210](../210-D-offer-cost-model/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-310](../310-D-cold-start-recording/spec.md)
 
 ## Problem
 
