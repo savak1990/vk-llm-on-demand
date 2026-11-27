@@ -25,7 +25,7 @@ The authority is `specs/core/000-P-constitution/spec.md`. Read it before non-tri
 Short version, for orientation only:
 
 - Vast.ai Docker instances are remote workers, never cluster nodes (ADR 0001).
-- `llama-server` from the official `server-cuda` image serves `Qwen3.6-35B-A3B` Q5_K_M (ADR 0002).
+- `llama-server` from the official `server-cuda` image serves `Inkling-2-Mini` Q8_0 (ADR 0002, ADR 0022).
 - One binary, one Deployment, `replicas: 1`, `strategy: Recreate`; destroy on idle, never stop (ADR 0003).
 - State is one ConfigMap JSON document written with `resourceVersion` optimistic concurrency; the provider instance list is reconciled against it every minute (ADR 0004).
 - Model weights download from Hugging Face on every provision, checksum verified (ADR 0005).
