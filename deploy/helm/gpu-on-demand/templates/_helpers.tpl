@@ -31,9 +31,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- required "host is required when httpRoute.enabled or ingress.enabled is true" .Values.host -}}
 {{- end -}}
 
+{{- define "svc.tag" -}}
+{{- $tag := .Values.image.tag | default .Chart.AppVersion -}}
+{{- if eq $tag "latest" }}{{ fail "image.tag must not be latest" }}{{ end -}}
+{{- $tag -}}
+{{- end -}}
+
 {{- define "svc.image" -}}
-{{- $tag := required "image.tag is required: the full commit SHA, never latest" .Values.image.tag -}}
-{{- printf "%s:%s" .Values.image.repository $tag -}}
+{{- printf "%s:%s" .Values.image.repository (include "svc.tag" .) -}}
 {{- end -}}
 
 {{/*
@@ -43,7 +48,7 @@ node keeps serving an old build. A commit SHA can never move.
 {{- define "svc.pullPolicy" -}}
 {{- if .Values.image.pullPolicy -}}
 {{- .Values.image.pullPolicy -}}
-{{- else if regexMatch "^[0-9a-f]{40}$" .Values.image.tag -}}
+{{- else if regexMatch "^[0-9a-f]{40}$" (include "svc.tag" .) -}}
 IfNotPresent
 {{- else -}}
 Always

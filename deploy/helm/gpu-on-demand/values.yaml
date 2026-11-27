@@ -1,5 +1,6 @@
 image:
   repository: ghcr.io/savak1990/vk-llm-on-demand/gpu-on-demand
+  # Empty uses the chart's appVersion, which the pipeline sets to the version.
   tag: ""
   pullPolicy: ""
 
