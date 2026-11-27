@@ -16,12 +16,15 @@ and the rewritten string is no longer valid semver.
 | Event | Version | Published |
 |---|---|---|
 | pull request | — | nothing (CI only) |
-| merge to `main` | `X.Y.Z-main.<sha7>` | image and chart |
+| merge to `main` | `X.Y.Z-main.<run>.g<sha7>` | image and chart |
 | `release` dispatch, bump `<level>` | `X.Y.Z` | image, chart, CLI binaries |
 
 `X.Y.Z` is always the next patch above the last release tag, so a
 prerelease sorts below the release it precedes. A maintainer picks the
 real bump (`patch`, `minor`, `major`) only when dispatching `release.yml`.
+Main builds are ordered by `deploy.yml`'s run number, so renaming or
+recreating that workflow restarts the count; cut a release after such a
+change.
 
 ## 2. The pipeline per channel
 
@@ -30,7 +33,7 @@ real bump (`patch`, `minor`, `major`) only when dispatching `release.yml`.
 never pushed anywhere. Nothing reaches GHCR. `ci.yml` holds no
 `packages: write`, so it cannot publish even by mistake.
 
-**A merge to `main`** runs `deploy.yml`. It computes `X.Y.Z-main.<sha7>`,
+**A merge to `main`** runs `deploy.yml`. It computes `X.Y.Z-main.<run>.g<sha7>`,
 decides whether the Go sources changed, and calls `publish.yml`, which
 pushes the image (rebuilt if Go changed, otherwise copied from the image
 published by the last commit that touched the Go paths — or rebuilt if
@@ -56,8 +59,10 @@ to a real build instead of failing.
 
 ## 3. Promotion to the platform
 
-Promotion means bumping `chartVersion` and `tag` in `gitops/values.yaml` in
-this repository and merging. The platform's pointer `Application`
+Promotion means bumping `chartVersion` in `gitops/values.yaml` in this
+repository and merging. `tag` stays only until production pins a release
+whose chart falls back to its own version, then the promotion PR drops it.
+The platform's pointer `Application`
 (`vk-lab-platform/gitops/templates/apps/vk-llm-on-demand/`) tracks `main`,
 so that merge is the deploy. This repository holds no platform code: no
 `AppProject`, no ExternalSecret policy, no SSM parameter.
@@ -75,7 +80,7 @@ manual, one-time steps follow the first successful `publish.yml` run:
    workflow file exists — a multi-arch push always leaves untagged
    manifests behind, and this setting is what removes them.
 
-A `-main.<sha7>` tag is never deleted automatically; it is a useful record
+A `-main.<run>.g<sha7>` tag is never deleted automatically; it is a useful record
 of what each merge published. The full-SHA tag `publish.yml` also pushes
 on every rebuild names the same manifest and is kept alongside it, not as
 a separate cost. A pull request publishes no artifact to retain.

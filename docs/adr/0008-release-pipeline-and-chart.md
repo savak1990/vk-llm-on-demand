@@ -5,7 +5,11 @@
 Accepted (2026-11-01). Extended by [ADR 0013](0013-public-repo-security-and-cli-release.md):
 scanning jobs in the PR gate and a GoReleaser-built `vk-llm` release in the
 tag job. The chart's `existingSecrets.apiKeys` Secret now carries
-`client-keys`, `management-tokens` and `worker-seed` (ADR 0012 §3).
+`client-keys`, `management-tokens` and `worker-seed` (ADR 0012 §3). The
+rejected alternative "A dev namespace deployed by CI" is superseded by
+[ADR 0021](0021-installations-are-argo-applications-from-one-chart.md): dev
+is an Argo CD Application, not a CI deploy. The `main` version format is
+superseded by ADR 0021 §3.
 
 ## Context
 
@@ -33,7 +37,7 @@ metadata. The initial seed tag is `v0.1.0`, created by spec 010.
 |---|---|---|
 | `ci.yml` | ahorro | jobs `changes`, `go`, `image`, `helm` (lint, kubeconform, package), `workflows`, `repo` (specs-check), `ci-ok`. No Flutter, no AWS OIDC, no domain-check (no domain is ever templated here). |
 | `publish.yml` | ahorro | one image `gpu-on-demand`, one chart; same copy-or-build logic |
-| `deploy.yml` | ahorro | on push to `main`: version + publish prerelease. **No** `helm upgrade` into a dev namespace in the MVP; there is one installation and Argo owns it. |
+| `deploy.yml` | ahorro | on push to `main`: version + publish prerelease. **No** `helm upgrade` into a dev namespace in the MVP; dev follows the published build through Argo CD (ADR 0021). |
 | `release.yml` | ahorro | `workflow_dispatch` with `bump`; publish, then tag |
 | `dependabot.yml` | ahorro | github-actions, docker, gomod |
 

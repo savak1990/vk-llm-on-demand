@@ -5,10 +5,9 @@
   "properties": {
     "image": {
       "type": "object",
-      "required": ["tag"],
       "properties": {
         "repository": { "type": "string" },
-        "tag": { "type": "string", "minLength": 1, "not": { "const": "latest" } },
+        "tag": { "type": "string", "not": { "const": "latest" } },
         "pullPolicy": { "type": "string" }
       }
     },

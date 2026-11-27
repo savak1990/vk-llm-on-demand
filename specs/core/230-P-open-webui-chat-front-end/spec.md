@@ -273,8 +273,13 @@ deployed only after that session confirms room on the cluster.
 - R16. The gateway's per-key rate limit MUST be 100 requests per minute.
 - R17. The `client-keys` template MUST keep `management-tokens` and
   `worker-seed` in the Secret.
-- R18. The rendered `DEFAULT_MODELS` and `TASK_MODEL_EXTERNAL` MUST equal
-  `gitops/values.yaml` `model.alias`.
+- R18. The rendered `DEFAULT_MODELS` MUST equal `gitops/values.yaml`
+  `model.alias`.
+  - 2026-11-27: `TASK_MODEL_EXTERNAL` is no longer set. A second
+    installation made this value fixed to one model, so a chat with the
+    other model sent its background task calls there too, starting that
+    installation's GPU. Unset, Open WebUI's task model falls back to the
+    chat's own model.
 
 ## Implementation steps
 

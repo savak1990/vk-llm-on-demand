@@ -82,4 +82,10 @@ spec:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }}
       ports:
         - port: metrics
+    {{- if .Values.smokeTest.enabled }}
+    - from:
+        - podSelector: {}
+      ports:
+        - port: http
+    {{- end }}
 {{- end }}

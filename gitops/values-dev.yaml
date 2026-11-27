@@ -1,0 +1,14 @@
+# Dev: the newest build of main, production's configuration otherwise. The
+# platform renders it as a second installation with its own AppProject.
+namespace: llm-dev
+hostPrefix: llm-dev
+project: vk-llm-on-demand-dev
+chartVersion: ">=0.0.0-0"
+tag: ""
+modelAliasPrefix: dev-
+# Production's alert rules already cover every namespace.
+monitoring:
+  alertRules: false
+  dashboard: false
+smokeTest:
+  enabled: true

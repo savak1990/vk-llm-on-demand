@@ -15,8 +15,8 @@ within 7 days.
 
 ## Supported versions
 
-The latest `X.Y.Z` release and `main`. Prereleases (`-main.<sha>`) are not
-supported.
+The latest `X.Y.Z` release and `main`. Prereleases (`-main.<run>.g<sha7>`)
+are not supported.
 
 ## What never enters Git
 

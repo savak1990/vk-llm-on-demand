@@ -2,12 +2,21 @@
 fqdn: ""
 hostPrefix: llm
 namespace: llm
+project: vk-llm-on-demand
+modelAliasPrefix: ""
+
+monitoring:
+  alertRules: true
+  dashboard: true
+smokeTest:
+  enabled: false
 
 # The one place versions are pinned. Both come from the same commit so the
 # chart and the image it runs always match.
 charts:
   registry: ghcr.io/savak1990/vk-llm-on-demand/charts
 chartVersion: "0.4.1"
+# Removed once production pins a release whose chart falls back to its own version.
 tag: "b6323ac7ef9266aaa748f29d4749e95154ca2407"
 
 # Secrets the platform renders into namespace llm (vk-lab-platform

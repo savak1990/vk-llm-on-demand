@@ -1,0 +1,73 @@
+{{- if .Values.smokeTest.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "svc.fullname" . }}-smoke
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+data:
+  smoke.sh: |
+{{ .Files.Get "files/smoke.sh" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "svc.fullname" . }}-smoke
+  labels:
+    {{- include "svc.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 960
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+      containers:
+        - name: smoke
+          image: {{ .Values.smokeTest.image | quote }}
+          command: ["/bin/sh", "/smoke/smoke.sh"]
+          env:
+            - name: BASE
+              value: {{ printf "http://%s.%s.svc:%v" (include "svc.fullname" .) .Release.Namespace .Values.service.port | quote }}
+            - name: KEYS_DIR
+              value: /keys
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+          volumeMounts:
+            - name: smoke
+              mountPath: /smoke
+              readOnly: true
+            - name: keys
+              mountPath: /keys
+              readOnly: true
+      volumes:
+        - name: smoke
+          configMap:
+            name: {{ include "svc.fullname" . }}-smoke
+        - name: keys
+          secret:
+            secretName: {{ .Values.existingSecrets.apiKeys | quote }}
+            items:
+              - key: client-keys
+                path: client-keys
+              - key: management-tokens
+                path: management-tokens
+{{- end }}

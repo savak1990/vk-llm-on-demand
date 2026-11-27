@@ -1,5 +1,6 @@
 image:
   repository: ghcr.io/savak1990/vk-llm-on-demand/gpu-on-demand
+  # Empty uses the chart's appVersion, which the pipeline sets to the version.
   tag: ""
   pullPolicy: ""
 
@@ -153,3 +154,9 @@ probes:
     periodSeconds: 20
 
 replicaCount: 1
+
+# A PostSync Job that GETs /v1/models, /api/v1/gpu/status and /api/v1/gpu/cost
+# on the Service. Never starts a GPU. Argo CD runs it after each sync.
+smokeTest:
+  enabled: false
+  image: curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93

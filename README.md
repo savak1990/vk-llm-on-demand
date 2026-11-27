@@ -298,14 +298,22 @@ Run the GPU lifecycle from the Actions tab, with the `gpu-control` workflow.
    step for you.
 2. Nothing else to add here. Neither the management token nor the API
    URL is stored in GitHub: the workflow reads the token and the lab's
-   domain from AWS SSM and builds `https://llm.<domain>` itself, masked
-   in the log. If you run this project's own `vk-lab-platform`
+   domain from AWS SSM and builds `https://llm.<domain>` or
+   `https://llm-dev.<domain>` itself, by `target`, masked in the log. If
+   you run this project's own `vk-lab-platform`
    deployment, its `make account-up` creates the AWS role this workflow
    assumes and sets this repository's `vars.AWS_ROLE_ARN` for you. If you
    deploy against a different backend, point `gpu-control.yml`'s SSM step
    at it instead.
 3. Go to the Actions tab, select `gpu-control`, and run it with the
    `action` input set to `start`, `status`, `stop`, or `budget`.
+
+A second installation, dev, lives at `llm-dev.<domain>`, follows the
+newest build of `main`, and appears in Open WebUI as `dev-<model>`,
+starting its own GPU on the first message sent to it. Set `gpu-control`'s
+`target` input to `dev` to control it instead of production. Open WebUI's
+background tasks use the chat's own model, so a dev chat never starts
+production's GPU.
 
 To change the budget from the Actions tab, set `action` to `budget` and
 type the new amount in `monthly_usd`. Leave `monthly_usd` blank to show
@@ -320,8 +328,9 @@ that matches your setup:
 | VPN | You keep your installation off the public internet. | The workflow needs a self-hosted runner with access to the VPN. |
 | Self-hosted runner | Your API host is not reachable from the internet. | Change `runs-on` in `gpu-control.yml` to point at your runner. The role and SSM setup does not change. |
 
-Run one dispatch at a time. A second dispatch does not start until the
-first run is complete. A `stop` can wait up to 20 minutes behind a
+Run one dispatch at a time per target. A second dispatch on the same
+target does not start until the first run is complete; prod and dev
+dispatches run at the same time. A `stop` can wait up to 20 minutes behind a
 `start`, and the GPU continues to cost money during this time. A newer
 dispatch replaces an older dispatch that waits in the queue. Wait for
 each run to complete before you start the next run.

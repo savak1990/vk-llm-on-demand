@@ -55,6 +55,44 @@ appns="$(yq 'select(.kind == "Application") | .metadata.namespace' "$tmp/outer.y
   exit 1
 }
 
+helm template gpu-on-demand gitops "${SET[@]}" -f gitops/values.yaml -f gitops/values-dev.yaml > "$tmp/outer-dev.yaml"
+"${KC[@]}" "$tmp/outer-dev.yaml"
+app='select(.kind == "Application")'
+[ "$(yq "$app | .metadata.namespace" "$tmp/outer-dev.yaml")" = "llm-dev" ] &&
+  [ "$(yq "$app | .spec.destination.namespace" "$tmp/outer-dev.yaml")" = "llm-dev" ] &&
+  [ "$(yq "$app | .spec.project" "$tmp/outer-dev.yaml")" = "vk-llm-on-demand-dev" ] &&
+  [ "$(yq "$app | .spec.source.targetRevision" "$tmp/outer-dev.yaml")" = ">=0.0.0-0" ] || {
+  echo "gitops-check: dev Application must live in llm-dev, project vk-llm-on-demand-dev, targetRevision >=0.0.0-0" >&2
+  exit 1
+}
+[ "$(yq "$app | .spec.project" "$tmp/outer.yaml")" = "vk-llm-on-demand" ] || {
+  echo "gitops-check: production Application must stay in project vk-llm-on-demand" >&2
+  exit 1
+}
+yq "$app | .spec.source.helm.valuesObject" "$tmp/outer-dev.yaml" > "$tmp/values-dev.yaml"
+alias="$(yq '.model.alias' gitops/values.yaml)"
+[ "$(yq '.config.model.alias' "$tmp/values-dev.yaml")" = "dev-$alias" ] &&
+  [ "$(yq '.host' "$tmp/values-dev.yaml")" = "llm-dev.lab.example.com" ] &&
+  [ "$(yq '.smokeTest.enabled' "$tmp/values-dev.yaml")" = "true" ] &&
+  [ "$(yq '.prometheusRule.enabled' "$tmp/values-dev.yaml")" = "false" ] &&
+  [ "$(yq '.dashboard.enabled' "$tmp/values-dev.yaml")" = "false" ] &&
+  [ "$(yq '.image.tag // ""' "$tmp/values-dev.yaml")" = "" ] || {
+  echo "gitops-check: dev values must set alias dev-$alias, host llm-dev.<fqdn>, smoke test on, alerts and dashboard off, no image tag" >&2
+  exit 1
+}
+strip='del(.host, .image, .smokeTest, .prometheusRule, .dashboard, .config.model.alias)'
+diff <(yq -P "$strip" "$tmp/values.yaml") <(yq -P "$strip" "$tmp/values-dev.yaml") || {
+  echo "gitops-check: dev may differ from production only in host, image, alias, smoke test, alerts and dashboard" >&2
+  exit 1
+}
+helm template gpu-on-demand deploy/helm/gpu-on-demand --namespace llm-dev -f "$tmp/values-dev.yaml" > "$tmp/inner-dev.yaml"
+"${KC[@]}" "$tmp/inner-dev.yaml"
+kinds="$(yq -N '.kind' "$tmp/inner-dev.yaml" | sort -u | tr '\n' ' ')"
+[ "$kinds" = "ConfigMap Deployment HTTPRoute Job Role RoleBinding Service ServiceAccount ServiceMonitor " ] || {
+  echo "gitops-check: dev renders kinds '$kinds'" >&2
+  exit 1
+}
+
 helm lint chat "${SET[@]}"
 helm template vk-llm-chat chat --namespace chat "${SET[@]}" > "$tmp/chat.yaml"
 "${KC[@]}" "$tmp/chat.yaml"
@@ -62,13 +100,28 @@ if helm template vk-llm-chat chat --namespace chat >/dev/null 2>&1; then
   echo "gitops-check: a chat render without fqdn must fail" >&2
   exit 1
 fi
+env_of() {
+  yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$1\") | .value" "$tmp/chat.yaml"
+}
 alias="$(yq '.model.alias' gitops/values.yaml)"
-for v in DEFAULT_MODELS TASK_MODEL_EXTERNAL; do
-  [ "$(yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$v\") | .value" "$tmp/chat.yaml")" = "$alias" ] || {
+for v in DEFAULT_MODELS; do
+  [ "$(env_of "$v")" = "$alias" ] || {
     echo "gitops-check: chat must render $v=$alias (gitops/values.yaml model.alias)" >&2
     exit 1
   }
 done
+[ -z "$(env_of TASK_MODEL_EXTERNAL)" ] || {
+  echo "gitops-check: chat must not render TASK_MODEL_EXTERNAL (unset falls back to the chat's own model)" >&2
+  exit 1
+}
+[ "$(env_of OPENAI_API_BASE_URLS)" = "http://gpu-on-demand.llm.svc/v1;http://gpu-on-demand.llm-dev.svc/v1" ] || {
+  echo "gitops-check: Open WebUI must list production then dev (the platform's key list has the same order)" >&2
+  exit 1
+}
+[ "$(yq 'select(.kind == "Deployment" and .metadata.name == "open-webui") | .spec.template.spec.containers[0].env[] | select(.name == "OPENAI_API_KEYS") | .valueFrom.secretKeyRef.key' "$tmp/chat.yaml")" = "OPENAI_API_KEYS" ] || {
+  echo "gitops-check: OPENAI_API_KEYS must come from open-webui-env key OPENAI_API_KEYS" >&2
+  exit 1
+}
 for r in open-webui open-webui-auth; do
   [ "$(yq "select(.kind == \"HTTPRoute\" and .metadata.name == \"$r\") | .spec.rules[0].backendRefs[0].name" "$tmp/chat.yaml")" = "open-webui" ] || {
     echo "gitops-check: HTTPRoute $r must target Service open-webui (the platform traffic policies name these routes)" >&2
@@ -88,9 +141,6 @@ if yq 'select(.kind == "Deployment" and .metadata.name == "open-webui") | .spec.
   exit 1
 fi
 
-env_of() {
-  yq "select(.kind == \"Deployment\" and .metadata.name == \"open-webui\") | .spec.template.spec.containers[0].env[] | select(.name == \"$1\") | .value" "$tmp/chat.yaml"
-}
 for pair in ENABLE_OAUTH_SIGNUP=true DEFAULT_USER_ROLE=pending OAUTH_MERGE_ACCOUNTS_BY_EMAIL=true ENABLE_LOGIN_FORM=true ENABLE_SIGNUP=false BYPASS_MODEL_ACCESS_CONTROL=true; do
   [ "$(env_of "${pair%%=*}")" = "${pair#*=}" ] || {
     echo "gitops-check: chat must render ${pair} (pending sign-ups, a kept admin password login, every model visible to activated users)" >&2

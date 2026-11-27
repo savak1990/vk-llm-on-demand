@@ -2,7 +2,7 @@
 # Prints the version this build publishes under. One number names the whole
 # repository on every channel, and the image tag equals the chart version.
 #
-#   version.sh main <sha>      0.2.1-main.a1b2c3d
+#   version.sh main <sha> <run>  0.2.1-main.57.ga1b2c3d
 #   version.sh pr <number> <sha>  0.2.1-pr-42.a1b2c3d
 #   version.sh release <level> 0.2.1 | 0.3.0 | 1.0.0   (patch|minor|major)
 #   version.sh base            0.2.1
@@ -45,7 +45,7 @@ bump() {
 }
 
 # A prerelease sorts below its release, so a build made after 0.2.0 must not be
-# called 0.2.0-main.<sha> - it would claim to predate the release it followed.
+# called 0.2.0-main.57.ga1b2c3d - it would claim to predate the release it followed.
 base="$(bump patch)"
 
 case "$channel" in
@@ -54,7 +54,12 @@ case "$channel" in
     ;;
   main)
     [ -n "$arg" ] || { echo "VERSION: main needs a commit sha." >&2; exit 1; }
-    echo "$base-main.${arg:0:7}"
+    run="${3:-}"
+    case "$run" in
+      ''|*[!0-9]*) echo "VERSION: main needs a numeric run number." >&2; exit 1 ;;
+    esac
+    # The run number orders builds; the g keeps an all-digit sha a valid identifier.
+    echo "$base-main.$run.g${arg:0:7}"
     ;;
   pr)
     [ -n "$arg" ] || { echo "VERSION: pr needs a pull request number." >&2; exit 1; }
@@ -69,7 +74,7 @@ case "$channel" in
     bump "${arg:-patch}"
     ;;
   *)
-    echo "VERSION: usage: version.sh {base|main <sha>|pr <n> <sha>|release <level>}" >&2
+    echo "VERSION: usage: version.sh {base|main <sha> <run>|pr <n> <sha>|release <level>}" >&2
     exit 1
     ;;
 esac
