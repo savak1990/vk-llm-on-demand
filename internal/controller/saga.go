@@ -94,7 +94,7 @@ func dispatchCreate(ctx context.Context, c *Controller, e effCreate) {
 	req.Volume = c.volumeAttachFor(ctx, e.gen)
 	id, err := c.deps.Provider.CreateInstance(ctx, req)
 	dropped := false
-	if err != nil && req.Volume != nil && createClass(err) != provider.Retryable && !errors.Is(err, provider.ErrDuplicateLabel) {
+	if err != nil && req.Volume != nil && refusedRequest(err) && !errors.Is(err, provider.ErrDuplicateLabel) {
 		// A refused volume must not fail the start, and a retry with it
 		// would pick the same volume again.
 		req.Volume, dropped = nil, true
@@ -232,4 +232,11 @@ func nextCreateAllowedAt(ops []store.Op) time.Time {
 		backoff = 30 * time.Minute
 	}
 	return lastFinish.Add(backoff)
+}
+
+// refusedRequest is a definitive 4xx: the provider created nothing, so a
+// second create without the volume cannot make a second instance.
+func refusedRequest(err error) bool {
+	var perr *provider.Error
+	return errors.As(err, &perr) && perr.Status >= 400 && perr.Status < 500 && perr.Status != 429
 }

@@ -82,16 +82,18 @@ func TestApplyCachePlanSeedReplacesUnexpiringVolume(t *testing.T) {
 func TestWithCacheHitFailed(t *testing.T) {
 	exp := cacheT0.Add(time.Hour)
 	for _, c := range []struct {
-		name      string
-		readyAt   *time.Time
-		wantState string
+		name       string
+		providerID string
+		readyAt    *time.Time
+		wantState  string
 	}{
-		{"start failed before READY", nil, store.CacheDeleting},
-		{"served, then destroyed", &cacheT0, store.CacheReady},
+		{"start failed before READY", "9", nil, store.CacheDeleting},
+		{"served, then destroyed", "9", &cacheT0, store.CacheReady},
+		{"create failed, no worker ran", "", nil, store.CacheReady},
 	} {
 		d, _ := store.NewDocument("abc")
 		d.Generation = 13
-		d.Instance = &store.Instance{State: Loading.String(), ReadyAt: c.readyAt}
+		d.Instance = &store.Instance{State: Loading.String(), ProviderID: c.providerID, ReadyAt: c.readyAt}
 		d.Cache = &store.CacheState{Volumes: []store.CacheVolume{{Label: "vkllm_abc_v9", VolumeID: 7, State: store.CacheReady, InUseGen: 13}}}
 		runCache(t, &d, exp, func(d *store.Document) { d.Instance = nil })
 		v := d.Cache.Volumes[0]

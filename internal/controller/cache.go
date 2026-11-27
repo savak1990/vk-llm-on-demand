@@ -58,7 +58,7 @@ func withCache(mutate func(*store.Document) error, now time.Time, retention time
 			case after == nil && v.State == store.CacheSeeding:
 				v.InUseGen = 0
 				markDeleting(v, now, "seed_failed")
-			case after == nil && v.State == store.CacheReady && before.ReadyAt == nil:
+			case after == nil && v.State == store.CacheReady && before.ReadyAt == nil && before.ProviderID != "":
 				v.InUseGen = 0
 				markDeleting(v, now, "hit_failed")
 			case after == nil:
