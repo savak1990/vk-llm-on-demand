@@ -15,7 +15,7 @@ smokeTest:
 # under its own version, so the two always match.
 charts:
   registry: ghcr.io/savak1990/vk-llm-on-demand/charts
-chartVersion: "0.4.2"
+chartVersion: "0.4.3"
 
 # Secrets the platform renders into namespace llm (vk-lab-platform
 # gitops/templates/platform/shared/llm/secrets.yaml). The chart mounts them
