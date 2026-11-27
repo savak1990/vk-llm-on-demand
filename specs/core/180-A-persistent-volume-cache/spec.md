@@ -223,14 +223,28 @@ entry, so the existing budget stop covers storage.
 
 Ledger entries are keyed by `gen` today (`internal/budget/ledger.go`), and a
 volume is created in the same generation as its GPU. `LedgerEntry` therefore
-gains `volumeId` (`omitempty`): a GPU entry has none, a storage entry has
-its volume id, and `CloseEntry` for storage matches on `volumeId`. `Rollover`
+gains `volume` (the volume label, because the provider id is unknown when
+the entry opens at record time) (`omitempty`): a GPU entry has none, a
+storage entry has its label, and storage entries close by label. `Rollover`
 already keeps an open entry with a new `Start` at the first of the month, so
 the new month counts storage from that moment; it must also copy
-`volumeId`. `GET /api/v1/gpu/cost`
+`volume`. `GET /api/v1/gpu/cost`
 adds `estimatedStorageUSD`. The budget default goes to $35 in this PR: the
-chart value, `gitops/values.yaml`, constitution C-7 and `CLAUDE.md`, because
-$35 is safe only when storage counts in it.
+chart value, the Go default, constitution C-7, `CLAUDE.md` and the docs
+that state it (`gitops/values.yaml` has no budget key), because $35 is safe
+only when storage counts in it.
+
+### Rollback
+
+A controller older than this change does not know volumes: it never deletes
+them, and on its first write it drops the volume label from storage ledger
+entries, after which it mistakes them for GPU entries. Before a rollback:
+
+1. Run `vk-llm stop` and wait until `vk-llm status` shows `STOPPED`.
+2. Set `config.cache.maxCaches: 0` and deploy it.
+3. Wait until `vk-llm status` shows no `Cache:` row and `GET /api/v1/gpu/cost`
+   shows no open storage spend growing (one or two reconcile ticks).
+4. Then roll back.
 
 ### Progress, records and metrics
 
@@ -326,4 +340,9 @@ $35 is safe only when storage counts in it.
 
 ## Evidence
 
-None yet.
+2026-11-27, branch `core-180-volume-cache` at `11ec358`: AC1–AC6:
+`TestCacheMissSeedsThenReady`, `TestCacheHitLinksVolume`, `TestPickOffer*`,
+`TestCacheExpiryDeletes`, `TestCacheBudgetReleasesWithNoGPU`,
+`TestCacheOrphanDeletedOnSecondObservation`,
+`TestCacheFailedListDeletesNothing`; AC7 pending a lab run (operator
+go-ahead).
