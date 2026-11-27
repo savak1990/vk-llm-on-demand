@@ -56,8 +56,10 @@ to a real build instead of failing.
 
 ## 3. Promotion to the platform
 
-Promotion means bumping `chartVersion` and `tag` in `gitops/values.yaml` in
-this repository and merging. The platform's pointer `Application`
+Promotion means bumping `chartVersion` in `gitops/values.yaml` in this
+repository and merging. `tag` stays only until production pins a release
+whose chart falls back to its own version, then the promotion PR drops it.
+The platform's pointer `Application`
 (`vk-lab-platform/gitops/templates/apps/vk-llm-on-demand/`) tracks `main`,
 so that merge is the deploy. This repository holds no platform code: no
 `AppProject`, no ExternalSecret policy, no SSM parameter.

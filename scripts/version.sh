@@ -46,7 +46,7 @@ bump() {
 }
 
 # A prerelease sorts below its release, so a build made after 0.2.0 must not be
-# called 0.2.0-main.<sha> - it would claim to predate the release it followed.
+# called 0.2.0-main.57.ga1b2c3d - it would claim to predate the release it followed.
 base="$(bump patch)"
 
 case "$channel" in
