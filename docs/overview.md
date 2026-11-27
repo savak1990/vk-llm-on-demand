@@ -25,8 +25,8 @@ vk-llm stop       # releases the GPU now; otherwise 30 min after the last infere
 - Exposes a separate management API, `/api/v1/gpu/{start,status,stop,cost}`,
   behind management tokens, used by the `vk-llm` CLI and a GitHub Actions
   workflow (ADR 0012).
-- Rents one NVIDIA L40S on Vast.ai on `start`, within a maximum hourly
-  price, loads `Qwen3.6-35B-A3B` Q5_K_M into `llama-server`, and proxies
+- Rents one NVIDIA RTX 6000 Ada on Vast.ai on `start`, within a maximum hourly
+  price, loads `Inkling 2 Mini` Q8_0 into `llama-server`, and proxies
   requests over an SSH tunnel.
 - Destroys the instance 30 minutes after the last inference finished
   (rolling, from readiness if none), immediately on `stop` after a 60-second
