@@ -586,3 +586,106 @@ func TestCreateNoVolumeInfo(t *testing.T) {
 		t.Fatalf("volume_info = %v, want no key when Volume is nil", body["volume_info"])
 	}
 }
+
+func TestCreateRefusalCarriesVastReason(t *testing.T) {
+	const body = `{"success":false,"error":"invalid_args","msg":"error 404/3603: no_such_ask  Instance type by id 60356224 is not available.","ask_id":60356224}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	buf := captureLogs(t)
+	cl, _ := newTestClient(t, srv, fakeclock.New(time.Unix(0, 0)))
+	cl.logger = buf.logger
+	_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+		OfferID: 60356224, Image: "img", Label: "vkllm:test:refused",
+		Env: map[string]string{"WORKER_API_KEY": "sk-vkllm-testworkerkey123"},
+	})
+	var pe *provider.Error
+	if !errors.As(err, &pe) || pe.Class != provider.Terminal || pe.Status != 400 {
+		t.Fatalf("err = %v, want a Terminal 400", err)
+	}
+	if !contains(err.Error(), "no_such_ask") || !contains(err.Error(), "not available") {
+		t.Fatalf("err = %q, want the Vast reason", err)
+	}
+	out := buf.String()
+	if !contains(out, "vast_error=invalid_args") || !contains(out, "vast_msg=") || !contains(out, "no_such_ask") {
+		t.Fatalf("log lacks vast_error/vast_msg: %s", out)
+	}
+	for _, secret := range []string{"test-key-ABCDEF", "sk-vkllm-testworkerkey123", "Bearer"} {
+		if contains(out, secret) || contains(err.Error(), secret) {
+			t.Fatalf("%q leaked: err=%v log=%s", secret, err, out)
+		}
+	}
+}
+
+func TestCreateVastReasonRedactsEnv(t *testing.T) {
+	const workerKey = "sk-vkllm-testworkerkey123"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"success":false,"error":"bad_env ` + workerKey + `","msg":"env WORKER_API_KEY=` + workerKey + ` is invalid"}`))
+	}))
+	defer srv.Close()
+
+	buf := captureLogs(t)
+	cl, _ := newTestClient(t, srv, fakeclock.New(time.Unix(0, 0)))
+	cl.logger = buf.logger
+	_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+		OfferID: 1, Image: "img", Label: "vkllm:test:echo",
+		Env: map[string]string{"WORKER_API_KEY": workerKey, "EMPTY": ""},
+	})
+	if err == nil || contains(err.Error(), workerKey) || !contains(err.Error(), "WORKER_API_KEY=*** is invalid") {
+		t.Fatalf("err = %v, want the echoed key replaced with ***", err)
+	}
+	if out := buf.String(); contains(out, workerKey) || !contains(out, "***") {
+		t.Fatalf("log leaked or lacks the redaction: %s", out)
+	}
+}
+
+func TestCreateVastReasonKeepsShortEnvValues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"success":false,"error":"invalid_args","msg":"error 404/3603: no_such_ask  Instance type by id 60356224 is not available.","ask_id":60356224}`))
+	}))
+	defer srv.Close()
+
+	cl, _ := newTestClient(t, srv, fakeclock.New(time.Unix(0, 0)))
+	_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{
+		OfferID: 60356224, Image: "img", Label: "vkllm:test:short",
+		Env: map[string]string{"PARALLEL": "4", "DEADMAN_SECONDS": "120", "K_CACHE_TYPE": "q8_0"},
+	})
+	if err == nil || !contains(err.Error(), "error 404/3603: no_such_ask") {
+		t.Fatalf("err = %v, want Vast's text unchanged by short env values", err)
+	}
+}
+
+func TestCreateVastReasonTruncated(t *testing.T) {
+	long := strings.Repeat("é", 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			_, _ = w.Write([]byte(`{"instances":[],"next_token":""}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":false,"error":"e","msg":"` + long + `"}`))
+	}))
+	defer srv.Close()
+
+	cl, _ := newTestClient(t, srv, fakeclock.New(time.Unix(0, 0)))
+	_, err := cl.CreateInstance(context.Background(), provider.CreateRequest{OfferID: 1, Image: "img", Label: "vkllm:test:long"})
+	if err == nil || !contains(err.Error(), strings.Repeat("é", 300)) || contains(err.Error(), strings.Repeat("é", 301)) {
+		t.Fatalf("err = %v, want the msg cut to 300 characters", err)
+	}
+}

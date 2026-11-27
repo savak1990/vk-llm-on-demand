@@ -65,3 +65,27 @@ tests:
               severity: warning
             exp_annotations:
               summary: "A cache volume has been waiting for deletion for over 30 minutes"
+  - interval: 1m
+    input_series:
+      - series: 'vkllm_provision_attempts_total{outcome="offers_refused"}'
+        values: '0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: VkllmProvisioningFailing
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: VkllmProvisioningFailing
+        exp_alerts:
+          - exp_labels:
+              outcome: offers_refused
+              severity: critical
+            exp_annotations:
+              summary: "GPU provisioning is failing or exhausted its hourly attempt budget"
+  - interval: 1m
+    input_series:
+      - series: 'vkllm_provision_attempts_total{outcome="refused"}'
+        values: '0 1 2 3 4 5'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VkllmProvisioningFailing
+        exp_alerts: []

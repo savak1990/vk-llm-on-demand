@@ -219,6 +219,9 @@ func nextCreateAllowedAt(ops []store.Op) time.Time {
 		if op.Outcome == "ready" {
 			break
 		}
+		if op.Outcome == "refused" {
+			continue
+		}
 		n++
 		if op.FinishedAt != nil && op.FinishedAt.After(lastFinish) {
 			lastFinish = *op.FinishedAt
@@ -238,5 +241,5 @@ func nextCreateAllowedAt(ops []store.Op) time.Time {
 // second create without the volume cannot make a second instance.
 func refusedRequest(err error) bool {
 	var perr *provider.Error
-	return errors.As(err, &perr) && perr.Status >= 400 && perr.Status < 500 && perr.Status != 429
+	return errors.As(err, &perr) && perr.Op == "create" && perr.Status >= 400 && perr.Status < 500 && perr.Status != 429
 }

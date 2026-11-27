@@ -19,7 +19,7 @@ before READY. It changes a decision of ADR 0011 §2 and ADR 0019 (a
 **Risk:** high — a false signal rents a GPU with nobody present
 **Estimated effort:** 1 day after the design session
 **Recommended model:** standard
-**Depends on:** [CORE-060](../060-D-gateway-openai-api/spec.md), [CORE-180](../180-A-persistent-volume-cache/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-230](../230-P-open-webui-chat-front-end/spec.md)
+**Depends on:** [CORE-060](../060-D-gateway-openai-api/spec.md), [CORE-180](../180-D-persistent-volume-cache/spec.md), [CORE-220](../220-A-automatic-gpu-start/spec.md), [CORE-230](../230-P-open-webui-chat-front-end/spec.md)
 
 ## Problem
 
@@ -30,7 +30,7 @@ the time spent typing.
 
 The gain is bounded by the typing time, about 15 to 60 s. A cold start is
 about 126 s on a CORE-180 cache hit and 2 to 6 min on a miss
-([CORE-310](../310-A-cold-start-recording/spec.md) records). CORE-180 is
+([CORE-310](../310-D-cold-start-recording/spec.md) records). CORE-180 is
 the larger gain; this spec adds to it.
 
 ## What exists today (verified 2026-11-27)

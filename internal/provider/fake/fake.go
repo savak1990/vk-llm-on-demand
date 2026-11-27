@@ -35,6 +35,7 @@ type Fake struct {
 	volumes      map[provider.VolumeID]provider.Volume
 	nextVolumeID int64
 	lastCreate   provider.CreateRequest
+	refused      map[int64]bool
 }
 
 func New(c clock.Clock) *Fake {
@@ -47,6 +48,7 @@ func New(c clock.Clock) *Fake {
 		}{},
 		calls: map[string]int{}, nextID: 1,
 		volumes: map[provider.VolumeID]provider.Volume{}, nextVolumeID: 1000,
+		refused: map[int64]bool{},
 	}
 }
 
@@ -92,6 +94,16 @@ func (f *Fake) FailDestroy(n int) { f.mu.Lock(); defer f.mu.Unlock(); f.failDest
 // FailVolumeAttach refuses the next n creates that carry a volume, before
 // any volume or instance is made, as the provider rejects bad volume_info.
 func (f *Fake) FailVolumeAttach(n int) { f.mu.Lock(); defer f.mu.Unlock(); f.failAttachN = n }
+
+// RefuseCreate makes every create on these offers fail with a definitive
+// 400 before anything is made, as Vast does for an offer that is gone.
+func (f *Fake) RefuseCreate(offerID ...int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range offerID {
+		f.refused[id] = true
+	}
+}
 func (f *Fake) SetStatusSequence(id provider.InstanceID, s ...provider.InstanceStatus) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -164,6 +176,11 @@ func (f *Fake) CreateInstance(ctx context.Context, r provider.CreateRequest) (pr
 			}
 			return id, nil
 		}
+	}
+	if f.refused[r.OfferID] {
+		f.mu.Unlock()
+		return 0, &provider.Error{Op: "create", Class: provider.Terminal, Status: 400,
+			Err: fmt.Errorf("create rejected: invalid_args: error 404/3603: no_such_ask  Instance type by id %d is not available", r.OfferID)}
 	}
 	f.lastCreate = r
 	machine := f.offerMachine(r.OfferID)

@@ -77,7 +77,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [150](core/150-D-vk-llm-cli/spec.md) | `vk-llm` CLI: start, status, stop | 055 |
 | [160](core/160-D-github-actions-remote-control/spec.md) | `gpu-control.yml` manual workflow | 055 |
 | [170](core/170-P-security-ci-and-release/spec.md) | gitleaks, govulncheck, trivy, SECURITY.md, release checklist | 010, 120 |
-| [180](core/180-A-persistent-volume-cache/spec.md) | Model cache on Vast.ai volumes: preferred cached host, 72 h rolling retention, storage in the budget | 050, 100, 210, 220, 310, 320 |
+| [180](core/180-D-persistent-volume-cache/spec.md) | Model cache on Vast.ai volumes: preferred cached host, 72 h rolling retention, storage in the budget | 050, 100, 210, 220, 310, 320 |
 | [190](core/190-D-runtime-budget-reconfiguration/spec.md) | Runtime-mutable budget cap, with a fixed ceiling | 055, 100, 150, 160 |
 | [200](core/200-P-per-start-parameters/spec.md) | Problem statement: model, quantization, GPU, idle timeout and price cap as per-start parameters (no design yet) | 055, 130, 150, 190 |
 | [210](core/210-D-offer-cost-model/spec.md) | Offer selection by estimated session cost; caps on download, storage and disk | 020, 050, 070, 100 |
@@ -89,7 +89,7 @@ Front matter (`id`, `status`, `updated`, `depends_on`, `adrs`), then:
 | [280](core/280-D-dev-environment-auto-deploy/spec.md) | Every build of main is installed in `llm-dev` by Argo CD from the same `gitops/` chart as production (newest-build version range), with a smoke hook and a `dev-` model in Open WebUI | 120, 130, 160, 220, 230 |
 | [290](core/290-P-large-models-multi-gpu-cpu-offload/spec.md) | Spike: larger models on multi-GPU packs or with MoE experts in CPU RAM, as a separate installation; offer filter sized to the model (no design yet) | 070, 210 |
 | [300](core/300-A-concurrent-sessions-kv-cache/spec.md) | Concurrent sessions: KV cache type (f16/q8_0/q4_0) and context per session | 070, 080, 130 |
-| [310](core/310-A-cold-start-recording/spec.md) | Cold-start recording: rental history in the state document, real stage durations, `vk-llm rentals` | 040, 050, 090, 210 |
+| [310](core/310-D-cold-start-recording/spec.md) | Cold-start recording: rental history in the state document, real stage durations, `vk-llm rentals` | 040, 050, 090, 210 |
 | [320](core/320-D-vast-volume-spike/spec.md) | Spike: Vast.ai volumes as a model cache (survive destroy, billing, delete, label) | 020, 070 |
 | [330](core/330-P-interruptible-bid-rentals/spec.md) | Opt-in interruptible (bid) rentals: `min_bid` plus margin, on-demand fallback, interruption destroys and the next request restarts | 020, 050, 100, 180, 210, 220, 310 |
 | [340](core/340-P-prewarm-on-client-open/spec.md) | Start the GPU when a client opens (Open WebUI user header, OpenCode plugin), before the first prompt (research, no agreed design) | 060, 180, 220, 230 |

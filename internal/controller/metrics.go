@@ -84,7 +84,7 @@ func RegisterMetrics(reg prometheus.Registerer) {
 	for _, r := range []string{"idle", "manual", "lifetime", "budget", "failure", "orphan"} {
 		shutdownsTotal.WithLabelValues(r)
 	}
-	for _, o := range []string{"ok", "no_offer", "provider_error", "deadline_exceeded", "attempts_exhausted", "budget_exhausted", "failed_status", "lost", "cancelled"} {
+	for _, o := range []string{"ok", "no_offer", "provider_error", "deadline_exceeded", "attempts_exhausted", "budget_exhausted", "failed_status", "lost", "cancelled", "refused", "offers_refused"} {
 		provisionAttemptsTotal.WithLabelValues(o)
 	}
 	for _, o := range []string{"ok", "retryable", "terminal", "fatal"} {
@@ -190,6 +190,10 @@ func provisionOutcome(state, next State, ev Event) (string, bool) {
 		return "provider_error", true
 	case state == Searching && next == Idle && ev.Kind == EvStop:
 		return "cancelled", true
+	case state == Creating && refusedOffer(ev) && ev.Reason == "offers_refused":
+		return "offers_refused", true
+	case state == Creating && refusedOffer(ev):
+		return "refused", true
 	case state == Creating && next == Idle && ev.Kind == EvCreateFailed:
 		return "provider_error", true
 	case isCreatingBootingOrLoading(state) && next == Destroying && ev.Kind == EvProviderObserved && ev.Status.Terminal():

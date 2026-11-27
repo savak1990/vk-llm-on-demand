@@ -7,7 +7,7 @@ groups:
         annotations: {summary: "An untracked GPU instance was destroyed"}
       - alert: VkllmProvisioningFailing
         expr: |
-          increase(vkllm_provision_attempts_total{outcome="attempts_exhausted"}[1h]) >= 1
+          increase(vkllm_provision_attempts_total{outcome=~"attempts_exhausted|offers_refused"}[1h]) >= 1
           or
           sum(increase(vkllm_provision_attempts_total{outcome=~"provider_error|deadline_exceeded|failed_status"}[1h])) >= 3
         labels: {severity: critical}

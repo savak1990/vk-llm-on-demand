@@ -17,6 +17,7 @@ const (
 	flushDelay          = 10 * time.Second
 	requeueDelay        = 5 * time.Second
 	callerAttempts      = 8
+	maxRefusedOffers    = 5
 )
 
 // Same-instant order: deadlines first, so an Admit at the exact idle
@@ -133,6 +134,10 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 		if next == Idle && state != Searching && doc.Instance != nil && doc.Instance.ProviderID != "" {
 			gpuUptimeSecondsTotal.Add(now.Sub(doc.Instance.CreatedAt).Seconds())
 		}
+		if state == Creating && refusedOffer(ev) && doc.Desired == store.DesiredRunning && doc.Instance != nil && c.deps.Log != nil {
+			c.deps.Log.Warn("controller: offer refused, machine denylisted for 1h", "machine_id", doc.Instance.Offer.MachineID,
+				"refused_in_row", doc.RefusedInRow+1, "start_ended", ev.Reason == "offers_refused", "err", ev.Err)
+		}
 		doc = committed
 		if state == Searching && next == Creating && doc.Instance != nil && (c.deps.Config.Cache.MaxCaches > 0 || doc.Instance.Cache == "hit") {
 			result := "miss"
@@ -227,10 +232,10 @@ func (c *Controller) processEvent(ctx context.Context, ev Event) error {
 func isDenial(reason string) bool { return reason != "" && reason != "backoff" }
 
 // isUnavailableReason is isDenial narrowed to Snapshot.Unavailable's own
-// 4-value enum; "provider_error" and "backoff" are denials but not that.
+// enum; "provider_error" and "backoff" are denials but not that.
 func isUnavailableReason(reason string) bool {
 	switch reason {
-	case "no_offer", "budget_exhausted", "balance_low", "attempts_exhausted":
+	case "no_offer", "budget_exhausted", "balance_low", "attempts_exhausted", "offers_refused":
 		return true
 	default:
 		return false
@@ -243,6 +248,9 @@ func isUnavailableReason(reason string) bool {
 func (c *Controller) gateReason(state State, ev Event, doc store.Document, now time.Time) string {
 	if ev.Reason != "" {
 		return ev.Reason
+	}
+	if state == Creating && refusedOffer(ev) && doc.Desired == store.DesiredRunning && doc.RefusedInRow+1 >= maxRefusedOffers {
+		return "offers_refused"
 	}
 	offer := state == Searching && ev.Kind == EvOfferChosen
 	if !offer && ev.Kind != EvStart && ev.Kind != EvTick && ev.Kind != EvGone {

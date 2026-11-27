@@ -502,13 +502,14 @@ func (c *Client) CreateInstance(ctx context.Context, r provider.CreateRequest) (
 		}
 		// 2xx but success:false, undecodable, or missing an id: terminal,
 		// not ambiguous — the provider told us definitively.
-		c.recordOutcome("create", "terminal", status, "label", r.Label)
-		return 0, &provider.Error{Op: "create", Class: provider.Terminal, Status: status, Err: fmt.Errorf("create rejected")}
+		fe := withVastReason(&provider.Error{Op: "create", Class: provider.Terminal, Status: status, Err: fmt.Errorf("create rejected")}, respBody, r.Env)
+		c.recordOutcome("create", "terminal", status, vastReasonAttrs(respBody, r.Env, "label", r.Label)...)
+		return 0, fe
 	}
 	if err == nil && status < 500 && status != 429 {
 		// 4xx other than 429: terminal or fatal, not ambiguous.
-		fe := fatalOrTerminal("create", status)
-		c.recordOutcome("create", outcomeLabel(fe), status, "label", r.Label)
+		fe := withVastReason(fatalOrTerminal("create", status), respBody, r.Env)
+		c.recordOutcome("create", outcomeLabel(fe), status, vastReasonAttrs(respBody, r.Env, "label", r.Label)...)
 		return 0, fe
 	}
 
@@ -533,6 +534,45 @@ func (c *Client) CreateInstance(ctx context.Context, r provider.CreateRequest) (
 	// do() already counted this attempt's "retryable" outcome for the 5xx/429/
 	// transport error that got us here; CreateInstance must not count it again.
 	return 0, &provider.Error{Op: "create", Class: provider.Retryable, Err: provider.ErrOutcomeUnknown}
+}
+
+// vastReason reads only the error and msg fields of a refusal body, masks
+// any env value Vast echoes back, then cuts each to 300 characters.
+func vastReason(body []byte, env map[string]string) (code, msg string) {
+	var r struct {
+		Error string `json:"error"`
+		Msg   string `json:"msg"`
+	}
+	_ = json.Unmarshal(body, &r)
+	for _, v := range env {
+		// Short values are settings like "4" or "q8_0"; masking them would
+		// garble Vast's own text, and secrets are always longer.
+		if len(v) >= 8 {
+			r.Error, r.Msg = strings.ReplaceAll(r.Error, v, "***"), strings.ReplaceAll(r.Msg, v, "***")
+		}
+	}
+	return truncate(r.Error, 300), truncate(r.Msg, 300)
+}
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
+func withVastReason(e *provider.Error, body []byte, env map[string]string) *provider.Error {
+	if code, msg := vastReason(body, env); code != "" || msg != "" {
+		e.Err = fmt.Errorf("%w: %s: %s", e.Err, code, msg)
+	}
+	return e
+}
+
+func vastReasonAttrs(body []byte, env map[string]string, attrs ...any) []any {
+	if code, msg := vastReason(body, env); code != "" || msg != "" {
+		attrs = append(attrs, "vast_error", code, "vast_msg", msg)
+	}
+	return attrs
 }
 
 // Balance reports the account's current balance.
