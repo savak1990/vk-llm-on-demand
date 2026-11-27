@@ -36,6 +36,15 @@ func (c *Controller) Status() Snapshot {
 		return snap
 	}
 	snap.Desired = doc.Desired
+	if doc.Cache != nil {
+		snap.CacheVolumes = append([]store.CacheVolume(nil), doc.Cache.Volumes...)
+	}
+	for _, e := range doc.Ledger.Entries {
+		if e.Volume != "" {
+			snap.StorageMTDUSD += e.EstUSD
+		}
+	}
+	snap.CacheHit = doc.Instance != nil && doc.Instance.Cache == "hit"
 	snap.Rentals = append([]store.Rental(nil), doc.Rentals...)
 	snap.AttemptsThisHour = doc.AttemptsThisHour.Count
 	snap.SpendMTDUSD = c.deps.Budget.EstimatedMTD(doc)

@@ -18,6 +18,15 @@ func rentalOffer() store.Offer {
 	}
 }
 
+func TestChecksumMismatchOnHit(t *testing.T) {
+	if !checksumMismatchOnHit("hit", map[string]time.Time{"download_begin": rentalT0}) {
+		t.Fatal("a hit that downloads again is a mismatch")
+	}
+	if checksumMismatchOnHit("hit", map[string]time.Time{"download_skipped": rentalT0}) || checksumMismatchOnHit("seeded", map[string]time.Time{"download_begin": rentalT0}) {
+		t.Fatal("no mismatch")
+	}
+}
+
 // step runs one transition's mutate through withRental, as processEvent does.
 func step(t *testing.T, d *store.Document, now time.Time, outcome string, mutate func(*store.Document)) rentalChange {
 	t.Helper()

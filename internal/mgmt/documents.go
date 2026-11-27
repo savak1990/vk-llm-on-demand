@@ -20,6 +20,7 @@ type instanceDoc struct {
 	ReadyAt         *time.Time         `json:"readyAt"`
 	Prices          *store.OfferPrices `json:"prices,omitempty"`
 	InetDownMbps    float64            `json:"inetDownMbps"`
+	Cache           string             `json:"cache,omitempty"`
 }
 
 type progressDoc struct {
@@ -55,25 +56,32 @@ type costSummary struct {
 	Selection            *selectionDoc `json:"selection,omitempty"`
 }
 
+type cacheVolumeDoc struct {
+	MachineID int64      `json:"machineId"`
+	State     string     `json:"state"`
+	ExpiresAt *time.Time `json:"expiresAt"`
+}
+
 type statusDocument struct {
-	Provider                 string       `json:"provider"`
-	State                    string       `json:"state"`
-	Desired                  string       `json:"desired"`
-	Generation               int64        `json:"generation"`
-	Instance                 *instanceDoc `json:"instance"`
-	Model                    modelDoc     `json:"model"`
-	Ready                    bool         `json:"ready"`
-	UptimeSeconds            int64        `json:"uptimeSeconds"`
-	LastInferenceFinishedAt  *time.Time   `json:"lastInferenceFinishedAt"`
-	IdleDeadline             *time.Time   `json:"idleDeadline"`
-	SecondsUntilIdleShutdown *int64       `json:"secondsUntilIdleShutdown"`
-	Cost                     costSummary  `json:"cost"`
-	Unavailable              string       `json:"unavailable"`
-	NextCreateAt             *time.Time   `json:"nextCreateAt"`
-	InstallationID           string       `json:"installationId"`
-	LabelPrefix              string       `json:"labelPrefix"`
-	Result                   string       `json:"result,omitempty"`
-	Progress                 *progressDoc `json:"progress,omitempty"`
+	Provider                 string           `json:"provider"`
+	State                    string           `json:"state"`
+	Desired                  string           `json:"desired"`
+	Generation               int64            `json:"generation"`
+	Instance                 *instanceDoc     `json:"instance"`
+	Model                    modelDoc         `json:"model"`
+	Ready                    bool             `json:"ready"`
+	UptimeSeconds            int64            `json:"uptimeSeconds"`
+	LastInferenceFinishedAt  *time.Time       `json:"lastInferenceFinishedAt"`
+	IdleDeadline             *time.Time       `json:"idleDeadline"`
+	SecondsUntilIdleShutdown *int64           `json:"secondsUntilIdleShutdown"`
+	Cost                     costSummary      `json:"cost"`
+	Unavailable              string           `json:"unavailable"`
+	NextCreateAt             *time.Time       `json:"nextCreateAt"`
+	InstallationID           string           `json:"installationId"`
+	LabelPrefix              string           `json:"labelPrefix"`
+	Result                   string           `json:"result,omitempty"`
+	Progress                 *progressDoc     `json:"progress,omitempty"`
+	CacheVolumes             []cacheVolumeDoc `json:"cacheVolumes,omitempty"`
 }
 
 type costDocument struct {
@@ -82,6 +90,7 @@ type costDocument struct {
 	UptimeSeconds        int64         `json:"uptimeSeconds"`
 	EstimatedInstanceUSD float64       `json:"estimatedInstanceUSD"`
 	EstimatedMonthUSD    float64       `json:"estimatedMonthUSD"`
+	EstimatedStorageUSD  float64       `json:"estimatedStorageUSD"`
 	BudgetMonthUSD       float64       `json:"budgetMonthUSD"`
 	ProviderBalanceUSD   *float64      `json:"providerBalanceUSD"`
 	Limitations          string        `json:"limitations"`
@@ -104,12 +113,18 @@ func buildStatusDocument(snap controller.Snapshot, cfg config.Mgmt, now time.Tim
 			Geolocation: snap.Geolocation, CreatedAt: snap.CreatedAt, ReadyAt: snap.ReadyAt,
 			Prices: snap.Prices, InetDownMbps: snap.InetDownMbps,
 		}
+		if snap.CacheHit {
+			doc.Instance.Cache = "hit"
+		}
 		doc.UptimeSeconds = int64(now.Sub(snap.CreatedAt).Seconds())
 	}
 	if snap.DownloadedBytes != 0 || snap.ModelBytes != 0 || len(snap.WorkerStages) != 0 {
 		doc.Progress = &progressDoc{
 			DownloadedBytes: snap.DownloadedBytes, ModelBytes: snap.ModelBytes, WorkerStages: snap.WorkerStages,
 		}
+	}
+	for _, v := range snap.CacheVolumes {
+		doc.CacheVolumes = append(doc.CacheVolumes, cacheVolumeDoc{MachineID: v.MachineID, State: v.State, ExpiresAt: v.ExpiresAt})
 	}
 	doc.Cost.Breakdown, doc.Cost.Selection = breakdownOf(snap), selectionOf(snap)
 	doc.LastInferenceFinishedAt = snap.LastInferenceFinishedAt
@@ -134,6 +149,7 @@ func buildCostDocument(snap controller.Snapshot, _ config.Mgmt, now time.Time) c
 	doc := costDocument{
 		Estimates: true, EstimatedMonthUSD: snap.SpendMTDUSD, BudgetMonthUSD: snap.BudgetMonthUSD,
 		ProviderBalanceUSD: snap.ProviderBalanceUSD, Limitations: limitationsText,
+		EstimatedStorageUSD: snap.StorageMTDUSD,
 	}
 	if !snap.CreatedAt.IsZero() {
 		doc.PriceUSDPerHour = snap.Hourly.USD()

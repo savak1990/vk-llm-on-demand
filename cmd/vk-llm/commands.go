@@ -316,6 +316,7 @@ func stateOf(doc statusDoc) progress.State {
 	if doc.Instance != nil {
 		s.MachineID, s.GPUName, s.Geolocation, s.HourlyUSD = doc.Instance.MachineID, doc.Instance.GPU, doc.Instance.Geolocation, doc.Instance.PriceUSDPerHour
 	}
+	s.CacheHit = doc.Instance != nil && doc.Instance.Cache == "hit"
 	if doc.Progress != nil {
 		s.DownloadedBytes, s.ModelBytes, s.WorkerStages = doc.Progress.DownloadedBytes, doc.Progress.ModelBytes, doc.Progress.WorkerStages
 	}

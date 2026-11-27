@@ -28,7 +28,7 @@ func progressState(s controller.Snapshot) progress.State {
 	return progress.State{
 		Public: s.Public, MachineID: s.MachineID, GPUName: s.GPUName, Geolocation: s.Geolocation,
 		HourlyUSD: s.Hourly.USD(), DownloadedBytes: s.DownloadedBytes, ModelBytes: s.ModelBytes,
-		WorkerStages: s.WorkerStages, Ready: s.Ready,
+		WorkerStages: s.WorkerStages, Ready: s.Ready, CacheHit: s.CacheHit,
 	}
 }
 

@@ -104,6 +104,10 @@ type Snapshot struct {
 	NextCreateAt     time.Time
 
 	Rentals []store.Rental
+
+	CacheVolumes  []store.CacheVolume
+	StorageMTDUSD float64
+	CacheHit      bool
 }
 
 type timerKind int

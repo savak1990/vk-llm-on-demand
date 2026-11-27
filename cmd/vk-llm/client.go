@@ -30,6 +30,7 @@ type statusDoc struct {
 			GPUUSDPerHour    float64 `json:"gpuUSDPerHour"`
 			DownloadUSDPerGB float64 `json:"downloadUSDPerGB"`
 		} `json:"prices"`
+		Cache string `json:"cache"`
 	} `json:"instance"`
 	Model struct {
 		Alias       string `json:"alias"`
@@ -60,6 +61,11 @@ type statusDoc struct {
 		ModelBytes      int64    `json:"modelBytes"`
 		WorkerStages    []string `json:"workerStages"`
 	} `json:"progress,omitempty"`
+	CacheVolumes []struct {
+		MachineID int64      `json:"machineId"`
+		State     string     `json:"state"`
+		ExpiresAt *time.Time `json:"expiresAt"`
+	} `json:"cacheVolumes"`
 }
 
 type apiResult struct {

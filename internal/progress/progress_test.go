@@ -44,3 +44,12 @@ func TestTrackerWithoutModelSize(t *testing.T) {
 		t.Fatalf("lines = %q", got)
 	}
 }
+
+func TestLinesCacheHit(t *testing.T) {
+	var tr Tracker
+	out := tr.Lines(State{Public: "LOADING_MODEL", CacheHit: true, DownloadedBytes: 5e9, ModelBytes: 28e9})
+	joined := strings.Join(out, "\n")
+	if !strings.Contains(joined, "The model is cached on this host; checking it (sha256)") || strings.Contains(joined, "Downloading the model") {
+		t.Fatalf("lines = %q", out)
+	}
+}
