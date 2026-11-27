@@ -107,9 +107,10 @@ type Attempts struct {
 }
 
 type Ledger struct {
-	Month    string        `json:"month"`
-	TotalUSD float64       `json:"totalUsd"`
-	Entries  []LedgerEntry `json:"entries"`
+	Month           string        `json:"month"`
+	TotalUSD        float64       `json:"totalUsd"`
+	StorageTotalUSD float64       `json:"storageTotalUsd,omitempty"`
+	Entries         []LedgerEntry `json:"entries"`
 }
 
 type LedgerEntry struct {

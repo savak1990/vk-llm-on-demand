@@ -39,8 +39,9 @@ func (c *Controller) Status() Snapshot {
 	if doc.Cache != nil {
 		snap.CacheVolumes = append([]store.CacheVolume(nil), doc.Cache.Volumes...)
 	}
+	snap.StorageMTDUSD = doc.Ledger.StorageTotalUSD
 	for _, e := range doc.Ledger.Entries {
-		if e.Volume != "" {
+		if e.Volume != "" && e.End == nil {
 			snap.StorageMTDUSD += e.EstUSD
 		}
 	}

@@ -69,6 +69,7 @@ func (c *Checker) CloseStorageEntry(doc *store.Document, now time.Time, label st
 			t := now
 			e.End = &t
 			doc.Ledger.TotalUSD += e.EstUSD
+			doc.Ledger.StorageTotalUSD += e.EstUSD
 			break
 		}
 	}
@@ -110,5 +111,6 @@ func (c *Checker) Rollover(doc *store.Document, now time.Time) {
 	}
 	doc.Ledger.Month = month
 	doc.Ledger.TotalUSD = 0
+	doc.Ledger.StorageTotalUSD = 0
 	doc.Ledger.Entries = stillOpen
 }

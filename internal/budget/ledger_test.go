@@ -95,6 +95,41 @@ func TestFoldOnOverflow(t *testing.T) {
 	}
 }
 
+// TestStorageTotalSurvivesFold closes a storage entry, then folds it away
+// behind 100 closed GPU entries; StorageTotalUSD must still hold its cost,
+// and Rollover must reset it with TotalUSD.
+func TestStorageTotalSurvivesFold(t *testing.T) {
+	t0 := time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC)
+	c := New(Config{})
+	doc := store.Document{Ledger: store.Ledger{Month: "2026-11"}}
+
+	c.OpenStorageEntry(&doc, t0, 1, "vkllm_x_v1", 0.5)
+	c.CloseStorageEntry(&doc, t0.Add(time.Hour), "vkllm_x_v1")
+	storageCost := doc.Ledger.Entries[0].EstUSD
+	if storageCost <= 0 || doc.Ledger.StorageTotalUSD != storageCost {
+		t.Fatalf("after close: StorageTotalUSD = %v, want %v", doc.Ledger.StorageTotalUSD, storageCost)
+	}
+
+	for gen := int64(1); gen <= 100; gen++ {
+		start := t0.Add(time.Duration(gen) * time.Hour)
+		c.OpenEntry(&doc, start, gen, 1.0, 0)
+		c.CloseEntry(&doc, start.Add(time.Minute), gen)
+	}
+	for _, e := range doc.Ledger.Entries {
+		if e.Volume == "vkllm_x_v1" {
+			t.Fatal("storage entry should have been folded away")
+		}
+	}
+	if doc.Ledger.StorageTotalUSD != storageCost {
+		t.Fatalf("StorageTotalUSD after fold = %v, want unchanged %v", doc.Ledger.StorageTotalUSD, storageCost)
+	}
+
+	c.Rollover(&doc, time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC))
+	if doc.Ledger.StorageTotalUSD != 0 {
+		t.Fatalf("StorageTotalUSD after rollover = %v, want 0", doc.Ledger.StorageTotalUSD)
+	}
+}
+
 func TestRolloverDropsClosedEntries(t *testing.T) {
 	now := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
 	closedStart := now.Add(-time.Hour)
