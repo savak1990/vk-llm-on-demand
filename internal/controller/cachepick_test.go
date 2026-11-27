@@ -146,11 +146,11 @@ func TestCacheChoiceMachineCacheReasons(t *testing.T) {
 		machine int64
 		want    cacheReason
 	}{
-		{1, reasonCached},        // (a) a usable ready volume
-		{2, reasonSeedable},      // (b) a seedable volume offer
-		{3, reasonOverPriceCap},  // (c) a volume offer over the price cap
-		{4, reasonNoVolumeOffer}, // (d) no volume offer
-		{5, reasonHasOurVolume},  // (e) our volume already there
+		{1, reasonCached},        // a usable ready volume
+		{2, reasonSeedable},      // a seedable volume offer
+		{3, reasonOverPriceCap},  // a volume offer over the price cap
+		{4, reasonNoVolumeOffer}, // no volume offer
+		{5, reasonHasOurVolume},  // our volume already there
 	} {
 		if got := cl.machines[c.machine].reason; got != c.want {
 			t.Fatalf("machine %d reason = %q, want %q", c.machine, got, c.want)
@@ -164,7 +164,7 @@ func TestCacheChoiceMachineCacheReasons(t *testing.T) {
 	}
 }
 
-// (f) cache disabled: every ranked machine is reported disabled, and the
+// Cache disabled: every ranked machine is reported disabled, and the
 // rule is "cheapest" since no cache was ever consulted.
 func TestCacheChoiceDisabledMarksEveryMachineCacheDisabled(t *testing.T) {
 	ctl, _, _, _, _ := newTestController(t)
